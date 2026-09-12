@@ -85,7 +85,6 @@ export function SummaryLanguageSettings() {
                 if (code) addRecent(code);
                 setPickerOpen(false);
               }}
-              onClose={() => setPickerOpen(false)}
             />
           </PopoverContent>
         </Popover>

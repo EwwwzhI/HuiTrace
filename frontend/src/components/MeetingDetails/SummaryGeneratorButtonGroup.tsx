@@ -1,5 +1,6 @@
 "use client";
 
+import { SummaryTemplateEditor } from './SummaryTemplateEditor';
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
 import {
   Dialog,
@@ -10,13 +11,7 @@ import {
 import { VisuallyHidden } from "@/components/ui/visually-hidden"
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Sparkles, Settings, Loader2, FileText, Check, Square } from 'lucide-react';
+import { Sparkles, Settings, Loader2, Square } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { openExternalUrl } from '@/services/systemService';
@@ -340,60 +335,7 @@ export function SummaryGeneratorButtonGroup({
         </DialogContent>
       </Dialog>
 
-      {/* Template selector dropdown — icon-only at every width (see width
-          budget above); the title tooltip names it. */}
-      {availableTemplates.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              title={translateUI("Select summary template")}
-              aria-label={translateUI("Select summary template")}
-            >
-              <FileText />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {availableTemplates.map((template) => {
-              const source = template.source ?? (
-                template.id === 'daily_standup' || template.id === 'standard_meeting'
-                  ? 'builtin'
-                  : 'custom'
-              );
-              return (
-                <DropdownMenuItem
-                  key={template.id}
-                  onClick={() => onTemplateSelect(template.id, template.name)}
-                  title={translateUI(template.description)}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate">{translateUI(template.name)}</span>
-                    <span className="block max-w-[280px] truncate text-xs text-muted-foreground">
-                      {translateUI(template.description)}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                    {translateUI(
-                      source === 'builtin'
-                        ? 'Source: built-in template'
-                        : source === 'bundled'
-                          ? 'Source: bundled template'
-                          : 'Source: custom template'
-                    )}
-                  </span>
-                  {selectedTemplate === template.id && (
-                    <Check className="h-4 w-4 text-success" />
-                  )}
-                </DropdownMenuItem>
-              );
-            })}
-
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      <SummaryTemplateEditor templates={availableTemplates} selected={selectedTemplate} onSelect={onTemplateSelect} disabled={isGenerating} />
     </ButtonGroup>
   );
 }

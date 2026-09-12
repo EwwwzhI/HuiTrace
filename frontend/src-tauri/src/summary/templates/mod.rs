@@ -42,6 +42,7 @@ mod loader;
 mod types;
 
 // Re-export public API
+pub use loader::save_custom_template;
 pub use loader::{
     get_template, list_template_ids, list_templates, set_bundled_templates_dir,
     validate_and_parse_template,

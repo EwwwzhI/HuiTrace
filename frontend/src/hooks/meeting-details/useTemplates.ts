@@ -31,6 +31,8 @@ export function useTemplates() {
       }
     };
     fetchTemplates();
+    window.addEventListener('summary-templates-changed', fetchTemplates);
+    return () => window.removeEventListener('summary-templates-changed', fetchTemplates);
   }, []);
 
   // Handle template selection

@@ -2,6 +2,23 @@
 
 This directory contains template definitions for meeting summary generation.
 
+## Editing templates in the app
+
+In a meeting with a transcript, open **Templates** in the summary toolbar.
+You can use an existing template, create a new one, or edit a built-in template
+and save it as a custom copy. Edit section titles, writing instructions, preferred
+content format, and section order. **Save and use** selects the saved template for
+the next generation. Files are stored locally in the custom templates directory;
+bundled templates are not overwritten.
+
+The summary language picker applies to both schema-based and windowed structured
+generation. Auto uses the detected transcript language, falling back to English
+when unavailable. Generated prose and action items use the selected language;
+section titles remain exactly as entered in the template. For Chinese headings,
+enter Chinese titles in a custom template. Source references and review status
+are preserved. Content format is guidance within the structured report format,
+not a replacement for its source-linked schema.
+
 ## Available Templates
 
 ### 1. `daily_standup.json`

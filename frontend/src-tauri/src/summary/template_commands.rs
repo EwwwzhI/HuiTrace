@@ -3,6 +3,19 @@ use serde::{Deserialize, Serialize};
 use tauri::Runtime;
 use tracing::{info, warn};
 
+#[tauri::command]
+pub async fn api_get_template(template_id: String) -> Result<templates::Template, String> {
+    templates::get_template(&template_id)
+}
+
+#[tauri::command]
+pub async fn api_save_custom_template(
+    template_id: String,
+    template: templates::Template,
+) -> Result<(), String> {
+    templates::save_custom_template(&template_id, &template)
+}
+
 /// Template metadata for UI display
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TemplateInfo {

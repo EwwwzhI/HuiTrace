@@ -131,6 +131,26 @@ describe('TalkTimePanel: what the numbers are allowed to claim', () => {
 });
 
 describe('SpeakerChips', () => {
+  it('uses consecutive meeting-wide labels and distinct colours for sparse engine IDs', () => {
+    const order = [5, 7, 8, 10, 3, 15, 16, 20, 23, 25, 28].map((id) => `Speaker ${id}`);
+    const turns = order.map((label, i) => turn(i * 1000, (i + 1) * 1000, label));
+    // An unordered API result must still use first appearance.
+    const { container } = render(<TalkTimePanel state={{ kind: 'done', diarizedAt: 'x', turns: [...turns].reverse() }} />);
+    const rows = [...container.querySelectorAll('li')];
+    expect(rows.map((row) => row.children[1].textContent)).toEqual(
+      order.map((_, i) => `Speaker ${i + 1}`),
+    );
+    const dots = rows.map((row) => row.children[0].className.split(' ').find((c) => c.startsWith('bg-')));
+    expect(new Set(dots).size).toBe(11);
+    expect(dots).not.toContain('bg-muted-foreground');
+
+    // A row containing only the ninth speaker must retain the global number.
+    const chips = render(<SpeakerChips speakers={['Speaker 23']} order={order} />);
+    expect(chips.container.textContent).toBe('Speaker 9');
+    expect(chips.container.querySelector('[aria-hidden]')?.classList.contains(dots[8]!)).toBe(true);
+    expect(turns[8].speaker_label).toBe('Speaker 23');
+  });
+
   it('shows every speaker in a row that spans more than one', () => {
     render(<SpeakerChips speakers={['Speaker 1', 'Speaker 2']} order={['Speaker 1', 'Speaker 2']} />);
     const text = document.body.textContent ?? '';

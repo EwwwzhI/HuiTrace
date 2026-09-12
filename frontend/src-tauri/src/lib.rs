@@ -784,6 +784,8 @@ pub fn run() {
             learning::commands::api_set_learning_config,
             // Template commands
             summary::template_commands::api_list_templates,
+            summary::template_commands::api_get_template,
+            summary::template_commands::api_save_custom_template,
             summary::template_commands::api_get_template_details,
             summary::template_commands::api_validate_template,
             // Built-in AI commands

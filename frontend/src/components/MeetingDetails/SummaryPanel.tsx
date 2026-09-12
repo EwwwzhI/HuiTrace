@@ -265,7 +265,11 @@ export function SummaryPanel({
               truncated so unbounded language names can't overflow the toolbar.
               The full name always lives in the title tooltip above. */}
           <span className="hidden 2xl:inline max-w-[6rem] truncate">{effectiveLangLabel}</span>
-          <ChevronDown size={14} className="text-muted-foreground" />
+          <ChevronDown
+            size={14}
+            aria-hidden="true"
+            className={`text-muted-foreground transition-transform duration-150 motion-reduce:transition-none ${langPickerOpen ? 'rotate-180' : ''}`}
+          />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -275,7 +279,6 @@ export function SummaryPanel({
         <LanguagePickerPopover
           value={summaryLang}
           onChange={handleLangChange}
-          onClose={() => setLangPickerOpen(false)}
           autoSubtitle={autoSubtitle}
         />
       </PopoverContent>

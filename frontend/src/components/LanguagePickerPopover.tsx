@@ -11,7 +11,6 @@ import { useUiTranslation } from '@/i18n/client';
 interface LanguagePickerPopoverProps {
   value: string | null;
   onChange: (code: string | null) => void;
-  onClose: () => void;
   mode?: "meeting" | "settings";
   autoSubtitle?: string;
 }
@@ -19,34 +18,21 @@ interface LanguagePickerPopoverProps {
 export function LanguagePickerPopover({
   value,
   onChange,
-  onClose,
   mode = "meeting",
   autoSubtitle,
 }: LanguagePickerPopoverProps) {
   useUiTranslation();
   const { recents } = useRecentLanguages();
   const [query, setQuery] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
+  // The enclosing Radix Popover owns outside-click, Escape and trigger toggling.
+  // A separate document mousedown handler would close on the trigger before
+  // its click handler runs, causing the same click to reopen the popover.
 
   const filter = query.trim().toLowerCase();
 
@@ -85,7 +71,6 @@ export function LanguagePickerPopover({
 
   return (
     <div
-      ref={containerRef}
       className="w-72 rounded-lg bg-card border border-border shadow-lg overflow-hidden"
       role="dialog"
       aria-label={translateUI("Pick summary language")}

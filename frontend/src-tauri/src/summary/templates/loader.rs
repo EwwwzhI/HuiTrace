@@ -22,7 +22,7 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// - macOS: ~/Library/Application Support/Mityu/templates/
 /// - Windows: %APPDATA%\Mityu\templates\
 /// - Linux: ~/.config/Mityu/templates/
-fn get_custom_templates_dir() -> Option<PathBuf> {
+pub(crate) fn get_custom_templates_dir() -> Option<PathBuf> {
     let mut path = dirs::data_dir()?;
     path.push("Mityu");
     path.push("templates");
@@ -99,6 +99,7 @@ fn load_custom_template(template_id: &str) -> Option<String> {
 /// # Returns
 /// Parsed and validated Template struct
 pub fn get_template(template_id: &str) -> Result<Template, String> {
+    validate_template_id(template_id)?;
     info!("Loading template: {}", template_id);
 
     // Try custom template first, then bundled, then built-in
@@ -121,6 +122,42 @@ pub fn get_template(template_id: &str) -> Result<Template, String> {
 
     // Parse and validate
     validate_and_parse_template(&json_content)
+}
+
+pub(crate) fn validate_template_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 100
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err("Invalid template identifier".into());
+    }
+    Ok(())
+}
+
+pub fn save_custom_template(id: &str, template: &Template) -> Result<(), String> {
+    let dir = get_custom_templates_dir().ok_or("Application data directory unavailable")?;
+    save_custom_template_in(&dir, id, template)
+}
+
+fn save_custom_template_in(
+    dir: &std::path::Path,
+    id: &str,
+    template: &Template,
+) -> Result<(), String> {
+    validate_template_id(id)?;
+    if !id.starts_with("custom_") {
+        return Err("Save built-in templates as a custom copy".into());
+    }
+    template.validate()?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    serde_json::to_writer_pretty(&mut file, template).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    file.persist(dir.join(format!("{id}.json")))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Validate and parse template JSON
@@ -233,6 +270,46 @@ pub fn list_templates() -> Vec<(String, String, String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_template_save_reload_and_rejected_update_preserve_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut template = validate_and_parse_template(
+            defaults::get_builtin_template("standard_meeting").unwrap(),
+        )
+        .unwrap();
+        template.name = "中文模板".into();
+        save_custom_template_in(dir.path(), "custom_test", &template).unwrap();
+        let path = dir.path().join("custom_test.json");
+        let read =
+            || validate_and_parse_template(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(read().name, "中文模板");
+        template.name = "修改后的模板".into();
+        save_custom_template_in(dir.path(), "custom_test", &template).unwrap();
+        assert_eq!(read().name, "修改后的模板");
+        template.sections.push(template.sections[0].clone());
+        assert!(save_custom_template_in(dir.path(), "custom_test", &template).is_err());
+        assert_eq!(read().sections.len(), template.sections.len() - 1);
+    }
+
+    #[test]
+    fn template_paths_and_builtin_overwrites_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let template = validate_and_parse_template(
+            defaults::get_builtin_template("standard_meeting").unwrap(),
+        )
+        .unwrap();
+        for id in [
+            "../escape",
+            "custom_../../escape",
+            "C:\\escape",
+            "",
+            "standard_meeting",
+        ] {
+            assert!(save_custom_template_in(dir.path(), id, &template).is_err());
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn test_get_builtin_template() {

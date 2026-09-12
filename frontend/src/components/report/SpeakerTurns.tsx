@@ -31,9 +31,12 @@ import { useUiTranslation } from '@/i18n/client';
  * side by `models::tests::the_download_size_the_ui_promises`, so bumping a
  * model pin fails the build rather than quietly making this button lie.
  */
-function displaySpeaker(label: string) {
+function displaySpeaker(label: string, order: string[]) {
   const match = /^Speaker (\d+)$/.exec(label);
-  return match ? translateUI("Speaker {{number}}", { number: match[1] }) : label;
+  // Engine cluster IDs can be sparse. Keep stored identity intact, but number
+  // the visible speakers consecutively in meeting-wide first-appearance order.
+  const index = order.indexOf(label);
+  return match ? translateUI("Speaker {{number}}", { number: index < 0 ? match[1] : index + 1 }) : label;
 }
 
 const MODEL_DOWNLOAD_MB = 35;
@@ -48,15 +51,21 @@ import {
 
 /**
  * Stable, deliberately flat colours: they identify a speaker across the page,
- * they do not rank. No red/green, nothing that reads as good or bad.
+ * they do not rank. Labels accompany every colour.
  */
 const SWATCHES = [
-  { dot: 'bg-primary', bar: 'bg-primary/70', text: 'text-primary dark:text-primary' },
-  { dot: 'bg-primary', bar: 'bg-primary/70', text: 'text-primary dark:text-primary' },
-  { dot: 'bg-warning', bar: 'bg-warning/70', text: 'text-warning dark:text-warning' },
+  { dot: 'bg-blue-600', bar: 'bg-blue-600/70', text: 'text-blue-700 dark:text-blue-300' },
+  { dot: 'bg-orange-600', bar: 'bg-orange-600/70', text: 'text-orange-700 dark:text-orange-300' },
+  { dot: 'bg-violet-600', bar: 'bg-violet-600/70', text: 'text-violet-700 dark:text-violet-300' },
   { dot: 'bg-teal-500', bar: 'bg-teal-500/70', text: 'text-teal-700 dark:text-teal-300' },
   { dot: 'bg-pink-500', bar: 'bg-pink-500/70', text: 'text-pink-700 dark:text-pink-300' },
   { dot: 'bg-lime-600', bar: 'bg-lime-600/70', text: 'text-lime-700 dark:text-lime-300' },
+  { dot: 'bg-cyan-600', bar: 'bg-cyan-600/70', text: 'text-cyan-700 dark:text-cyan-300' },
+  { dot: 'bg-amber-600', bar: 'bg-amber-600/70', text: 'text-amber-700 dark:text-amber-300' },
+  { dot: 'bg-fuchsia-700', bar: 'bg-fuchsia-700/70', text: 'text-fuchsia-800 dark:text-fuchsia-300' },
+  { dot: 'bg-indigo-800', bar: 'bg-indigo-800/70', text: 'text-indigo-800 dark:text-indigo-300' },
+  { dot: 'bg-stone-600', bar: 'bg-stone-600/70', text: 'text-stone-700 dark:text-stone-300' },
+  { dot: 'bg-sky-800', bar: 'bg-sky-800/70', text: 'text-sky-800 dark:text-sky-300' },
 ];
 
 /**
@@ -103,11 +112,11 @@ export function SpeakerChips({
         const s = swatchFor(label, order);
         return (
           <span
-            key={displaySpeaker(label)}
+            key={label}
             className={`inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-1.5 py-0.5 text-xs font-medium ${s.text}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} aria-hidden />
-            {label}
+            {displaySpeaker(label, order)}
           </span>
         );
       })}
@@ -128,7 +137,7 @@ function TalkTimeRow({ row, order }: { row: SpeakerTalkTime; order: string[] }) 
   return (
     <li className="flex items-center gap-3">
       <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot}`} aria-hidden />
-      <span className="w-24 shrink-0 truncate text-sm font-medium">{displaySpeaker(row.label)}</span>
+      <span className="w-24 shrink-0 truncate text-sm font-medium">{displaySpeaker(row.label, order)}</span>
       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <span
           className={`block h-full rounded-full ${s.bar}`}

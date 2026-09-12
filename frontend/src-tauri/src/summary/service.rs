@@ -664,11 +664,11 @@ impl SummaryService {
         // untouched. On success the structured branch has already persisted
         // the §4 draft (summaries + action_items) AND the legacy result shape
         // (ADR-0019 decision 1) — nothing left to do. On failure after the
-        // engine's own fallback ladder it DEGRADES to the legacy path below
-        // and completes normally. v1 structured mode deliberately SKIPS the
-        // translate/normalize passes (ADR-0019 decision 3): those passes
-        // operate on the legacy markdown text path, so `summary_language` /
-        // `detected_summary_language` are ignored here.
+        // engine's own fallback ladder, failure is reported without producing
+        // an ungrounded legacy summary. Structured mode skips the
+        // translate/normalize passes: those passes
+        // operate on legacy markdown and would discard structured source references.
+        // The selected/detected language is instead applied directly to generation.
         if structured {
             let outcome = Self::run_structured_generation(
                 &pool,
@@ -680,6 +680,9 @@ impl SummaryService {
                 &template,
                 &template_id,
                 &custom_prompt,
+                summary_language
+                    .as_deref()
+                    .or(detected_summary_language.as_deref()),
                 token_threshold,
                 ollama_endpoint.as_deref(),
                 custom_openai_endpoint.as_deref(),
@@ -896,6 +899,7 @@ impl SummaryService {
         // `Option<String>` with `unwrap_or_default()`, so that is this path's
         // existing convention rather than a second `Option`.
         custom_prompt: &str,
+        output_language: Option<&str>,
         token_threshold: usize,
         ollama_endpoint: Option<&str>,
         custom_openai_endpoint: Option<&str>,
@@ -1002,6 +1006,7 @@ impl SummaryService {
                 }
             };
         let guidance = SummaryGuidance {
+            output_language: output_language.and_then(language_name_from_code),
             rules: applicable_rules(&learned_rules, Some(template_id)),
             custom_prompt: Some(custom_prompt).filter(|p| !p.trim().is_empty()),
         };
