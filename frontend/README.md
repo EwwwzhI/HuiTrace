@@ -1,176 +1,137 @@
-# Mityu - Frontend
+# HuiTrace 桌面端开发
 
-A modern desktop application for recording, transcribing, and analyzing meetings with AI assistance. Built with Next.js and Tauri for a native desktop experience.
+本目录包含 Next.js 界面与 Tauri / Rust 核心。产品功能和使用方法见 [项目首页](../README.md)。当前版本为 **1.1.0**，版本号分别记录在 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中。
 
-## Features
+## 工具与依赖
 
-- Real-time audio recording from both microphone and system audio
-- Live transcription using Whisper ASR (locally running)
-- Native desktop integration using Tauri
-- Speaker diarization support
-- Rich text editor for note-taking
-- Privacy-focused: All processing happens locally
+| 工具 | 说明 |
+| --- | --- |
+| Node.js | CI 使用 20.19.4 |
+| pnpm | `package.json` 固定为 10.33.0 |
+| Rust | stable 工具链；桌面端及辅助程序在同一 Cargo workspace 中 |
+| Python 3 | 下载并校验 sherpa-onnx 原生依赖，不是应用运行时后端 |
+| C/C++、CMake | 用于构建语音和本地 AI 原生组件 |
 
-## Prerequisites
+Windows 需要 Visual Studio C++ Build Tools、Windows SDK 和 WebView2；macOS 需要 Xcode Command Line Tools；Linux 需要 WebKitGTK、GTK、音频等 Tauri 系统依赖。原生构建还可能需要 LLVM / libclang。平台依赖细节可参考 [构建资料](../docs/BUILDING.md) 和 [CI 构建流程](../.github/workflows/build.yml)，旧资料中的品牌名不影响代码路径。
 
-### For macOS:
-- Node.js (v18 or later)
-- Rust (latest stable)
-- pnpm (v8 or later)
-- [Xcode Command Line Tools](https://developer.apple.com/download/all/?q=xcode)
+## 安装 JavaScript 依赖
 
-### For Windows:
-- Node.js (v18 or later)
-- Rust (latest stable)
-- pnpm (v8 or later)
-- Visual Studio Build Tools with C++ development tools
-- Windows 10 or later
+从仓库根目录进入：
 
-
-## Project Structure
-
-```
-/frontend
-├── src/                   # Next.js frontend code
-├── src-tauri/             # Rust backend for Tauri
-├── public/                # Static assets
-└── package.json           # Project dependencies
-```
-
-## Installation
-
-### For macOS:
-
-1. Install prerequisites:
-   ```bash
-   # Install Homebrew if not already installed
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   
-   # Install Node.js
-   brew install node
-   
-   # Install Rust
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   
-   # Install pnpm
-   npm install -g pnpm
-   
-   # Install Xcode Command Line Tools
-   xcode-select --install
-   ```
-
-2. Clone the repository and navigate to the frontend directory:
-   ```bash
-   git clone https://github.com/aydogandagidir/mityu
-   cd meeting-minutes/frontend
-   ```
-  
-
-3. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-
-### For Windows:
-
-1. Install prerequisites:
-   - Install [Node.js](https://nodejs.org/) (v18 or later)
-   - Install [Rust](https://www.rust-lang.org/tools/install)
-   - Install pnpm: `npm install -g pnpm`
-   - Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with C++ development tools
-
-2. Clone the repository and navigate to the frontend directory:
-   ```cmd
-   git clone https://github.com/aydogandagidir/mityu
-   cd meeting-minutes/frontend
-   ```
-
-3. Install dependencies:
-   ```cmd
-   pnpm install
-   ```
-
-## Running the App
-
-### For macOS:
-
-Use the provided script to run the app in development mode:
 ```bash
-./clean_run.sh
+cd frontend
+pnpm install --frozen-lockfile
 ```
 
-To build a production version:
+以下辅助程序准备命令从 **仓库根目录** 执行。首次构建需要联网获取依赖，完成后模型仍需在应用中单独准备。
+
+## 准备辅助程序
+
+Tauri 配置声明了 `llama-helper`、`diarize-helper` 和 `ffmpeg` 三个外部程序。前两个需要构建并放入 `frontend/src-tauri/binaries/`，文件名必须包含 Rust target triple。FFmpeg 由应用构建脚本处理下载与校验。
+
+### Windows / PowerShell
+
+在安装好 Python 的终端中执行；如果系统使用 `py -3`，将下面的 `python` 替换为该命令。
+
+```powershell
+$env:SHERPA_ONNX_ARCHIVE_DIR = (python tools/diarization/fetch-sherpa-archive.py).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'sherpa-onnx dependency verification failed' }
+
+cargo build --release -p llama-helper -p diarize-helper
+if ($LASTEXITCODE -ne 0) { throw 'Helper build failed' }
+
+$helperTarget = ((rustc -vV | Select-String '^host:').ToString() -replace '^host:\s*', '').Trim()
+New-Item -ItemType Directory -Force -Path frontend/src-tauri/binaries | Out-Null
+Copy-Item -LiteralPath target/release/llama-helper.exe -Destination "frontend/src-tauri/binaries/llama-helper-$helperTarget.exe"
+Copy-Item -LiteralPath target/release/diarize-helper.exe -Destination "frontend/src-tauri/binaries/diarize-helper-$helperTarget.exe"
+```
+
+### macOS / Linux / Bash
+
 ```bash
-./clean_build.sh
+export SHERPA_ONNX_ARCHIVE_DIR="$(python3 tools/diarization/fetch-sherpa-archive.py)"
+test -n "$SHERPA_ONNX_ARCHIVE_DIR" || exit 1
+cargo build --release -p llama-helper -p diarize-helper || exit 1
+
+helper_target="$(rustc -vV | sed -n 's/^host: //p')"
+mkdir -p frontend/src-tauri/binaries
+cp target/release/llama-helper "frontend/src-tauri/binaries/llama-helper-$helper_target"
+cp target/release/diarize-helper "frontend/src-tauri/binaries/diarize-helper-$helper_target"
 ```
 
-You can specify the log level (info, debug, trace):
+以上为 CPU 基线构建。若配置了 `CARGO_TARGET_DIR` 或显式交叉编译目标，需要相应调整复制来源。校验脚本只接受已固定校验值的目标平台，不支持的目标会报错。
+
+`llama-helper` 的 CUDA、Vulkan、Metal 加速需要分别构建，例如 `cargo build --release -p llama-helper --features cuda`，再复制更新后的可执行文件。主应用的 GPU 参数不会自动重编译已经复制的辅助程序。
+
+## 启动与打包
+
+以下命令在 `frontend/` 中执行：
+
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm tauri:dev` | 自动检测 GPU 配置，启动桌面开发模式 |
+| `pnpm tauri:dev:cpu` | 使用 CPU 配置启动主应用 |
+| `pnpm tauri:dev:cuda` | 使用 CUDA 配置启动主应用，需相应 SDK |
+| `pnpm tauri:dev:vulkan` | 使用 Vulkan 配置启动主应用，需相应 SDK |
+| `pnpm dev` | 仅启动网页开发服务，端口 3118 |
+| `pnpm build` | 构建前端静态输出 |
+| `pnpm tauri:build` | 自动检测 GPU 配置并打包桌面应用 |
+| `pnpm tauri:build:cpu` | 以 CPU 配置打包主应用 |
+
+自动检测入口是 `scripts/tauri-auto.js`；可通过 `TAURI_GPU_FEATURE` 指定配置。更多 Metal、CoreML、OpenBLAS 等命令见 [package.json](package.json)。GPU 构建是否成功取决于对应平台和工具链。
+
+Tauri 开发模式使用 `pnpm dev:tauri` 启动前端服务。浏览器直接访问网页只能用于部分界面开发，没有原生 IPC 时录音、存储和模型相关功能不可用。修改 Rust 核心后需要等待重新编译并加载新版应用。
+
+打包包含平台资源、辅助程序和签名处理。正式发布另需签名配置；不要把本机开发构建视为已经完成签名和发布。输出路径以 Tauri 构建日志为准。
+
+## 测试与检查
+
+在 `frontend/` 中：
+
 ```bash
-./clean_run.sh debug
+pnpm test
+pnpm exec tsc --noEmit
+pnpm lint
 ```
 
-### For Windows:
+在仓库根目录中：
 
-Use the provided script to run the app in development mode:
-```cmd
-clean_run_windows.bat
-```
-
-To build a production version:
-```cmd
-clean_build_windows.bat
-```
-
-You can also use the package scripts directly:
 ```bash
-pnpm run tauri:dev
-pnpm run tauri:build
+cargo test -p mityu --lib summary:: --no-default-features
+cargo clippy -p mityu --lib --no-default-features
+cargo fmt --all -- --check
 ```
 
-## Local Transcription
+Rust 主包仍名为 `mityu`。运行涉及 `diarize-helper` 的 workspace 构建或测试前，同样需要先校验 sherpa-onnx 依赖并设置 `SHERPA_ONNX_ARCHIVE_DIR`。不同平台的原生依赖与既有检查告警应分别排查。
 
-Current Mityu does not require a separate FastAPI service, Docker backend, or manually started whisper-server process. Local transcription is handled by the Rust/Tauri desktop app.
+本轮摘要、模板和语言选择器的定向前端测试：
 
-For build and acceleration details, see:
+```bash
+pnpm exec vitest run src/components/LanguagePickerPopover.test.tsx src/components/MeetingDetails/SummaryTemplateEditor.test.tsx src/components/report/SpeakerTurns.test.tsx
+```
 
-- [Building from Source](../docs/BUILDING.md)
-- [GPU Acceleration](../docs/GPU_ACCELERATION.md)
-- [Architecture](../docs/architecture.md)
+单元测试不替代实际录音、音频回放或真实模型生成检查。
 
-## Development
+## 主要模块
 
-### Frontend (Next.js)
-- The frontend is built with Next.js and Tailwind CSS
-- Source code is in the `src/` directory
-- To run only the frontend: `pnpm run dev`
+| 目录 | 职责 |
+| --- | --- |
+| `src/app/` | Next.js 页面与布局 |
+| `src/components/MeetingDetails/` | 会议转写、摘要、模板编辑与相关控件 |
+| `src/hooks/meeting-details/` | 会议详情加载、摘要生成等状态逻辑 |
+| `src/i18n/` | 界面翻译 |
+| `src-tauri/src/audio/` | 音频采集和处理 |
+| `src-tauri/src/summary/` | 摘要服务、模型调用、模板和语言处理 |
+| `src-tauri/src/diarization/` | 说话人区分流程 |
+| `src-tauri/src/database/` | 本地数据存储 |
+| `src-tauri/templates/` | 内置与打包模板定义 |
 
-### Backend (Tauri)
-- The Rust backend is in the `src-tauri/` directory
-- Handles audio capture, file system access, transcription, storage, and native integrations
-- To run only the Tauri development server: `pnpm run tauri:dev`
+模板 UI 使用 `api_list_templates`、`api_get_template` 与 `api_save_custom_template`。保存模板会校验字段与章节标题，使用 `custom_` 标识，并重新刷新可选模板列表。详细格式见 [模板说明](src-tauri/templates/README.md)。
 
-## Troubleshooting
+## 常见问题
 
-### Common Issues on macOS
-- If you encounter permission issues with scripts, make them executable:
-  ```bash
-  chmod +x clean_run.sh clean_build.sh
-  ```
-- For microphone access issues, ensure the app has microphone permissions in System Preferences
-
-### Common Issues on Windows
-- If you encounter build errors, ensure Visual Studio Build Tools are properly installed
-- For audio capture issues, check Windows privacy settings for microphone access
-- If the app fails to start, try running Command Prompt as administrator
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **页面打开了，但功能报原生接口错误**：确认使用的是 `pnpm tauri:dev` 启动的桌面窗口，而不是独立浏览器页面。
+- **找不到辅助程序**：检查 `src-tauri/binaries/` 中是否有与当前 target triple 匹配的文件。
+- **选择中文后仍看到英文旧摘要**：语言变更作用于下一次生成，需要重新生成；模板章节标题保持原文。
+- **只想本地运行**：使用内置 AI 或本机 Ollama，提前下载模型，无需启动仓库中的历史 Python `backend/`。
+- **Speaker 数量或文字不准确**：区分结果是估计；同时发言的声音尚不能分别完整转写，需回听核对。

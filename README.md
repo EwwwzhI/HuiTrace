@@ -1,133 +1,124 @@
-<div align="center" style="border-bottom: none">
-    <h1>
-        <img src="docs/mityu-logo.png" width="96" style="border-radius: 20px;" alt="Mityu" />
-        <br>
-        Mityu
-    </h1>
-    <h3>Privacy-first, local-first meeting &amp; conversation intelligence</h3>
-    <a href="https://github.com/aydogandagidir/mityu/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
-    <img src="https://img.shields.io/badge/OS-macOS%20%7C%20Windows-white" alt="Supported OS: macOS, Windows">
-    <img src="https://img.shields.io/badge/Local--first-offline%20capable-1E56FF" alt="Local-first, offline capable">
-    <br><br>
-    <p align="center">
-Mityu records meetings and on-site conversations, transcribes them <b>on your device</b>, and turns them into structured, source-linked summaries and action items — with <b>no cloud and no server required</b>. Built for teams that need meeting intelligence without giving up privacy, compliance, or control.
-    </p>
-    <p align="center"><i>A <a href="https://bluedev.dev">bluedev</a> product.</i></p>
+<div align="center">
+  <img src="frontend/public/huitrace-icon-yin-wave.svg" width="88" alt="HuiTrace 会迹" />
+  <h1>HuiTrace · 会迹</h1>
+  <p>记录交流，整理思路，让会议内容可回看、可追溯。</p>
+  <p>本地优先的录音、转写与 AI 会议摘要桌面应用</p>
 </div>
 
----
+HuiTrace 使用 **Tauri 2 + Rust + Next.js** 构建。它可以录制麦克风和系统声音，将音频转写为文本，再生成带来源引用的摘要和行动项。准备好本地模型后，核心处理流程可以离线运行；也可以自行配置外部 AI 服务。
 
-## Table of Contents
+本文对应仓库当前 **1.1.0** 代码版本，不代表所有平台已经发布同版本安装包。
 
-- [Introduction](#introduction)
-- [Why Mityu?](#why-mityu)
-- [Features](#features)
-- [Installation](#installation)
-- [System Architecture](#system-architecture)
-- [Roadmap](#roadmap)
-- [For Developers](#for-developers)
-- [Contributing](#contributing)
-- [License &amp; Acknowledgments](#license--acknowledgments)
+## 当前功能
 
-## Introduction
+| 功能 | 当前实现 |
+| --- | --- |
+| 录音与转写 | 麦克风、系统声音采集，实时查看转写；支持导入已有音频和重新转写 |
+| 本地语音识别 | Whisper、Parakeet；语言支持取决于所选模型 |
+| 说话人区分 | 录音结束后对保存的音频进行分析，显示 Speaker 标签、发言时长和占比 |
+| AI 摘要 | 结构化摘要与行动项关联转写来源，生成后作为草稿供人工审阅 |
+| 摘要语言 | 可选择中文、繁体中文等；自动模式依据转写语言，无法识别时回退到英文 |
+| 自定义模板 | 新建、复制和编辑模板；自定义章节标题、写作要求、内容形式与排列顺序 |
+| 会议回看 | 查看转写、定位来源、回放保存的音频、编辑摘要 |
+| 导出 | Markdown、DOCX、PDF；具体内容与审阅状态以导出界面为准 |
+| 界面 | 简体中文与英文，浅色、深色与跟随系统主题 |
 
-Mityu is a **Tauri 2 desktop app** (Rust core + Next.js UI) that captures your meetings, transcribes them locally in real time, and generates summaries — without sending audio or transcripts to anyone else's servers. The capture → transcript → summary → store path runs entirely on your machine and keeps working with **no network and no server**. An optional sync/collaboration server can be added later for teams, but it is strictly additive: turn it off and the desktop app keeps working on your local data.
+Speaker 编号按首次发言顺序连续显示，前 12 位使用不同配色。编号是会议内的匿名标签，不是对真实身份的识别。
 
-Mityu is designed for professionals and enterprises who must keep control of sensitive conversations. v1.0.4 has not yet completed its human-reviewed target-environment benchmark or pilot, so noisy-field, jargon, diarization, and accuracy claims are intentionally withheld.
+## 开始使用
 
-## Why Mityu?
+安装包请查看 **[本仓库 Releases](https://github.com/EwwwzhI/HuiTrace/releases)**，根据实际发布的资产选择平台。没有对应安装包时，请按下文从源码构建。
 
-- **Privacy-first.** Capture, transcription, and (by default) summarization run on your device. No cloud, no leaks.
-- **Use any model.** Prefer a local open-source model? Great. Want to plug in an external API? Also fine. Bring your own key (BYOK) — no lock-in.
-- **Cost-smart.** Avoid pay-per-minute bills by running models locally, or pay only for the calls you choose.
-- **Any meeting app.** Google Meet, Zoom, Teams — or a face-to-face conversation. Mityu captures system audio, so it records regardless of platform (it is *not* a bot that joins your call). System-audio capture is supported on **macOS** (ScreenCaptureKit / Core Audio tap) and **Windows** (WASAPI loopback); **Linux is experimental** — microphone capture works, system-audio capture does not yet.
-- **Human-in-the-loop.** AI summaries and action items are **drafts** bound to their source transcript segment until a human approves them — for trust, dispute evidence, and EU AI Act transparency.
+1. 在设置中选择录音设备与转写模型，完成所需模型下载。
+2. 开始录音，或导入已有音频。需要后续回放或区分说话人时，应保存音频。
+3. 在会议详情中检查转写内容，选择摘要模型和摘要语言。
+4. 点击摘要工具栏的 **“模板”**，选择现有模板，或创建自己的模板。
+5. 点击 **“生成摘要” / “重新生成摘要”**，根据来源引用核对内容，再确认行动项。
 
-## Features
+### 中文摘要与自定义模板
 
-- **Local transcription** with **Whisper** (`large-v3`) or **NVIDIA Parakeet** — no cloud required.
-- **Real-time transcript** of the meeting as it happens.
-- **AI summaries, BYOK:** choose Ollama (local), Claude, Groq, OpenRouter, or any OpenAI-compatible endpoint. API keys are stored in the OS keychain — never in plaintext.
-- **Import &amp; enhance:** import existing audio to generate a transcript, or re-transcribe a recording with a different model or language — all processed locally.
-- **Professional audio mixing:** capture microphone and system audio simultaneously with ducking and clipping prevention.
-- **GPU acceleration:** Apple Silicon (Metal) + CoreML on macOS; NVIDIA (CUDA) and AMD/Intel (Vulkan) on Windows/Linux — enabled at build time, no configuration needed.
-- **Multi-platform:** macOS and Windows (Linux builds from source).
-- **Local-first storage:** recordings and transcripts stay on your machine. In v1.0.4, raw meeting audio remains local until you delete the meeting.
+**界面语言、转写语言和摘要语言是独立设置。** 把界面切成中文不会自动改变转写模型或所有会议的摘要语言。
 
-<p align="center">
-    <img src="docs/summary.png" width="640" style="border-radius: 10px;" alt="Source-linked AI summary" />
-</p>
-<p align="center">
-    <img src="docs/audio.png" width="640" style="border-radius: 10px;" alt="Microphone + system audio device selection" />
-</p>
+- 在摘要工具栏的语言选择器中选择 **Chinese（zh）**，然后生成或重新生成摘要。
+- **Traditional Chinese（zh-tw）** 用于繁体中文。
+- 摘要语言同时作用于结构化生成和长文本分段生成。
+- 模板的章节标题保持原文。若需要全中文标题，在自定义模板中填写“关键结论”“待办事项”等中文标题。
+- 内置模板编辑后另存为自定义副本；自定义模板保存在本机，可再次选择和修改。
+- “段落 / 要点列表 / 简短文本”是结构化报告内的内容形式提示，来源引用和草稿审阅流程仍然保留。
 
-> Screenshots reflect the app UI and are being refreshed for the Mityu brand.
+更多格式说明见 [模板说明](frontend/src-tauri/templates/README.md)。
 
-## Installation
+### 摘要模型与数据去向
 
-### 🪟 Windows
+| 方式 | 可用选项 | 数据处理位置 |
+| --- | --- | --- |
+| 本地推理 | 内置 AI（llama.cpp 辅助进程）、Ollama | 内置模型在本机运行；Ollama 取决于你配置的服务地址 |
+| 外部服务 | OpenAI、Claude、Groq、OpenRouter、自定义 OpenAI 兼容接口 | 摘要请求会发送到所选服务端 |
 
-1. Download the latest `x64-setup.exe` from [Releases](https://github.com/aydogandagidir/mityu/releases/latest).
-2. Run the installer.
+离线使用需要预先下载模型和运行依赖。选择远程服务时需要网络及相应凭据，因此不应把“本地优先”理解为所有配置下都不会联网。
 
-### 🍎 macOS
+## 平台与能力边界
 
-1. Download the `.dmg` from [Releases](https://github.com/aydogandagidir/mityu/releases/latest).
-2. Open it and drag **Mityu** to your Applications folder.
+| 平台 | 状态 |
+| --- | --- |
+| Windows | 支持麦克风与系统声音采集；系统声音使用 WASAPI loopback |
+| macOS | 支持麦克风与系统声音采集；需按系统提示授予相关权限 |
+| Linux | 实验性支持；系统声音采集尚未完成，不应按完整线上会议录音能力使用 |
 
-### 🐧 Linux
+- **多人同时说话不等于已分离转写。** 当前流程将转写文本与说话时间区间关联，没有先分离各人声音再分别完整转写的处理环节。重叠发言可能混杂或遗漏。
+- 一段文本显示多个 Speaker，可能是发生了发言交接，也可能存在重叠。说话人区分结果属于估计，需要结合音频核对。
+- 摘要质量取决于转写质量、模型和会议内容。来源引用有助于核查，不代表生成内容必然准确。
+- GPU 加速取决于构建参数、驱动和开发工具链。仅安装显卡驱动不保证源码构建会启用加速。
+- 当前 README 聚焦桌面端实际功能；团队同步、服务端部署等规划不作为已交付能力承诺。
 
-> **Experimental — microphone only.** Recording, transcription and summarization work, but
-> **system-audio capture does not**: it needs a PulseAudio/PipeWire backend that is not built yet
-> (see [ADR-0022](docs/DECISIONS.md)). Mityu will record the microphone and log a clear message
-> instead of silently capturing nothing. Use it for in-person conversations; for online meetings
-> prefer macOS or Windows.
+## 从源码运行
 
-Build from source:
+工具链以仓库配置为准：Node.js 20（CI 使用 20.19.4）、pnpm **10.33.0**、Rust stable，以及平台所需的 C/C++、CMake 和 Tauri 系统依赖。构建说话人辅助程序还需要 Python 3，用于校验原生依赖。
 
 ```bash
-git clone https://github.com/aydogandagidir/mityu
-cd mityu/frontend
-pnpm install
-./build-gpu.sh
+git clone https://github.com/EwwwzhI/HuiTrace.git
+cd HuiTrace/frontend
+pnpm install --frozen-lockfile
 ```
 
-See [Building on Linux](docs/building_in_linux.md) and the [general build guide](docs/BUILDING.md).
+首次运行还需要准备 `llama-helper` 和 `diarize-helper`，详见 **[开发与构建说明](frontend/README.md)**。准备完成后，在 `frontend/` 中执行：
 
-> If no packaged release is published yet, build from source with the guides above.
+```bash
+pnpm tauri:dev
+```
 
-## System Architecture
+该命令根据环境检测 GPU 配置并启动桌面开发模式。只运行 `pnpm dev` 会在 `http://localhost:3118` 启动网页界面，**不会启动 Rust 核心**，不能据此验证录音、模型调用和本地存储。
 
-Mityu is a single, self-contained application built with [Tauri](https://tauri.app/): a Rust core handles capture, transcription, summarization, and local storage; a Next.js frontend provides the UI. There is **no required server** — an optional, authenticated multi-tenant server is a later, additive phase.
+生产构建使用 `pnpm tauri:build`。辅助程序、平台依赖和签名配置需提前准备；打包结果以构建日志为准。
 
-For details, see the [architecture documentation](docs/architecture.md).
+## 代码结构
 
-## Roadmap
+```text
+frontend/
+  src/                  Next.js 界面、组件、交互与前端测试
+  src-tauri/            Rust 核心、Tauri 命令、本地数据库、模型调用
+  src-tauri/templates/  随应用提供的摘要模板
+llama-helper/           本地大语言模型推理辅助进程
+diarize-helper/         说话人区分辅助进程
+tools/diarization/     原生依赖下载与校验工具
+eval-harness/           评估工具
+docs/                  架构、构建、数据模型与历史决策
+design/                界面设计资料
+backend/               历史 Python 后端，已归档；不是桌面端运行依赖
+```
 
-Mityu is developed local-first, then server-optional, with go/no-go gates (see [docs/ROADMAP.md](docs/ROADMAP.md)):
+项目保留了一些 `Mityu` 内部名称、应用标识和存储路径，以兼容既有实现。当前面向用户的名称为 **HuiTrace（会迹）**；旧文档中的名称与规划需结合当前代码判断。
 
-- **Phase 1 — Enterprise local-first MVP:** encrypted local store, source-linked HITL summaries, action-item extraction, search, export (PDF/DOCX/Markdown), consent &amp; transparency.
-- **Phase 2 — Optional self-host server:** authenticated, multi-tenant (OIDC + RBAC + Postgres RLS + audit); shared workspaces; the app still works with the server off.
-- **Phase 3 — Managed multi-tenant SaaS.**
-- **Coming soon — on-device AI agents:** a library of local agents that draft follow-ups and track action items — draft-only, human-approved, no autonomous actions (see [EPIC F](docs/BACKLOG.md)).
+## 开发与贡献
 
-## For Developers
+- [桌面端开发说明](frontend/README.md)：依赖、辅助程序、启动、构建和测试。
+- [贡献指南](CONTRIBUTING.md)：协作约定。
+- [数据模型](docs/DATA_MODEL.md)：转写、说话人区间与本地数据。
+- [安全与隐私](docs/SECURITY_PRIVACY.md)：设计约束和数据处理说明。
+- [历史技术决策](docs/DECISIONS.md)：了解实现背景；历史阶段描述不代表当前功能清单。
 
-You'll need Rust and Node.js. For detailed build instructions, see the [Building from Source guide](docs/BUILDING.md). Repository conventions, architecture, security/privacy, and the decision log live in [`docs/`](docs/), with contributor rules in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## 许可与致谢
 
-## Contributing
+代码采用 [MIT License](LICENSE.md)，保留原有版权声明。模型权重、原生依赖和打包组件具有各自的许可，参见 [模型声明](frontend/src-tauri/resources/MODEL-NOTICES.txt) 与 [辅助程序声明](frontend/src-tauri/resources/SIDECAR-NOTICES.txt)。
 
-Contributions are welcome. Please open an issue or a pull request and follow the project structure and guidelines in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License &amp; Acknowledgments
-
-**MIT License** — see [`LICENSE.md`](LICENSE.md).
-
-Mityu is built on the open-source **[Meetily](https://github.com/Zackriya-Solutions/meeting-minutes)** by **Zackriya Solutions** (MIT). The MIT copyright notice is preserved in `LICENSE.md`. **Mityu is a separate product by [bluedev](https://bluedev.dev) and is not affiliated with, nor endorsed by, Meetily or Zackriya Solutions**; it does not use the Meetily name or branding.
-
-Additional thanks:
-
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [transcribe-rs](https://crates.io/crates/transcribe-rs) for on-device transcription.
-- [Screenpipe](https://github.com/mediar-ai/screenpipe) for audio-capture code we build on.
-- **NVIDIA** for the **Parakeet** model, and [istupakov](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) for its ONNX conversion.
-- The upstream Meetily contributors whose work (including import &amp; enhance) Mityu inherits.
+HuiTrace 在 Mityu 和 Meetily 的开源工作基础上继续开发，感谢上游贡献者，以及 whisper.cpp、transcribe-rs、llama.cpp、sherpa-onnx 等项目。HuiTrace 是独立维护的项目，不代表上游官方发行版本。
