@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Transcript, Summary } from '@/types';
+import { Summary } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
@@ -8,6 +8,8 @@ import {
   summaryDraftService,
   SummaryDraftResponse,
 } from '@/services/summaryDraftService';
+import { translateUI } from '@/i18n';
+
 
 interface UseMeetingDataProps {
   meeting: any;
@@ -128,7 +130,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
       if (error instanceof Error) {
         setError(error.message);
       } else {
-        setError('Failed to save meeting title: Unknown error');
+        setError(translateUI("Failed to save meeting title: Unknown error"));
       }
       return false;
     }
@@ -172,7 +174,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
       if (error instanceof Error) {
         setError(error.message);
       } else {
-        setError('Failed to save meeting summary: Unknown error');
+        setError(translateUI("Failed to save meeting summary: Unknown error"));
       }
     }
   }, [meeting.id, meetingTitle]);
@@ -193,10 +195,10 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         await handleSaveSummary(aiSummary);
       }
 
-      toast.success("Changes saved successfully");
+      toast.success(translateUI("Changes saved successfully"));
     } catch (error) {
       console.error('Failed to save changes:', error);
-      toast.error("Failed to save changes", { description: String(error) });
+      toast.error(translateUI("Failed to save changes"), { description: String(error) });
     } finally {
       setIsSaving(false);
     }

@@ -6,6 +6,10 @@ import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Loader2, FolderOpen, Database, CheckCircle2, XCircle } from 'lucide-react';
 import { HomebrewDatabaseDetector } from './HomebrewDatabaseDetector';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface LegacyDatabaseImportProps {
   isOpen: boolean;
@@ -15,6 +19,7 @@ interface LegacyDatabaseImportProps {
 type ImportState = 'idle' | 'selecting' | 'detecting' | 'importing' | 'success' | 'error';
 
 export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImportProps) {
+  useUiTranslation();
   const [importState, setImportState] = useState<ImportState>('idle');
   const [detectedPath, setDetectedPath] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -66,7 +71,7 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
       });
 
       setImportState('success');
-      toast.success('Database imported successfully! Reloading...');
+      toast.success(translateUI("Database imported successfully! Reloading..."));
 
       // Wait 1 second for user to see success, then reload window to refresh all data
       setTimeout(() => {
@@ -88,7 +93,7 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
       await invoke('initialize_fresh_database');
 
       setImportState('success');
-      toast.success('Database initialized successfully! Starting app...');
+      toast.success(translateUI("Database initialized successfully! Starting app..."));
 
       // Wait 1 second for user to see success, then reload window to start fresh
       setTimeout(() => {
@@ -119,10 +124,8 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
     <Dialog open={isOpen} onOpenChange={() => {}}>
       <DialogContent className="sm:max-w-[600px]" onPointerDownOutside={(e) => e.preventDefault()}>
         <DialogHeader>
-          <DialogTitle className="text-2xl">Welcome to Mityu!</DialogTitle>
-          <DialogDescription className="text-base pt-2">
-            Do you have data from a previous Meetily installation?
-          </DialogDescription>
+          <DialogTitle className="text-2xl">{translateUI("Welcome to HuiTrace!")}</DialogTitle>
+          <DialogDescription className="text-base pt-2"> {translateUI("Do you have data from a previous Meetily installation?")} </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
@@ -134,24 +137,22 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
 
           {/* Browse Section */}
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Select your previous Meetily folder, backend directory, or database file:
-            </p>
+            <p className="text-sm text-muted-foreground"> {translateUI("Select your previous Meetily folder, backend directory, or database file:")} </p>
 
             <button
               onClick={handleBrowse}
               disabled={isLoading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:bg-muted disabled:cursor-not-allowed transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:bg-muted disabled:cursor-not-allowed transition-colors"
             >
               {importState === 'selecting' || importState === 'detecting' ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  <span>{importState === 'selecting' ? 'Selecting...' : 'Detecting database...'}</span>
+                  <span>{importState === 'selecting' ? translateUI("Selecting...") : translateUI("Detecting database...")}</span>
                 </>
               ) : (
                 <>
                   <FolderOpen className="h-5 w-5" />
-                  <span>Browse for Database</span>
+                  <span>{translateUI("Browse for Database")}</span>
                 </>
               )}
             </button>
@@ -159,12 +160,12 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
 
           {/* Detection Result */}
           {detectedPath && (
-            <div className="p-3 bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/25 rounded-lg">
+            <div className="p-3 bg-success/10 dark:bg-success/10 border border-success/30 dark:border-success/25 rounded-lg">
               <div className="flex items-start gap-2">
-                <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
+                <CheckCircle2 className="h-5 w-5 text-success dark:text-success mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-green-800 dark:text-green-200">Database found!</p>
-                  <p className="text-xs text-green-700 dark:text-green-400 mt-1 break-all">{detectedPath}</p>
+                  <p className="text-sm font-medium text-success dark:text-success">{translateUI("Database found!")}</p>
+                  <p className="text-xs text-success dark:text-success mt-1 break-all">{detectedPath}</p>
                 </div>
               </div>
             </div>
@@ -172,11 +173,11 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
 
           {/* Error Message */}
           {importState === 'error' && errorMessage && (
-            <div className="p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-lg">
+            <div className="p-3 bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-lg">
               <div className="flex items-start gap-2">
-                <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                <XCircle className="h-5 w-5 text-destructive dark:text-destructive mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm text-red-800 dark:text-red-200">{errorMessage}</p>
+                  <p className="text-sm text-destructive dark:text-destructive">{errorMessage}</p>
                 </div>
               </div>
             </div>
@@ -187,22 +188,22 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
             <button
               onClick={handleImport}
               disabled={!canImport || isLoading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-muted disabled:cursor-not-allowed transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-success text-success-foreground rounded-lg hover:bg-success disabled:bg-muted disabled:cursor-not-allowed transition-colors"
             >
               {importState === 'importing' ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  <span>Importing...</span>
+                  <span>{translateUI("Importing...")}</span>
                 </>
               ) : importState === 'success' ? (
                 <>
                   <CheckCircle2 className="h-5 w-5" />
-                  <span>Success!</span>
+                  <span>{translateUI("Success!")}</span>
                 </>
               ) : (
                 <>
                   <Database className="h-5 w-5" />
-                  <span>Import Database</span>
+                  <span>{translateUI("Import Database")}</span>
                 </>
               )}
             </button>
@@ -212,7 +213,7 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
                 <div className="w-full border-t border-border"></div>
               </div>
               <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-card text-muted-foreground">or</span>
+                <span className="px-2 bg-card text-muted-foreground">{translateUI("or")}</span>
               </div>
             </div>
 
@@ -220,9 +221,7 @@ export function LegacyDatabaseImport({ isOpen, onComplete }: LegacyDatabaseImpor
               onClick={handleStartFresh}
               disabled={isLoading}
               className="w-full px-4 py-3 border-2 border-border text-foreground rounded-lg hover:bg-muted disabled:bg-muted disabled:cursor-not-allowed transition-colors"
-            >
-              Start Fresh (No Import)
-            </button>
+            > {translateUI("Start Fresh (No Import)")} </button>
           </div>
         </div>
       </DialogContent>

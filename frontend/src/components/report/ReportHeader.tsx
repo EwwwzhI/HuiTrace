@@ -12,32 +12,37 @@
 
 import { Clock, FileText, Hash, ListChecks } from 'lucide-react';
 import type { Transcript } from '@/types';
+import { translateUI, uiI18n } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 function formatDuration(sec: number): string {
   if (!sec || sec < 1) return '—';
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (h > 0) return `${h}${translateUI("hours short")} ${m}${translateUI("minutes short")}`;
+  if (m > 0) return `${m}${translateUI("minutes short")} ${s}${translateUI("seconds short")}`;
+  return `${s}${translateUI("seconds short")}`;
 }
 
 function StatTile({ icon: Icon, label, value, sub }: { icon: any; label: string; value: string; sub?: string }) {
+  useUiTranslation();
   // Compact, content-hugging stat: icon tile + stacked value/label. Deliberately
   // NOT flex-1 — stretched, mostly-empty tiles read as dead space on wide windows.
   // shrink-0: a tile never squishes; at extreme widths the row scrolls instead.
   return (
-    <div className="inline-flex shrink-0 items-center gap-3 rounded-xl border border-border bg-card py-2.5 pl-3 pr-5 shadow-sm">
+    <div className="v2-stat inline-flex shrink-0 items-center gap-3 border border-border bg-card">
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground">
         <Icon className="h-4 w-4" aria-hidden />
       </span>
       <span className="flex flex-col leading-tight">
         <span className="text-lg font-semibold tracking-tight text-foreground tabular-nums">
           {value}
-          {sub && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{sub}</span>}
+          {sub && <span className="ml-1.5 text-xs font-normal text-muted-foreground">{sub}</span>}
         </span>
-        <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">{label}</span>
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
       </span>
     </div>
   );
@@ -54,6 +59,7 @@ export function ReportHeader({
   transcripts: Transcript[];
   actionItemCount?: number;
 }) {
+  useUiTranslation();
   const durationSec =
     transcripts.reduce((max, t) => Math.max(max, t.audio_end_time ?? 0), 0) ||
     transcripts.reduce((sum, t) => sum + (t.duration ?? 0), 0);
@@ -68,27 +74,27 @@ export function ReportHeader({
   if (createdAt) {
     const d = new Date(createdAt);
     if (!Number.isNaN(d.getTime())) {
-      dateLabel = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      dateLabel = d.toLocaleDateString(uiI18n.language, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
     }
   }
 
   const wpm = durationSec > 0 ? Math.round(words / (durationSec / 60)) : 0;
 
   return (
-    <header className="border-b border-border bg-background px-6 py-4">
+    <header className="v2-report-header border-b border-border">
       {/* Full-width, left-aligned so the header shares a grid with the panels
           below (a centered max-w column over full-width panels reads off-grid).
           Title block left, stat tiles right; wraps on narrow windows. */}
       <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-3">
-        <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-primary">Meeting report</div>
-          <h1 className="mt-0.5 truncate text-xl font-semibold tracking-tight text-foreground">{title || 'Untitled meeting'}</h1>
+        <div className="min-w-0 max-w-full">
+          <div className="text-xs font-medium uppercase tracking-[0.18em] text-primary">{translateUI("Meeting report")}</div>
+          <h1 className="mt-0.5 break-words font-heading text-[28px] font-semibold leading-tight text-foreground">{title || translateUI("Untitled meeting")}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-muted-foreground">
             {dateLabel && <span>{dateLabel}</span>}
             {dateLabel && durationSec > 0 && <span aria-hidden>·</span>}
             {durationSec > 0 && <span>{formatDuration(durationSec)}</span>}
             <span aria-hidden>·</span>
-            <span>{segments} segments</span>
+            <span>{segments} {translateUI("segments")}</span>
           </div>
         </div>
 
@@ -97,11 +103,11 @@ export function ReportHeader({
             header, and overflow-x-auto is the never-clip backstop for widths
             where even a single tile can't fit. */}
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2.5 overflow-x-auto [scrollbar-width:thin]">
-          <StatTile icon={Clock} label="Duration" value={formatDuration(durationSec)} />
-          <StatTile icon={FileText} label="Words" value={words.toLocaleString()} sub={wpm > 0 ? `~${wpm} wpm` : undefined} />
-          <StatTile icon={Hash} label="Segments" value={String(segments)} />
+          <StatTile icon={Clock} label={translateUI("Duration")} value={formatDuration(durationSec)} />
+          <StatTile icon={FileText} label={translateUI("Words")} value={words.toLocaleString(uiI18n.language)} sub={wpm > 0 ? translateUI("~{{count}} wpm", { count: wpm }) : undefined} />
+          <StatTile icon={Hash} label={translateUI("Segments")} value={String(segments)} />
           {actionItemCount != null && (
-            <StatTile icon={ListChecks} label="Action items" value={String(actionItemCount)} />
+            <StatTile icon={ListChecks} label={translateUI("Action items")} value={String(actionItemCount)} />
           )}
         </div>
       </div>

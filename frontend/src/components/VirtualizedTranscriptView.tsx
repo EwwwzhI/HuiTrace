@@ -11,6 +11,10 @@ import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { SpeakerChips } from "./report/SpeakerTurns";
 import { hasCrosstalk, speakersForRow, talkTime, type SpeakerTurn } from "@/lib/speakerTurns";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -123,13 +127,14 @@ const TranscriptSegment = memo(function TranscriptSegment({
     /** Two people talking at once here -- not merely two speakers in the row. */
     crosstalk?: boolean;
 }) {
+  useUiTranslation();
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
     return (
         <div
             id={`segment-${id}`}
             className={`mb-1.5 rounded-lg px-2 py-1 -mx-2 transition-colors duration-500 hover:bg-muted/40 ${
-                isHighlighted ? 'bg-yellow-100 ring-2 ring-yellow-300' : ''
+                isHighlighted ? 'bg-warning/10 ring-2 ring-warning/30' : ''
             }`}
         >
             <div className="flex items-start gap-2">
@@ -139,13 +144,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
                             <button
                                 type="button"
                                 onClick={() => onSeek(timestamp)}
-                                aria-label="Play from this segment"
-                                className="mt-1 min-w-[46px] flex-shrink-0 rounded text-left text-[11px] tabular-nums text-muted-foreground/70 transition-colors hover:text-primary"
+                                aria-label={translateUI("Play from this segment")}
+                                className="mt-1 min-w-[46px] flex-shrink-0 rounded text-left text-xs tabular-nums text-muted-foreground/70 transition-colors hover:text-primary"
                             >
                                 {formatRecordingTime(timestamp)}
                             </button>
                         ) : (
-                            <span className="mt-1 min-w-[46px] flex-shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+                            <span className="mt-1 min-w-[46px] flex-shrink-0 text-xs tabular-nums text-muted-foreground/70">
                                 {formatRecordingTime(timestamp)}
                             </span>
                         )}
@@ -166,10 +171,10 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     )}
                     {isStreaming ? (
                         <div className="bg-muted border border-border rounded-lg px-3 py-2">
-                            <p className="text-[15px] text-foreground leading-relaxed">{displayText}</p>
+                            <p className="text-[15px] text-foreground leading-7">{displayText}</p>
                         </div>
                     ) : (
-                        <p className="text-[15px] text-foreground leading-relaxed">{displayText}</p>
+                        <p className="text-[15px] text-foreground leading-7">{displayText}</p>
                     )}
                 </div>
             </div>
@@ -197,6 +202,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     onRequestSegment,
     speakerTurns,
 }) => {
+  useUiTranslation();
     // Speaker order is fixed for the whole transcript so one speaker keeps one
     // colour from top to bottom. It comes from `talkTime`, which orders by first
     // appearance -- NOT by who spoke longest, which would make the colours a
@@ -411,19 +417,19 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     {isRecording ? (
                         <>
                             <div className="flex items-center justify-center mb-3">
-                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-primary animate-pulse'}`}></div>
+                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-warning' : 'bg-primary animate-pulse'}`}></div>
                             </div>
                             <p className="text-sm text-muted-foreground">
-                                {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                                {isPaused ? translateUI("Recording paused") : translateUI("Listening for speech...")}
                             </p>
                             <p className="text-xs mt-1 text-muted-foreground/70">
-                                {isPaused ? 'Click resume to continue recording' : 'Speak to see live transcription'}
+                                {isPaused ? translateUI("Click resume to continue recording") : translateUI("Speak to see live transcription")}
                             </p>
                         </>
                     ) : (
                         <>
-                            <p className="text-lg font-semibold">Welcome to Mityu!</p>
-                            <p className="text-xs mt-1">Start recording to see live transcription</p>
+                            <p className="text-lg font-semibold">{translateUI("Welcome to HuiTrace!")}</p>
+                            <p className="text-xs mt-1">{translateUI("Start recording to see live transcription")}</p>
                         </>
                     )}
                 </motion.div>
@@ -478,12 +484,10 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-muted-foreground">
                                     <div className="w-4 h-4 border-2 border-border border-t-muted-foreground rounded-full animate-spin" />
-                                    <span className="text-sm">Loading more...</span>
+                                    <span className="text-sm">{translateUI("Loading more...")}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
-                                <span className="text-sm text-muted-foreground/70">
-                                    Showing {loadedCount} of {totalCount} segments
-                                </span>
+                                <span className="text-sm text-muted-foreground/70"> {translateUI("Showing")} {loadedCount} {translateUI("of")} {totalCount} {translateUI("segments")} </span>
                             ) : null}
                         </div>
                     )}
@@ -497,7 +501,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             className="flex items-center gap-2 mt-4 text-muted-foreground"
                         >
                             <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <span className="text-sm">{translateUI("Listening...")}</span>
                         </motion.div>
                     )}
                 </>
@@ -539,12 +543,10 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-muted-foreground">
                                     <div className="w-4 h-4 border-2 border-border border-t-muted-foreground rounded-full animate-spin" />
-                                    <span className="text-sm">Loading more...</span>
+                                    <span className="text-sm">{translateUI("Loading more...")}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
-                                <span className="text-sm text-muted-foreground/70">
-                                    Showing {loadedCount} of {totalCount} segments
-                                </span>
+                                <span className="text-sm text-muted-foreground/70"> {translateUI("Showing")} {loadedCount} {translateUI("of")} {totalCount} {translateUI("segments")} </span>
                             ) : null}
                         </div>
                     )}
@@ -558,7 +560,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             className="flex items-center gap-2 mt-4 text-muted-foreground"
                         >
                             <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <span className="text-sm">{translateUI("Listening...")}</span>
                         </motion.div>
                     )}
                 </>

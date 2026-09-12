@@ -9,6 +9,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface EmptyStateSummaryProps {
   onGenerate: () => void;
@@ -17,6 +21,7 @@ interface EmptyStateSummaryProps {
 }
 
 export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }: EmptyStateSummaryProps) {
+  useUiTranslation();
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -36,17 +41,10 @@ export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }
           <ListChecks className="h-5 w-5" />
         </span>
       </div>
-      <h3 className="text-lg font-semibold tracking-tight text-foreground mb-1.5">
-        No summary yet
-      </h3>
-      <p className="text-sm text-muted-foreground mb-2 max-w-sm leading-relaxed">
-        Turn this transcript into a structured report — summary, key points and action
-        items, each linked to its source segment.
-      </p>
+      <h3 className="text-lg font-semibold tracking-tight text-foreground mb-1.5"> {translateUI("No summary yet")} </h3>
+      <p className="text-sm text-muted-foreground mb-2 max-w-sm leading-relaxed"> {translateUI("Turn this transcript into a structured report — summary, key points and action items, each linked to its source segment.")} </p>
       <p className="mb-6 inline-flex items-center gap-1.5 text-xs text-muted-foreground/80">
-        <Clock className="h-3 w-3" aria-hidden />
-        Drafts stay on this device until you review and approve them.
-      </p>
+        <Clock className="h-3 w-3" aria-hidden /> {translateUI("Drafts stay on this device until you review and approve them.")} </p>
 
       <TooltipProvider>
         <Tooltip>
@@ -58,22 +56,20 @@ export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }
                 className="gap-2"
               >
                 <Sparkles className="w-4 h-4" />
-                {isGenerating ? 'Generating...' : 'Generate Summary'}
+                {isGenerating ? translateUI("Generating...") : translateUI("Generate Summary")}
               </Button>
             </div>
           </TooltipTrigger>
           {!hasModel && (
             <TooltipContent>
-              <p>Please select a model in Settings first</p>
+              <p>{translateUI("Please select a model in Settings first")}</p>
             </TooltipContent>
           )}
         </Tooltip>
       </TooltipProvider>
 
       {!hasModel && (
-        <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
-          Please select a model in Settings first
-        </p>
+        <p className="text-xs text-warning dark:text-warning mt-3"> {translateUI("Please select a model in Settings first")} </p>
       )}
     </motion.div>
   );

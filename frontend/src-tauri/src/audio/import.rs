@@ -12,11 +12,10 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
-use super::audio_processing::create_meeting_folder;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
@@ -26,10 +25,26 @@ static IMPORT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Global flag to signal cancellation
 static IMPORT_CANCELLED: AtomicBool = AtomicBool::new(false);
+static SELECTED_AUDIO: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+// Both recording starts and imports acquire this lock before claiming engines.
+pub(crate) static CAPTURE_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// RAII guard for IMPORT_IN_PROGRESS flag
 /// Ensures flag is cleared even if import panics or returns early
 struct ImportGuard;
+
+struct ImportFolderGuard { folder: PathBuf, committed: bool }
+impl Drop for ImportFolderGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            let ctx = crate::context::current();
+            if let Err(error) = crate::database::deletion::erase_recording_folder(
+                &self.folder, &[get_default_recordings_folder()], &ctx,
+            ) { warn!("Could not clean incomplete import: {}", error); }
+        }
+    }
+}
 
 impl ImportGuard {
     /// Create guard and set flag atomically
@@ -40,6 +55,7 @@ impl ImportGuard {
         {
             return Err("Import already in progress".to_string());
         }
+        IMPORT_CANCELLED.store(false, Ordering::SeqCst);
         Ok(ImportGuard)
     }
 }
@@ -256,9 +272,10 @@ pub async fn start_import<R: Runtime>(
 ) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
+    run_guarded_import(app, source_path, title, language, model, provider, _guard).await
+}
 
-    // Reset cancellation flag
-    IMPORT_CANCELLED.store(false, Ordering::SeqCst);
+async fn run_guarded_import<R: Runtime>(app: AppHandle<R>, source_path: String, title: String, language: Option<String>, model: Option<String>, provider: Option<String>, _guard: ImportGuard) -> Result<ImportResult> {
 
     let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_import(app.clone(), source_path, title, language, model, provider).await;
@@ -269,6 +286,8 @@ pub async fn start_import<R: Runtime>(
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
 
+    // Release the import gate before announcing completion so the next task can start.
+    drop(_guard);
     match &result {
         Ok(res) => {
             let _ = app.emit(
@@ -331,7 +350,14 @@ async fn run_import<R: Runtime>(
 
     // Create meeting folder
     let base_folder = get_default_recordings_folder();
-    let meeting_folder = create_meeting_folder(&base_folder, &title, false)?;
+    std::fs::create_dir_all(&base_folder)?;
+    let base_folder = std::fs::canonicalize(&base_folder)?;
+    let meeting_folder = base_folder.join(format!("import-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&meeting_folder)?;
+    std::fs::write(meeting_folder.join("metadata.json"), serde_json::to_vec(&serde_json::json!({
+        "workspace_id": crate::context::current().tenant_id.as_str(), "source": "import", "status": "importing"
+    }))?)?;
+    let mut folder_guard = ImportFolderGuard { folder: meeting_folder.clone(), committed: false };
 
     // Copy audio file to meeting folder
     emit_progress(&app, "copying", 10, "Copying audio file...");
@@ -354,7 +380,7 @@ async fn run_import<R: Runtime>(
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
         // Cleanup: remove the meeting folder
-        let _ = std::fs::remove_dir_all(&meeting_folder);
+        // ImportFolderGuard cleans only application-managed files.
         return Err(anyhow!("Import cancelled"));
     }
 
@@ -385,7 +411,7 @@ async fn run_import<R: Runtime>(
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
+        // ImportFolderGuard cleans only application-managed files.
         return Err(anyhow!("Import cancelled"));
     }
 
@@ -411,7 +437,7 @@ async fn run_import<R: Runtime>(
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
+        // ImportFolderGuard cleans only application-managed files.
         return Err(anyhow!("Import cancelled"));
     }
 
@@ -503,7 +529,7 @@ async fn run_import<R: Runtime>(
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
+        // ImportFolderGuard cleans only application-managed files.
         return Err(anyhow!("Import cancelled"));
     }
 
@@ -555,7 +581,7 @@ async fn run_import<R: Runtime>(
 
     for (i, segment) in processable_segments.iter().enumerate() {
         if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-            let _ = std::fs::remove_dir_all(&meeting_folder);
+            // ImportFolderGuard cleans only application-managed files.
             return Err(anyhow!("Import cancelled"));
         }
 
@@ -644,7 +670,7 @@ async fn run_import<R: Runtime>(
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
+        // ImportFolderGuard cleans only application-managed files.
         return Err(anyhow!("Import cancelled"));
     }
 
@@ -691,6 +717,8 @@ async fn run_import<R: Runtime>(
         meeting_folder.to_string_lossy().to_string(),
     )
     .await?;
+
+    folder_guard.committed = true;
 
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
@@ -903,6 +931,7 @@ fn write_import_metadata(
 
     let json = serde_json::json!({
         "version": "1.0",
+        "workspace_id": crate::context::current().tenant_id.as_str(),
         "meeting_id": meeting_id,
         "meeting_name": title,
         "created_at": now,
@@ -954,7 +983,10 @@ pub async fn select_and_validate_audio_command<R: Runtime>(
             info!("User selected: {}", path_str);
 
             match validate_audio_file(Path::new(&path_str)) {
-                Ok(info) => Ok(Some(info)),
+                Ok(info) => {
+                    *SELECTED_AUDIO.lock().unwrap() = Some(std::fs::canonicalize(&path_str).map_err(|e| e.to_string())?);
+                    Ok(Some(info))
+                },
                 Err(e) => {
                     error!("Validation failed: {}", e);
                     Err(e.to_string())
@@ -985,19 +1017,24 @@ pub async fn start_import_audio_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportStarted, String> {
-    // Licensing gate (ADR-0023 §5): TrialExpired/Revoked block importing NEW
-    // audio; Trial/Licensed pass. Command layer only — capture internals are
-    // untouched. Existing meetings/data are never gated.
+    // Legacy compatibility hook; HuiTrace has no commercial capture restriction.
     crate::licensing::commands::ensure_capture_allowed(&app).await?;
 
-    // Check if import is already in progress (guard will be acquired in start_import)
-    if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
-        return Err("Import already in progress".to_string());
+    let _start_lock = CAPTURE_START_LOCK.lock().await;
+    if super::recording_commands::is_recording().await || super::recording_commands::is_recording_post_processing_pending() {
+        return Err("Finish the current recording before importing audio.".into());
     }
+    let selected = SELECTED_AUDIO.lock().unwrap().clone().ok_or("Select an audio file using the file picker first.")?;
+    let requested = std::fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
+    if selected != requested { return Err("Import file does not match the selected audio.".into()); }
+    validate_audio_file(&requested).map_err(|e| e.to_string())?;
+    let guard = ImportGuard::acquire()?;
+
+    // Check if import is already in progress (guard will be acquired in start_import)
 
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = start_import(app, source_path, title, language, model, provider).await;
+        let result = run_guarded_import(app, requested.to_string_lossy().into_owned(), title, language, model, provider, guard).await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
@@ -1016,6 +1053,10 @@ pub async fn cancel_import_command() -> Result<(), String> {
         return Err("No import in progress".to_string());
     }
     cancel_import();
+    // Acknowledge only after the worker has stopped and cleaned its staging files.
+    while is_import_in_progress() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     Ok(())
 }
 

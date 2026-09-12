@@ -98,3 +98,21 @@ export async function setRecordingConsentAlwaysAsk(alwaysAsk: boolean): Promise<
   await store.set(KEY_ALWAYS_ASK, alwaysAsk);
   await store.save();
 }
+
+/** One switch for both settings and the dialog; normalize legacy flags together. */
+export const RECORDING_CONSENT_CHANGED = 'recording-consent-changed';
+export async function setRememberRecordingPermission(remember: boolean): Promise<void> {
+  const store = await openStore();
+  const previous = await readRecordingConsentState();
+  try {
+    await store.set(KEY_ACKNOWLEDGED, remember);
+    await store.set(KEY_ALWAYS_ASK, !remember);
+    await store.save();
+  } catch (error) {
+    // plugin-store mutates memory before saving; undo it if disk persistence fails.
+    await store.set(KEY_ACKNOWLEDGED, previous.acknowledged);
+    await store.set(KEY_ALWAYS_ASK, previous.alwaysAsk);
+    throw error;
+  }
+  window.dispatchEvent(new Event(RECORDING_CONSENT_CHANGED));
+}

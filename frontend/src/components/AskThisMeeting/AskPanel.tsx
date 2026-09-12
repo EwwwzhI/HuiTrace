@@ -29,6 +29,10 @@ import {
   type AskOutcome,
   type DroppedClaim,
 } from '@/services/askService';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface AskPanelProps {
   meetingId: string;
@@ -58,35 +62,30 @@ interface AskPanelProps {
  * being informed that you are interacting with an AI.
  */
 function AiGeneratedNote() {
+  useUiTranslation();
   return (
     <div
       role="note"
-      aria-label="You are interacting with an AI assistant; AI-generated content, human review required"
-      className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-sm dark:border-amber-500/30 dark:bg-amber-500/10"
+      aria-label={translateUI("You are interacting with an AI assistant; AI-generated content, human review required")}
+      className="mb-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-2.5 text-sm dark:border-warning/30 dark:bg-warning/10"
     >
       <AlertTriangle
-        className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400"
+        className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning dark:text-warning"
         aria-hidden="true"
       />
-      <p className="text-amber-900 dark:text-amber-200">
-        <span className="font-semibold">
-          You are asking an AI assistant · answers are AI-generated and need your
-          review.
-        </span>{' '}
-        Answers are drawn only from this meeting&apos;s transcript. Open the
-        source of each line to check it.
-      </p>
+      <p className="text-warning dark:text-warning">
+        <span className="font-semibold"> {translateUI("You are asking an AI assistant · answers are AI-generated and need your review.")} </span>{' '} {translateUI("Answers are drawn only from this meeting's transcript. Open the source of each line to check it.")} </p>
     </div>
   );
 }
 
 function DroppedNote({ dropped }: { dropped: DroppedClaim[] }) {
+  useUiTranslation();
   if (dropped.length === 0) return null;
   return (
     <p className="mt-3 text-xs text-muted-foreground">
-      {dropped.length === 1 ? '1 line was' : `${dropped.length} lines were`} left
-      out because {dropReasonLabel(dropped[0].reason)}
-      {dropped.length > 1 ? ' (and similar)' : ''}.
+      {dropped.length === 1 ? translateUI("1 line was") : `${dropped.length} lines were`} {translateUI("left out because")} {dropReasonLabel(dropped[0].reason)}
+      {dropped.length > 1 ? translateUI(" (and similar)") : ''}.
     </p>
   );
 }
@@ -97,6 +96,7 @@ export function AskPanel({
   modelName,
   onJumpToSource,
 }: AskPanelProps) {
+  useUiTranslation();
   const [question, setQuestion] = useState('');
   const [outcome, setOutcome] = useState<AskOutcome | null>(null);
   const [isAsking, setIsAsking] = useState(false);
@@ -127,7 +127,7 @@ export function AskPanel({
   };
 
   return (
-    <section className="w-full" aria-label="Ask this meeting">
+    <section className="w-full" aria-label={translateUI("Ask this meeting")}>
       <AiGeneratedNote />
 
       <div className="flex items-center gap-2">
@@ -143,8 +143,8 @@ export function AskPanel({
             onKeyDown={(e) => {
               if (e.key === 'Enter') void ask();
             }}
-            placeholder="Ask about this meeting…"
-            aria-label="Question about this meeting"
+            placeholder={translateUI("Ask about this meeting…")}
+            aria-label={translateUI("Question about this meeting")}
             className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
@@ -154,35 +154,26 @@ export function AskPanel({
           ) : (
             <CornerDownLeft className="h-4 w-4" aria-hidden="true" />
           )}
-          <span className="ml-2">Ask</span>
+          <span className="ml-2">{translateUI("Ask")}</span>
         </Button>
       </div>
 
       {!modelProvider || !modelName ? (
-        <p className="mt-3 text-sm text-muted-foreground">
-          Choose a model in Settings to ask questions about this meeting.
-        </p>
+        <p className="mt-3 text-sm text-muted-foreground"> {translateUI("Choose a model in Settings to ask questions about this meeting.")} </p>
       ) : null}
 
       {error ? (
-        <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
-          Couldn&apos;t answer: {error}
+        <p className="mt-3 text-sm text-destructive dark:text-destructive" role="alert"> {translateUI("Couldn't answer:")} {error}
         </p>
       ) : null}
 
       {outcome?.status === 'noEvidence' ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Nothing in this meeting&apos;s transcript answers that. Rather than
-          guess from outside the meeting, Mityu leaves it unanswered.
-        </p>
+        <p className="mt-4 text-sm text-muted-foreground"> {translateUI("Nothing in this meeting's transcript answers that. Rather than guess from outside the meeting, HuiTrace leaves it unanswered.")} </p>
       ) : null}
 
       {outcome?.status === 'refused' ? (
         <div className="mt-4">
-          <p className="text-sm text-muted-foreground">
-            An answer was drafted but none of it could be traced to this
-            meeting, so it was discarded rather than shown.
-          </p>
+          <p className="text-sm text-muted-foreground"> {translateUI("An answer was drafted but none of it could be traced to this meeting, so it was discarded rather than shown.")} </p>
           <DroppedNote dropped={outcome.dropped} />
         </div>
       ) : null}
@@ -202,8 +193,7 @@ export function AskPanel({
                   disabled={!onJumpToSource}
                   className="mt-1.5 text-xs text-primary hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-60"
                   aria-label={`Open the transcript at ${claim.timestamp}`}
-                >
-                  Source · {claim.timestamp}
+                > {translateUI("Source ·")} {claim.timestamp}
                 </button>
               </li>
             ))}

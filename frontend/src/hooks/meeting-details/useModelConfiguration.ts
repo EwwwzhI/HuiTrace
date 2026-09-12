@@ -4,6 +4,8 @@ import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { configService } from '@/services/configService';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
+import { translateUI } from '@/i18n';
+
 
 interface UseModelConfigurationProps {
   serverAddress: string | null;
@@ -126,16 +128,16 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', payload);
 
-      toast.success("Summary settings Saved successfully");
+      toast.success(translateUI("Summary settings Saved successfully"));
 
       await Analytics.trackSettingsChanged('model_config');
     } catch (error) {
       console.error('Failed to save model config');
-      toast.error("Failed to save summary settings", { description: String(error) });
+      toast.error(translateUI("Failed to save summary settings"), { description: String(error) });
       if (error instanceof Error) {
         setError(error.message);
       } else {
-        setError('Failed to save model config: Unknown error');
+        setError(translateUI("Failed to save model config: Unknown error"));
       }
     }
   }, [modelConfig]);

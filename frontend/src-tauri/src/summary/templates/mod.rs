@@ -74,10 +74,11 @@ mod tests {
         let templates = list_templates();
         assert!(!templates.is_empty());
 
-        for (id, name, description) in templates {
+        for (id, name, description, source) in templates {
             assert!(!id.is_empty());
             assert!(!name.is_empty());
             assert!(!description.is_empty());
+            assert!(matches!(source.as_str(), "builtin" | "bundled" | "custom"));
         }
     }
 }

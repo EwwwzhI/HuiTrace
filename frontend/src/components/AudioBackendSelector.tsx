@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Info } from 'lucide-react';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export interface BackendInfo {
   id: string;
@@ -19,6 +23,7 @@ export function AudioBackendSelector({
   onBackendChange,
   disabled = false,
 }: AudioBackendSelectorProps) {
+  useUiTranslation();
   const [backends, setBackends] = useState<BackendInfo[]>([]);
   const [currentBackend, setCurrentBackend] = useState<string>('coreaudio');
   const [loading, setLoading] = useState(true);
@@ -45,7 +50,7 @@ export function AudioBackendSelector({
         }
       } catch (err) {
         console.error('Failed to load audio backends:', err);
-        setError('Failed to load backend options');
+        setError(translateUI("Failed to load backend options"));
       } finally {
         setLoading(false);
       }
@@ -69,7 +74,7 @@ export function AudioBackendSelector({
       console.log(`Audio backend changed to: ${backendId}`);
     } catch (err) {
       console.error('Failed to set audio backend:', err);
-      setError('Failed to change backend. Please try again.');
+      setError(translateUI("Failed to change backend. Please try again."));
     }
   };
 
@@ -91,9 +96,7 @@ export function AudioBackendSelector({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <label className="text-sm font-medium text-foreground">
-          System Audio Backend
-        </label>
+        <label className="text-sm font-medium text-foreground"> {translateUI("System Audio Backend")} </label>
         <div className="relative">
           <button
             type="button"
@@ -105,7 +108,7 @@ export function AudioBackendSelector({
           </button>
           {showTooltip && (
             <div className="absolute z-10 left-6 top-0 w-64 p-3 text-xs bg-foreground text-background rounded-lg shadow-lg">
-              <p className="font-semibold mb-1">Audio Capture Methods:</p>
+              <p className="font-semibold mb-1">{translateUI("Audio Capture Methods:")}</p>
               <ul className="space-y-1">
                 {backends.map((backend) => (
                   <li key={backend.id}>
@@ -113,16 +116,14 @@ export function AudioBackendSelector({
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-background/70">
-                Try different backends to find which works best for your system.
-              </p>
+              <p className="mt-2 text-background/70"> {translateUI("Try different backends to find which works best for your system.")} </p>
             </div>
           )}
         </div>
       </div>
 
       {error && (
-        <div className="p-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-md">
+        <div className="p-2 text-xs text-destructive dark:text-destructive bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-md">
           {error}
         </div>
       )}
@@ -138,7 +139,7 @@ export function AudioBackendSelector({
               key={backend.id}
               className={`flex items-start p-3 border rounded-lg transition-all ${
                 currentBackend === backend.id
-                  ? 'border-blue-500 bg-accent'
+                  ? 'border-primary bg-accent'
                   : 'border-border hover:border-border bg-card'
               } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
@@ -149,7 +150,7 @@ export function AudioBackendSelector({
                 checked={currentBackend === backend.id}
                 onChange={() => handleBackendChange(backend.id)}
                 disabled={isDisabled}
-                className="mt-1 h-4 w-4 text-primary focus:ring-blue-500 border-border"
+                className="mt-1 h-4 w-4 text-primary focus:ring-primary border-border"
               />
               <div className="ml-3 flex-1">
                 <div className="flex items-center justify-between">
@@ -157,14 +158,10 @@ export function AudioBackendSelector({
                     {backend.name}
                   </span>
                   {currentBackend === backend.id && (
-                    <span className="text-xs font-medium text-primary bg-accent px-2 py-0.5 rounded">
-                      Active
-                    </span>
+                    <span className="text-xs font-medium text-primary bg-accent px-2 py-0.5 rounded"> {translateUI("Active")} </span>
                   )}
                   {isCoreAudio && (
-                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                      Disabled
-                    </span>
+                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded"> {translateUI("Disabled")} </span>
                   )}
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">{backend.description}</p>
@@ -175,9 +172,9 @@ export function AudioBackendSelector({
       </div>
 
       <div className="text-xs text-muted-foreground space-y-1">
-        <p>• Backend selection only affects system audio capture</p>
-        <p>• Microphone always uses the default method</p>
-        <p>• Changes apply to new recording sessions</p>
+        <p>{translateUI("• Backend selection only affects system audio capture")}</p>
+        <p>{translateUI("• Microphone always uses the default method")}</p>
+        <p>{translateUI("• Changes apply to new recording sessions")}</p>
       </div>
     </div>
   );

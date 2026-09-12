@@ -10,6 +10,8 @@ import { indexedDBService, MeetingMetadata, StoredTranscript } from '@/services/
 import { storageService } from '@/services/storageService';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
+import { translateUI } from '@/i18n';
+
 
 interface AudioRecoveryStatus {
   status: string; // "success" | "partial" | "failed" | "none"
@@ -138,8 +140,8 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
         await applyPinnedSummaryLanguageToMeeting(savedMeetingId);
       } catch (error) {
         console.warn('Failed to apply pinned summary language to recovered meeting:', error);
-        toast.warning('Could not apply default summary language', {
-          description: 'The recovered meeting was saved, but the default summary language was not applied.',
+        toast.warning(translateUI("Could not apply default summary language"), {
+          description: translateUI("The recovered meeting was saved, but the default summary language was not applied."),
         });
       }
 
@@ -150,8 +152,8 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
         await indexedDBService.markMeetingSaved(meetingId);
       } catch (error) {
         console.warn('Saved recovery-copy cleanup will be retried at startup:', error);
-        toast.warning('Recovery cache cleanup pending', {
-          description: 'The meeting was saved. Mityu will retry removing its recovery copy at next startup.',
+        toast.warning(translateUI("Recovery cache cleanup pending"), {
+          description: translateUI("The meeting was saved. HuiTrace will retry removing its recovery copy at next startup."),
         });
       }
 

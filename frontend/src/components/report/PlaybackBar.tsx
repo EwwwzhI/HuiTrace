@@ -3,12 +3,13 @@
 /**
  * PlaybackBar — compact audio playback strip for the meeting report (Phase B/D,
  * docs/DESIGN_READAI.md): play/pause + scrubber + time, backed by the meeting's
- * local audio.mp4 through Tauri's asset protocol. Everything stays on-device.
+ * local audio through Tauri's asset protocol. Everything stays on-device.
  *
  * Exposes an imperative `seekTo(sec)` handle so transcript segments and chapter
  * blocks can jump the audio. Renders nothing outside Tauri, when the meeting has
- * no folder, or when the file fails to load (e.g. a custom recordings dir outside
- * the asset-protocol scope) — playback is an enhancement, never a blocker.
+ * no audio, or when the file fails to load — playback is an enhancement, never
+ * a blocker. The native layer resolves the actual audio file so imported MP3,
+ * M4A, WAV, and other supported formats work as well as local recordings.
  */
 
 import {
@@ -20,8 +21,12 @@ import {
   useState,
 } from 'react';
 import { Pause, Play } from 'lucide-react';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { isTauri } from '@/lib/isTauri';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export interface PlaybackBarHandle {
   /** Seek to a position (seconds from recording start) and start playing. */
@@ -37,22 +42,45 @@ function fmt(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export const PlaybackBar = forwardRef<PlaybackBarHandle, { folderPath?: string | null }>(
-  function PlaybackBar({ folderPath }, ref) {
+export const PlaybackBar = forwardRef<PlaybackBarHandle, { meetingId: string }>(
+  function PlaybackBar({ meetingId }, ref) {
+  useUiTranslation();
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const [playing, setPlaying] = useState(false);
     const [current, setCurrent] = useState(0);
     const [duration, setDuration] = useState(0);
     const [failed, setFailed] = useState(false);
+    const [audioPath, setAudioPath] = useState<string | null>(null);
+
+    useEffect(() => {
+      if (!meetingId || !isTauri()) {
+        setAudioPath(null);
+        return;
+      }
+
+      let cancelled = false;
+      setAudioPath(null);
+      void invoke<string | null>('api_get_meeting_audio_path', { meetingId })
+        .then((path) => {
+          if (!cancelled) setAudioPath(path);
+        })
+        .catch(() => {
+          if (!cancelled) setAudioPath(null);
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [meetingId]);
 
     const src = useMemo(() => {
-      if (!folderPath || !isTauri()) return null;
+      if (!audioPath || !isTauri()) return null;
       try {
-        return convertFileSrc(`${folderPath}/audio.mp4`);
+        return convertFileSrc(audioPath);
       } catch {
         return null;
       }
-    }, [folderPath]);
+    }, [audioPath]);
 
     useImperativeHandle(ref, () => ({
       seekTo: (sec: number) => {
@@ -95,8 +123,8 @@ export const PlaybackBar = forwardRef<PlaybackBarHandle, { folderPath?: string |
             if (el.paused) void el.play().catch(() => setFailed(true));
             else el.pause();
           }}
-          title={playing ? 'Pause' : 'Play recording'}
-          aria-label={playing ? 'Pause' : 'Play recording'}
+          title={playing ? translateUI("Pause") : translateUI("Play audio")}
+          aria-label={playing ? translateUI("Pause") : translateUI("Play audio")}
           className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
         >
           {playing ? <Pause className="h-4 w-4" /> : <Play className="ml-0.5 h-4 w-4" />}
@@ -112,7 +140,7 @@ export const PlaybackBar = forwardRef<PlaybackBarHandle, { folderPath?: string |
             const el = audioRef.current;
             if (el) el.currentTime = Number(e.target.value);
           }}
-          aria-label="Seek"
+          aria-label={translateUI("Seek")}
           className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-muted accent-[hsl(var(--primary))]"
         />
         <span className="w-12 shrink-0 text-xs tabular-nums text-muted-foreground">{fmt(duration)}</span>

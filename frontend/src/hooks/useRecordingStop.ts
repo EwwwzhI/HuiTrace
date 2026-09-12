@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
@@ -16,6 +16,8 @@ import {
   applyPinnedSummaryLanguageToMeeting,
   detectAndCacheSummaryLanguage,
 } from '@/lib/summary-language-preferences';
+import { translateUI } from '@/i18n';
+
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
@@ -342,8 +344,8 @@ export function useRecordingStop(
             shouldDetectSummaryLanguage = !(await applyPinnedSummaryLanguageToMeeting(meetingId));
           } catch (error) {
             console.warn('Failed to apply pinned summary language preference for new meeting:', error);
-            toast.warning('Could not apply default summary language', {
-              description: 'The meeting was saved, but the default summary language was not applied.',
+            toast.warning(translateUI("Could not apply default summary language"), {
+              description: translateUI("The meeting was saved, but the default summary language was not applied."),
             });
           }
 
@@ -355,8 +357,8 @@ export function useRecordingStop(
               );
             } catch (error) {
               console.warn('Failed to detect summary language for new meeting:', error);
-              toast.warning('Could not detect summary language', {
-                description: 'The meeting was saved, but Auto could not detect the summary language.',
+              toast.warning(translateUI("Could not detect summary language"), {
+                description: translateUI("The meeting was saved, but Auto could not detect the summary language."),
               });
             }
           }
@@ -395,10 +397,10 @@ export function useRecordingStop(
           setStatus(RecordingStatus.COMPLETED);
 
           // Show success toast with navigation option
-          toast.success('Recording saved successfully!', {
+          toast.success(translateUI("Recording saved successfully!"), {
             description: `${freshTranscripts.length} transcript segments saved.`,
             action: {
-              label: 'View Meeting',
+              label: translateUI("View Meeting"),
               onClick: () => {
                 router.push(`/meeting-details?id=${meetingId}`);
                 Analytics.trackButtonClick('view_meeting_from_toast', 'recording_complete');
@@ -501,10 +503,10 @@ export function useRecordingStop(
       console.error('Error in handleRecordingStop:', error);
       setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Unknown error');
       if (stoppedMetadata?.completion_token) {
-        toast.error('Recording save needs attention', {
-          description: error instanceof Error ? error.message : 'The local save did not finish.',
+        toast.error(translateUI("Recording save needs attention"), {
+          description: error instanceof Error ? error.message : translateUI("The local save did not finish."),
           action: {
-            label: 'Retry save',
+            label: translateUI("Retry save"),
             onClick: () => {
               recordingCompletionMailbox.requestRetry();
             },
@@ -574,17 +576,17 @@ export function useRecordingStop(
           recordingCompletionMailbox.complete(pending.completionToken);
           setStatus(RecordingStatus.IDLE);
           setIsRecordingDisabled(false);
-          toast.success('Interrupted save was already complete', {
-            description: 'Mityu restored the recording state and unlocked new recordings.',
+          toast.success(translateUI("Interrupted save was already complete"), {
+            description: translateUI("HuiTrace restored the recording state and unlocked new recordings."),
           });
           return;
         }
 
         setStatus(RecordingStatus.ERROR, 'A previous recording save was interrupted.');
-        toast.error('Previous recording needs recovery', {
-          description: 'Restart Mityu to use transcript recovery, or explicitly unlock recording now. Existing recovery data is not deleted.',
+        toast.error(translateUI("Previous recording needs recovery"), {
+          description: translateUI("Restart HuiTrace to use transcript recovery, or explicitly unlock recording now. Existing recovery data is not deleted."),
           action: {
-            label: 'Review & unlock',
+            label: translateUI("Review & unlock"),
             onClick: () => {
               void (async () => {
                 try {
@@ -594,11 +596,11 @@ export function useRecordingStop(
                   recordingCompletionMailbox.complete(pending.completionToken);
                   setStatus(RecordingStatus.IDLE);
                   setIsRecordingDisabled(false);
-                  toast.success('Recording unlocked', {
-                    description: 'Review transcript recovery and the recordings folder before cleanup.',
+                  toast.success(translateUI("Recording unlocked"), {
+                    description: translateUI("Review transcript recovery and the recordings folder before cleanup."),
                   });
                 } catch (error) {
-                  toast.error('Recording remains locked', {
+                  toast.error(translateUI("Recording remains locked"), {
                     description: error instanceof Error ? error.message : String(error),
                   });
                 }
@@ -610,10 +612,10 @@ export function useRecordingStop(
       } catch (error) {
         recordingCompletionMailbox.resetRecoveryReconciliation();
         console.error('Failed to reconcile interrupted recording post-processing:', error);
-        toast.error('Could not inspect interrupted recording state', {
-          description: 'Restart Mityu before starting another recording.',
+        toast.error(translateUI("Could not inspect interrupted recording state"), {
+          description: translateUI("Restart HuiTrace before starting another recording."),
           action: {
-            label: 'Retry check',
+            label: translateUI("Retry check"),
             onClick: () => {
               if (recordingCompletionMailbox.beginRecoveryReconciliation()) {
                 void reconcileInterruptedRecording();

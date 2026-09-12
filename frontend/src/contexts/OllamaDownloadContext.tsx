@@ -3,6 +3,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 /**
  * Ollama download state synchronized with backend
@@ -34,6 +37,7 @@ export const useOllamaDownload = () => {
 };
 
 export function OllamaDownloadProvider({ children }: { children: React.ReactNode }) {
+  useUiTranslation();
   const [downloadProgress, setDownloadProgress] = useState<Map<string, number>>(new Map());
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
 
@@ -79,7 +83,7 @@ export function OllamaDownloadProvider({ children }: { children: React.ReactNode
             console.log(`✅ [OllamaDownloadContext] Download complete for ${modelName}`);
 
             toast.success(`Model ${modelName} downloaded!`, {
-              description: 'Model is now ready to use',
+              get description() { return translateUI("Model is now ready to use"); },
               duration: 4000
             });
 

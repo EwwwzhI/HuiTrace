@@ -4,6 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AlertTriangle, Info, Loader2, Plus, X } from 'lucide-react';
 import { configService, type RedactionConfig } from '@/services/configService';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 /**
  * Redaction settings card content (BACKLOG C6 follow-up).
@@ -13,6 +17,7 @@ import { configService, type RedactionConfig } from '@/services/configService';
  * saves are immediate with optimistic updates, mirroring AnalyticsConsentSwitch.
  */
 export default function RedactionSettings() {
+  useUiTranslation();
   const [config, setConfig] = useState<RedactionConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -105,28 +110,21 @@ export default function RedactionSettings() {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-foreground mb-2">Sensitive Data Redaction</h3>
-        <p className="text-sm text-muted-foreground mb-4">
-          Off by default. When enabled, sensitive content is scrubbed from new transcripts on this
-          device before it is stored or summarized. Settings apply to this workspace and are stored
-          locally.
-        </p>
+        <h3 className="text-base font-semibold text-foreground mb-2">{translateUI("Sensitive Data Redaction")}</h3>
+        <p className="text-sm text-muted-foreground mb-4"> {translateUI("Off by default. When enabled, sensitive content is scrubbed from new transcripts on this device before it is stored or summarized. Settings apply to this workspace and are stored locally.")} </p>
       </div>
 
       {isLoading && (
         <div className="flex items-center gap-2 p-3 bg-muted rounded-lg border border-border">
           <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Loading redaction settings...</span>
+          <span className="text-sm text-muted-foreground">{translateUI("Loading redaction settings...")}</span>
         </div>
       )}
 
       {!isLoading && (loadFailed || !config) && (
-        <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/25">
-          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            Redaction settings could not be loaded. Your other preferences are unaffected — close
-            and reopen Settings to try again.
-          </p>
+        <div className="flex items-start gap-2 p-3 bg-warning/10 dark:bg-warning/10 rounded-lg border border-warning/30 dark:border-warning/25">
+          <AlertTriangle className="w-4 h-4 text-warning dark:text-warning mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-warning dark:text-warning"> {translateUI("Redaction settings could not be loaded. Your other preferences are unaffected — close and reopen Settings to try again.")} </p>
         </div>
       )}
 
@@ -134,11 +132,11 @@ export default function RedactionSettings() {
         <>
           <div className="flex items-center justify-between p-3 bg-muted rounded-lg border border-border">
             <div>
-              <h4 className="font-semibold text-foreground">Redact sensitive content</h4>
+              <h4 className="font-semibold text-foreground">{translateUI("Redact sensitive content")}</h4>
               <p className="text-sm text-muted-foreground">
                 {isSaving
-                  ? 'Updating...'
-                  : 'Scrub sensitive data from new transcripts before they are saved or summarized'}
+                  ? translateUI("Updating...")
+                  : translateUI("Scrub sensitive data from new transcripts before they are saved or summarized")}
               </p>
             </div>
             <div className="flex items-center gap-2 ml-4">
@@ -157,11 +155,8 @@ export default function RedactionSettings() {
             }`}
           >
             <div>
-              <h4 className="font-semibold text-foreground">Built-in PII patterns</h4>
-              <p className="text-sm text-muted-foreground">
-                Replaces emails with [EMAIL], phone numbers with [PHONE], credit card numbers with
-                [CARD], IBANs with [IBAN], and Turkish ID numbers (TC Kimlik No) with [ID]
-              </p>
+              <h4 className="font-semibold text-foreground">{translateUI("Built-in PII patterns")}</h4>
+              <p className="text-sm text-muted-foreground"> {translateUI("Replaces emails with [EMAIL], phone numbers with [PHONE], credit card numbers with [CARD], IBANs with [IBAN], and Turkish ID numbers (TC Kimlik No) with [ID]")} </p>
             </div>
             <div className="flex items-center gap-2 ml-4">
               <Switch
@@ -177,11 +172,8 @@ export default function RedactionSettings() {
               !isEnabled ? 'opacity-50' : ''
             }`}
           >
-            <h4 className="font-semibold text-foreground">Custom terms</h4>
-            <p className="text-sm text-muted-foreground mb-3">
-              Words or phrases to replace with [REDACTED], matched case-insensitively (for example
-              project codenames or client names)
-            </p>
+            <h4 className="font-semibold text-foreground">{translateUI("Custom terms")}</h4>
+            <p className="text-sm text-muted-foreground mb-3"> {translateUI("Words or phrases to replace with [REDACTED], matched case-insensitively (for example project codenames or client names)")} </p>
 
             {config.custom_terms.length > 0 ? (
               <div className="flex flex-wrap gap-2 mb-3">
@@ -197,7 +189,7 @@ export default function RedactionSettings() {
                       disabled={subControlsDisabled}
                       className="p-0.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
                       aria-label={`Remove custom term ${term}`}
-                      title="Remove term"
+                      title={translateUI("Remove term")}
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -205,7 +197,7 @@ export default function RedactionSettings() {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground mb-3">No custom terms added yet</p>
+              <p className="text-xs text-muted-foreground mb-3">{translateUI("No custom terms added yet")}</p>
             )}
 
             <div className="flex items-center gap-2">
@@ -218,7 +210,7 @@ export default function RedactionSettings() {
                     handleAddTerm();
                   }
                 }}
-                placeholder="Add a term to redact..."
+                placeholder={translateUI("Add a term to redact...")}
                 disabled={subControlsDisabled}
                 className="h-8 bg-card text-sm"
               />
@@ -230,7 +222,7 @@ export default function RedactionSettings() {
                 className="flex-shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Add</span>
+                <span>{translateUI("Add")}</span>
               </Button>
             </div>
           </div>
@@ -238,14 +230,8 @@ export default function RedactionSettings() {
           <div className="flex items-start gap-2 p-2 bg-accent rounded border border-primary/20">
             <Info className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
             <div className="text-xs text-primary">
-              <p className="mb-1">
-                Redaction applies on this device before saving and before any summary provider
-                (including cloud providers) sees the text.
-              </p>
-              <p>
-                Existing saved transcripts are not changed retroactively — only new transcripts are
-                redacted.
-              </p>
+              <p className="mb-1"> {translateUI("Redaction applies on this device before saving and before any summary provider (including cloud providers) sees the text.")} </p>
+              <p> {translateUI("Existing saved transcripts are not changed retroactively — only new transcripts are redacted.")} </p>
             </div>
           </div>
         </>

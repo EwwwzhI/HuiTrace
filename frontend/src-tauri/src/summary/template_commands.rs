@@ -14,6 +14,9 @@ pub struct TemplateInfo {
 
     /// Brief description of the template's purpose
     pub description: String,
+
+    /// Where the template was loaded from: builtin, bundled, or custom.
+    pub source: String,
 }
 
 /// Detailed template structure for preview/debugging
@@ -38,7 +41,7 @@ pub struct TemplateDetails {
 /// Templates are automatically discovered - no code changes needed to add new templates.
 ///
 /// # Returns
-/// Vector of TemplateInfo with id, name, and description for each template
+/// Vector of TemplateInfo with id, name, description, and source for each template
 #[tauri::command]
 pub async fn api_list_templates<R: Runtime>(
     _app: tauri::AppHandle<R>,
@@ -49,10 +52,11 @@ pub async fn api_list_templates<R: Runtime>(
 
     let template_infos: Vec<TemplateInfo> = templates
         .into_iter()
-        .map(|(id, name, description)| TemplateInfo {
+        .map(|(id, name, description, source)| TemplateInfo {
             id,
             name,
             description,
+            source,
         })
         .collect();
 

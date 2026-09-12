@@ -1,10 +1,14 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
-import { X, Download, Check, Loader2, ArrowBigDownDash } from 'lucide-react';
+import { X, Check, ArrowBigDownDash } from 'lucide-react';
 import { getDownloadTotalMb } from '@/lib/onboarding-summary-model';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface DownloadProgress {
   modelName: string;
@@ -55,6 +59,7 @@ function DownloadToastContent({
   download: DownloadProgress;
   onDismiss?: () => void;
 }) {
+  useUiTranslation();
   const isComplete = download.status === 'completed';
   const hasError = download.status === 'error';
   const isCancelled = download.status === 'cancelled';
@@ -64,12 +69,12 @@ function DownloadToastContent({
     <div className="flex items-center gap-3 w-full max-w-sm bg-card rounded-lg shadow-lg border border-border p-3 relative">
 
       {/* Icon */}
-      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isComplete ? 'bg-green-100 dark:bg-green-500/15' : hasError ? 'bg-red-100 dark:bg-red-500/15' : isCancelled ? 'bg-muted' : 'bg-muted'
+      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isComplete ? 'bg-success/10 dark:bg-success/15' : hasError ? 'bg-destructive/10 dark:bg-destructive/15' : isCancelled ? 'bg-muted' : 'bg-muted'
         }`}>
         {isComplete ? (
-          <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+          <Check className="w-4 h-4 text-success dark:text-success" />
         ) : hasError ? (
-          <X className="w-4 h-4 text-red-600 dark:text-red-400" />
+          <X className="w-4 h-4 text-destructive dark:text-destructive" />
         ) : isCancelled ? (
           <X className="w-4 h-4 text-muted-foreground" />
         ) : (
@@ -86,11 +91,11 @@ function DownloadToastContent({
         </div>
 
         {hasError ? (
-          <p className="text-xs text-red-600 dark:text-red-400">{download.error || 'Download failed'}</p>
+          <p className="text-xs text-destructive dark:text-destructive">{download.error || translateUI("Download failed")}</p>
         ) : isComplete ? (
-          <p className="text-xs text-green-600 dark:text-green-400">Download complete</p>
+          <p className="text-xs text-success dark:text-success">{translateUI("Download complete")}</p>
         ) : isCancelled ? (
-          <p className="text-xs text-muted-foreground">Download cancelled</p>
+          <p className="text-xs text-muted-foreground">{translateUI("Download cancelled")}</p>
         ) : (
           <>
             {/* Progress bar */}
@@ -353,6 +358,7 @@ export function useDownloadProgressToast() {
 
 // Component to initialize download toast listeners at app level
 export function DownloadProgressToastProvider() {
+  useUiTranslation();
   useDownloadProgressToast();
   return null;
 }

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Download, X, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Download, AlertCircle, Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -9,10 +9,14 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Button } from './ui/button';
-import { updateService, UpdateInfo, UpdateProgress } from '@/services/updateService';
+import { UpdateInfo, UpdateProgress } from '@/services/updateService';
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface UpdateDialogProps {
   open: boolean;
@@ -21,6 +25,7 @@ interface UpdateDialogProps {
 }
 
 export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogProps) {
+  useUiTranslation();
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,11 +43,11 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
         if (updateResult?.available) {
           setUpdate(updateResult);
         } else {
-          setError('Update no longer available');
+          setError(translateUI("Update no longer available"));
         }
       }).catch((err) => {
         console.error('Failed to get update object:', err);
-        setError('Failed to prepare update: ' + (err.message || 'Unknown error'));
+        setError(translateUI("Failed to prepare update: ") + (err.message || translateUI("Unknown error")));
       });
     } else {
       // Reset state when dialog closes
@@ -63,11 +68,11 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           updateToUse = updateResult;
           setUpdate(updateResult);
         } else {
-          setError('Update not available');
+          setError(translateUI("Update not available"));
           return;
         }
       } catch (err: any) {
-        setError('Failed to get update: ' + (err.message || 'Unknown error'));
+        setError(translateUI("Failed to get update: ") + (err.message || translateUI("Unknown error")));
         return;
       }
     }
@@ -123,7 +128,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       });
 
       console.log('[UpdateDialog] Update installed successfully');
-      toast.success('Update installed successfully. The app will restart...');
+      toast.success(translateUI("Update installed successfully. The app will restart..."));
 
       // Mark download as complete before closing
       setIsDownloading(false);
@@ -135,9 +140,9 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       await relaunch();
     } catch (err: any) {
       console.error('Update failed:', err);
-      setError(err.message || 'Failed to download or install update');
+      setError(err.message || translateUI("Failed to download or install update"));
       setIsDownloading(false);
-      toast.error('Update failed: ' + (err.message || 'Unknown error'));
+      toast.error(translateUI("Update failed: ") + (err.message || translateUI("Unknown error")));
     }
   };
 
@@ -189,26 +194,20 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
           <DialogTitle className="flex items-center gap-2">
             {isDownloading ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                Downloading Update
-              </>
+                <Loader2 className="h-5 w-5 animate-spin text-primary" /> {translateUI("Downloading Update")} </>
             ) : error ? (
               <>
-                <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
-                Update Error
-              </>
+                <AlertCircle className="h-5 w-5 text-destructive dark:text-destructive" /> {translateUI("Update Error")} </>
             ) : (
               <>
-                <Download className="h-5 w-5 text-primary" />
-                Update Available
-              </>
+                <Download className="h-5 w-5 text-primary" /> {translateUI("Update Available")} </>
             )}
           </DialogTitle>
           <DialogDescription>
             {isDownloading
-              ? 'Downloading the latest version...'
+              ? translateUI("Downloading the latest version...")
               : error
-              ? 'An error occurred while updating'
+              ? translateUI("An error occurred while updating")
               : `A new version (${updateInfo.version}) is available`}
           </DialogDescription>
         </DialogHeader>
@@ -218,16 +217,16 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
             <>
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Current Version:</span>
+                  <span className="text-muted-foreground">{translateUI("Current Version:")}</span>
                   <span className="font-medium">{updateInfo.currentVersion}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">New Version:</span>
+                  <span className="text-muted-foreground">{translateUI("New Version:")}</span>
                   <span className="font-medium text-primary">{updateInfo.version}</span>
                 </div>
                 {updateInfo.date && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Release Date:</span>
+                    <span className="text-muted-foreground">{translateUI("Release Date:")}</span>
                     <span className="font-medium">{formatDate(updateInfo.date)}</span>
                   </div>
                 )}
@@ -253,7 +252,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
                   />
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                  <span>{Math.round(progress.percentage)}% complete</span>
+                  <span>{Math.round(progress.percentage)}{translateUI("% complete")}</span>
                   {progress.total > 0 && (
                     <span>
                       {formatBytes(progress.downloaded)} / {formatBytes(progress.total)}
@@ -261,15 +260,13 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
                   )}
                 </div>
               </div>
-              <p className="text-sm text-muted-foreground text-center">
-                The app will restart automatically after installation
-              </p>
+              <p className="text-sm text-muted-foreground text-center"> {translateUI("The app will restart automatically after installation")} </p>
             </div>
           )}
 
           {error && (
-            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-lg p-3">
-              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            <div className="bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-lg p-3">
+              <p className="text-sm text-destructive dark:text-destructive">{error}</p>
             </div>
           )}
         </div>
@@ -277,19 +274,13 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
         <DialogFooter>
           {!isDownloading && !error && (
             <>
-              <Button variant="outline" onClick={() => handleOpenChange(false)}>
-                Later
-              </Button>
+              <Button variant="outline" onClick={() => handleOpenChange(false)}> {translateUI("Later")} </Button>
               <Button onClick={handleDownloadAndInstall} className="bg-primary hover:bg-primary/90">
-                <Download className="h-4 w-4 mr-2" />
-                Download & Install
-              </Button>
+                <Download className="h-4 w-4 mr-2" /> {translateUI("Download & Install")} </Button>
             </>
           )}
           {error && (
-            <Button variant="outline" onClick={() => handleOpenChange(false)}>
-              Close
-            </Button>
+            <Button variant="outline" onClick={() => handleOpenChange(false)}> {translateUI("Close")} </Button>
           )}
         </DialogFooter>
       </DialogContent>

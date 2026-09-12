@@ -2,6 +2,53 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body { font-family: var(--font-dm-sans), 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  h1, .font-heading { font-family: var(--font-heading); }
+  button, a, input, select, textarea, [role='tab'] { -webkit-tap-highlight-color: transparent; }
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--ring)); outline-offset: 3px;
+  }
+  ::selection { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+}
+
+/* Legacy layout hooks retained for compatibility; the new shell uses clean surfaces. */
+.ink-paper { background-image: none; }
+.ink-home { container: home / inline-size; }
+.ink-home-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+@container home (min-width: 960px) {
+  .ink-home-columns { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+}
+.ink-settings { container: settings / inline-size; }
+.ink-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+.ink-settings-panel { min-width: 0; margin-top: 0; }
+@container settings (min-width: 900px) {
+  .ink-settings-grid { grid-template-columns: 168px minmax(0, 1fr); align-items: start; }
+  .ink-settings-nav { flex-direction: column; border-bottom: 0; align-items: stretch; gap: .25rem; position: sticky; top: 0; }
+  .ink-settings-panel { grid-column: 2; grid-row: 1; }
+}
+.ink-document { max-width: 860px; margin-inline: auto; padding: 2rem; font-size: 16px; line-height: 1.75; }
+.ink-summary-collapse { display: none; }
+@container detail (min-width: 820px) { .ink-summary-collapse { display: inline-flex; } }
+.bn-container[data-color-scheme], .bn-container {
+  --bn-colors-editor-background: hsl(var(--card));
+  --bn-colors-editor-text: hsl(var(--foreground));
+  --bn-colors-menu-background: hsl(var(--popover));
+  --bn-colors-menu-text: hsl(var(--popover-foreground));
+  --bn-colors-tooltip-background: hsl(var(--popover));
+  --bn-colors-tooltip-text: hsl(var(--popover-foreground));
+  --bn-colors-hovered-background: hsl(var(--accent));
+  --bn-colors-hovered-text: hsl(var(--accent-foreground));
+  --bn-colors-selected-background: hsl(var(--accent));
+  --bn-colors-selected-text: hsl(var(--accent-foreground));
+  --bn-colors-border: hsl(var(--border));
+  --bn-font-family: var(--font-dm-sans), 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.bn-editor { font-size: 16px; line-height: 1.75; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
 @keyframes vibrate {
   0% {
     transform: translate(0);
@@ -77,67 +124,86 @@
 }
 
 @layer base {
-  /*
-   * Design tokens — anchored on the bluedev master brand (BRAND-DNA):
-   *   brand-500 #1E56FF = hsl(225 100% 56%)   brand-400 #4B78FF = hsl(225 100% 65%)
-   *   ink #0F172A = hsl(222 47% 11%)          hairline #E4E4E7 = hsl(240 5% 90%)
-   * Every component should consume THESE semantic tokens (bg-primary, text-muted-
-   * foreground, border-border, …) rather than hardcoding bg-white / text-gray-*,
-   * so the whole app inherits the brand and responds to light/dark automatically.
-   */
+  /* HuiTrace desktop: cool, quiet surfaces with a restrained mint accent. */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --background: 210 25% 98.4%;
+    --foreground: 222 22% 14%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 222 22% 14%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 225 100% 56%;
+    --popover-foreground: 222 22% 14%;
+    --primary: 222 20% 13%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
-    --accent: 225 100% 96%;
-    --accent-foreground: 225 70% 40%;
-    --destructive: 0 84% 60%;
+    --secondary: 210 20% 95%;
+    --secondary-foreground: 222 18% 20%;
+    --muted: 210 18% 95%;
+    --muted-foreground: 215 9% 46%;
+    --accent: 181 28% 92%;
+    --accent-foreground: 198 25% 20%;
+    --selected: 178 28% 89%;
+    --selected-foreground: 198 25% 18%;
+    --selected-border: 178 20% 73%;
+    --destructive: 358 58% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 240 5% 90%;
-    --input: 240 5% 90%;
-    --ring: 225 100% 56%;
-    --radius: 0.625rem;
-    --chart-1: 225 100% 56%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 262 60% 55%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 340 75% 55%;
+    --border: 214 18% 88%;
+    --input: 214 16% 82%;
+    --ring: 190 38% 46%;
+    --sidebar: 185 36% 95.5%;
+    --seal: 5.59 54.13% 42.75%;
+    --seal-foreground: 0.00 0.00% 100.00%;
+    --success: 144.00 29.03% 30.39%;
+    --success-foreground: 0.00 0.00% 100.00%;
+    --warning: 35.05 61.21% 32.35%;
+    --warning-foreground: 0.00 0.00% 100.00%;
+    --reference: 90.00 17.86% 89.02%;
+    --reference-foreground: 157.89 18.81% 19.80%;
+    --chart-1: 157.89 18.81% 19.80%;
+    --chart-2: 5.59 54.13% 42.75%;
+    --chart-3: 43.26 22.05% 38.24%;
+    --chart-4: 171.22 22.16% 36.27%;
+    --chart-5: 273.60 10.82% 45.29%;
+    --radius: 0.875rem;
+    --font-heading: var(--font-dm-sans), 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --motion-fast: 160ms;
+    --motion-overlay: 200ms;
   }
-
   .dark {
-    --background: 222 47% 7%;
-    --foreground: 210 40% 98%;
-    --card: 222 40% 11%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 40% 11%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 225 100% 65%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 222 30% 18%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 222 30% 18%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 222 40% 20%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62% 45%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 222 30% 20%;
-    --input: 222 30% 22%;
-    --ring: 225 100% 65%;
-    --chart-1: 225 100% 65%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 262 60% 60%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --background: 222 18% 10%;
+    --foreground: 210 20% 94%;
+    --card: 222 16% 13%;
+    --card-foreground: 210 20% 94%;
+    --popover: 222 16% 14%;
+    --popover-foreground: 210 20% 94%;
+    --primary: 210 20% 96%;
+    --primary-foreground: 222 20% 12%;
+    --secondary: 220 14% 17%;
+    --secondary-foreground: 210 18% 92%;
+    --muted: 220 14% 17%;
+    --muted-foreground: 214 10% 65%;
+    --accent: 184 17% 20%;
+    --accent-foreground: 176 24% 86%;
+    --selected: 184 18% 22%;
+    --selected-foreground: 176 24% 88%;
+    --selected-border: 181 18% 36%;
+    --destructive: 3 65% 67%;
+    --destructive-foreground: 358 48% 13%;
+    --border: 218 13% 22%;
+    --input: 218 12% 30%;
+    --ring: 181 28% 58%;
+    --sidebar: 198 18% 9%;
+    --seal: 11.56 66.06% 67.65%;
+    --seal-foreground: 13.85 43.33% 11.76%;
+    --success: 135.38 24.22% 68.43%;
+    --success-foreground: 142.11 32.20% 11.57%;
+    --warning: 37.73 55.43% 65.69%;
+    --warning-foreground: 36.43 46.67% 11.76%;
+    --reference: 145.71 12.73% 21.57%;
+    --reference-foreground: 105.00 16.00% 80.39%;
+    --chart-1: 105.00 16.00% 80.39%;
+    --chart-2: 11.56 66.06% 67.65%;
+    --chart-3: 42.41 35.37% 67.84%;
+    --chart-4: 165.00 25.00% 65.49%;
+    --chart-5: 268.00 20.55% 71.37%;
   }
 }
 
@@ -151,6 +217,8 @@
     @apply bg-background text-foreground;
     overflow: hidden;
     height: 100%;
+    letter-spacing: -0.006em;
+    text-rendering: optimizeLegibility;
   }
 
   /* Make the window draggable */
@@ -174,18 +242,18 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #d1d5db;
+    background: hsl(var(--input));
     border-radius: 3px;
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #9ca3af;
+    background: hsl(var(--muted-foreground));
   }
 
   /* Firefox scrollbar */
   .custom-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: #d1d5db transparent;
+    scrollbar-color: hsl(var(--input)) transparent;
   }
 
   /* BlockNote Editor - Override fixed dimensions for responsive layout */

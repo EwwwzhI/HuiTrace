@@ -8,6 +8,10 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSummaryModelSizeLabel, getSummaryModelSizeMb } from '@/lib/onboarding-summary-model';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 
@@ -23,6 +27,7 @@ interface DownloadState {
 }
 
 export function DownloadProgressStep() {
+  useUiTranslation();
   const {
     goNext,
     selectedSummaryModel,
@@ -91,8 +96,8 @@ export function DownloadProgressStep() {
         error: error instanceof Error ? error.message : 'Retry failed',
       }));
 
-      toast.error('Download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error(translateUI("Download retry failed"), {
+        get description() { return translateUI("Please check your connection and try again."); },
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -139,8 +144,8 @@ export function DownloadProgressStep() {
         error: error instanceof Error ? error.message : 'Retry failed',
       }));
 
-      toast.error('Summary model download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error(translateUI("Summary model download retry failed"), {
+        get description() { return translateUI("Please check your connection and try again."); },
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -343,8 +348,8 @@ export function DownloadProgressStep() {
           progress: 100,
         }));
       } else if (!actuallyAvailable && parakeetState.status === 'error') {
-        toast.error('Transcription engine required', {
-          description: 'Please retry the download before continuing.',
+        toast.error(translateUI("Transcription engine required"), {
+          get description() { return translateUI("Please retry the download before continuing."); },
         });
         return;
       }
@@ -358,8 +363,8 @@ export function DownloadProgressStep() {
 
     // Show toast if downloads still in progress
     if (!downloadsComplete) {
-      toast.info('Downloads will continue in the background', {
-        description: 'You can start using the app. Recording will be available once speech recognition is ready.',
+      toast.info(translateUI("Downloads will continue in the background"), {
+        get description() { return translateUI("You can start using the app. Recording will be available once speech recognition is ready."); },
         duration: 5000,
       });
     }
@@ -379,8 +384,8 @@ export function DownloadProgressStep() {
         window.location.reload();
       } catch (error) {
         console.error('Failed to complete onboarding:', error);
-        toast.error('Failed to complete setup', {
-          description: 'Please try again.',
+        toast.error(translateUI("Failed to complete setup"), {
+          get description() { return translateUI("Please try again."); },
         });
         setIsCompleting(false);
       }
@@ -407,18 +412,18 @@ export function DownloadProgressStep() {
         </div>
         <div>
           {state.status === 'waiting' && (
-            <span className="text-sm text-muted-foreground">Waiting...</span>
+            <span className="text-sm text-muted-foreground">{translateUI("Waiting...")}</span>
           )}
           {state.status === 'downloading' && (
             <Loader2 className="w-5 h-5 text-foreground animate-spin" />
           )}
           {state.status === 'completed' && (
-            <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
-              <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+            <div className="w-6 h-6 rounded-full bg-success/10 flex items-center justify-center">
+              <Check className="w-4 h-4 text-success dark:text-success" />
             </div>
           )}
           {state.status === 'error' && (
-            <span className="text-sm text-red-500">Failed</span>
+            <span className="text-sm text-destructive">{translateUI("Failed")}</span>
           )}
         </div>
       </div>
@@ -428,7 +433,7 @@ export function DownloadProgressStep() {
         <div className="space-y-2">
           <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-gray-700 to-gray-900 rounded-full transition-all duration-300"
+              className="h-full bg-primary rounded-full transition-all duration-300"
               style={{ width: `${state.progress}%` }}
             />
           </div>
@@ -451,9 +456,9 @@ export function DownloadProgressStep() {
       )}
 
       {state.status === 'error' && state.error && (
-        <div className="mt-2 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-md">
-          <p className="text-sm text-red-600 dark:text-red-400 font-medium">Download Error</p>
-          <p className="text-xs text-red-500 mt-1">{state.error}</p>
+        <div className="mt-2 p-3 bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-md">
+          <p className="text-sm text-destructive dark:text-destructive font-medium">{translateUI("Download Error")}</p>
+          <p className="text-xs text-destructive mt-1">{state.error}</p>
           {(title === 'Transcription Engine' || title === 'Summary Engine') && (
             <button
               onClick={title === 'Transcription Engine' ? handleRetryDownload : handleRetrySummaryDownload}
@@ -462,9 +467,7 @@ export function DownloadProgressStep() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                       d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Try Again
-            </button>
+              </svg> {translateUI("Try Again")} </button>
           )}
         </div>
       )}
@@ -473,8 +476,8 @@ export function DownloadProgressStep() {
 
   return (
     <OnboardingContainer
-      title="Getting things ready"
-      description="You can start using Mityu after downloading the Transcription Engine."
+      title={translateUI("Getting things ready")}
+      description="You can start using HuiTrace after downloading the Transcription Engine."
       step={3}
       totalSteps={isMac ? 4 : 3}
     >
@@ -510,10 +513,8 @@ export function DownloadProgressStep() {
               <div className="flex items-start gap-3">
                 <Download className="w-5 h-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium">You can continue while this finishes</p>
-                  <p className="text-foreground mt-1">
-                    Download will continue in the background.
-                  </p>
+                  <p className="font-medium">{translateUI("You can continue while this finishes")}</p>
+                  <p className="text-foreground mt-1"> {translateUI("Download will continue in the background.")} </p>
                 </div>
               </div>
             </motion.div>
@@ -530,7 +531,7 @@ export function DownloadProgressStep() {
             {(isCompleting || !parakeetDownloaded) ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
-              'Continue'
+              translateUI("Continue")
             )}
           </Button>
         </div>

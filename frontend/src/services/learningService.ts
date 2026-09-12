@@ -109,12 +109,12 @@ export interface BurdenStats {
   reviewed: number;
   /** How many the user took exactly as written. */
   accepted_as_written: number;
-  /** Mean distance from what Mityu wrote to what the user kept, 0..1. */
+  /** Mean distance from what HuiTrace wrote to what the user kept, 0..1. */
   mean_burden: number;
 }
 
 /**
- * How much of Mityu's writing the user has had to change, and whether it moved.
+ * How much of HuiTrace's writing the user has had to change, and whether it moved.
  *
  * **A correlation, never a result.** The number measures what the USER did: a
  * person reviewing less carefully moves it the same direction a working rule
@@ -199,7 +199,7 @@ class LearningService {
     return invoke<boolean>('api_delete_learned_rule', { ruleId });
   }
 
-  /** The corrections behind a rule — "why does Mityu think this?" */
+  /** The corrections behind a rule — "why does HuiTrace think this?" */
   async getRuleEvidence(ruleId: string): Promise<RuleEvidenceResponse> {
     return invoke<RuleEvidenceResponse>('api_get_rule_evidence', { ruleId });
   }

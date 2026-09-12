@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
@@ -9,8 +9,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 export function SetupOverviewStep() {
+  useUiTranslation();
   const { goNext } = useOnboarding();
   const [isMac, setIsMac] = useState(false);
 
@@ -30,12 +34,12 @@ export function SetupOverviewStep() {
     {
       number: 1,
       type: 'transcription',
-      title: 'Download Transcription Engine',
+      get title() { return translateUI("Download Transcription Engine"); },
     },
     {
       number: 2,
       type: 'summarization',
-      title: 'Download Summarization Engine',
+      get title() { return translateUI("Download Summarization Engine"); },
     },
   ];
 
@@ -45,8 +49,8 @@ export function SetupOverviewStep() {
 
   return (
     <OnboardingContainer
-      title="Setup Overview"
-      description="Mityu requires that you download the Transcription & Summarization AI models for the software to work."
+      title={translateUI("Setup Overview")}
+      description="HuiTrace requires that you download the Transcription & Summarization AI models for the software to work."
       step={2}
       totalSteps={isMac ? 4 : 3}
     >
@@ -61,8 +65,7 @@ export function SetupOverviewStep() {
                   className={`flex items-start gap-4 p-1`}
                 >
                   <div className="flex-1 ml-1">
-                    <h3 className="font-medium text-foreground flex items-center gap-2">
-                        Step {step.number} :  {step.title}
+                    <h3 className="font-medium text-foreground flex items-center gap-2"> {translateUI("Step")} {step.number} :  {step.title}
 
                         {step.type === "summarization" && (
                             <TooltipProvider>
@@ -72,10 +75,7 @@ export function SetupOverviewStep() {
                                     <Info className="w-4 h-4" />
                                 </button>
                                 </TooltipTrigger>
-                                <TooltipContent className="max-w-xs text-sm">
-                                You can also select external AI providers like OpenAI, Claude, or
-                                Ollama for summary generation in settings.
-                                </TooltipContent>
+                                <TooltipContent className="max-w-xs text-sm"> {translateUI("You can also select external AI providers like OpenAI, Claude, or Ollama for summary generation in settings.")} </TooltipContent>
                             </Tooltip>
                             </TooltipProvider>
                         )}
@@ -93,18 +93,14 @@ export function SetupOverviewStep() {
           <Button
             onClick={handleContinue}
             className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
-            Let's Go
-          </Button>
+          > {translateUI("Let's Go")} </Button>
           <div className="text-center">
             <a
               href="https://github.com/aydogandagidir/mityu/issues"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-muted-foreground hover:underline"
-            >
-              Report issues on GitHub
-            </a>
+            > {translateUI("Report issues on GitHub")} </a>
           </div>
         </div>
       </div>

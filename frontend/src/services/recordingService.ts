@@ -28,6 +28,13 @@ export interface RecordingStoppedPayload {
  * Singleton service for managing recording lifecycle operations
  */
 export class RecordingService {
+  async discardRecording(): Promise<boolean> {
+    return invoke<boolean>('discard_recording');
+  }
+
+  async onRecordingDiscarded(callback: () => void): Promise<UnlistenFn> {
+    return listen('recording-discarded', callback);
+  }
   /**
    * Request a short-lived, single-use native authorization after the consent
    * UI gate has resolved positively. The returned bearer ticket must be passed

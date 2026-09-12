@@ -10,6 +10,9 @@ import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { ModalType } from '@/hooks/useModalState';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { useMemo } from 'react';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 /**
  * TranscriptPanel Component
@@ -30,6 +33,7 @@ export function TranscriptPanel({
   isStopping,
   showModal
 }: TranscriptPanelProps) {
+  useUiTranslation();
   // Contexts
   const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
@@ -50,7 +54,7 @@ export function TranscriptPanel({
   );
 
   return (
-    <div ref={transcriptContainerRef} className="w-full border-r border-border bg-card flex flex-col overflow-y-auto">
+    <div ref={transcriptContainerRef} className="w-full min-h-0 flex-1 bg-card flex flex-col overflow-y-auto">
       {/* Title area - Sticky header */}
       <div className="sticky top-0 z-10 bg-card p-4 border-border">
         <div className="flex flex-col space-y-3">
@@ -62,12 +66,10 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={copyTranscript}
-                    title="Copy Transcript"
+                    title={translateUI("Copy Transcript")}
                   >
                     <Copy />
-                    <span className='hidden md:inline'>
-                      Copy
-                    </span>
+                    <span className='hidden md:inline'> {translateUI("Copy")} </span>
                   </Button>
                 )}
                 {transcriptModelConfig.provider === "localWhisper" &&
@@ -75,12 +77,10 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={() => showModal('languageSettings')}
-                    title="Language"
+                    title={translateUI("Language")}
                   >
                     <GlobeIcon />
-                    <span className='hidden md:inline'>
-                      Language
-                    </span>
+                    <span className='hidden md:inline'> {translateUI("Language")} </span>
                   </Button>
                 }
               </ButtonGroup>

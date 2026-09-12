@@ -1,9 +1,12 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LockOpen } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { getDbEncryptionStatus } from '@/services/dbService';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 /**
  * EncryptionStatusBanner (ADR-0014 follow-up)
@@ -30,6 +33,7 @@ type EncryptionState = 'unknown' | 'encrypted' | 'unencrypted';
 const RETRY_DELAY_MS = 3000;
 
 export function EncryptionStatusBanner() {
+  useUiTranslation();
   const [state, setState] = useState<EncryptionState>('unknown');
 
   useEffect(() => {
@@ -78,18 +82,12 @@ export function EncryptionStatusBanner() {
     <div className="px-4 pt-4">
       <Alert
         variant="destructive"
-        className="border-amber-400 bg-amber-50"
+        className="border-warning bg-warning/10"
         aria-live="polite"
       >
-        <LockOpen className="h-5 w-5 text-amber-600" />
-        <AlertTitle className="text-amber-900 font-semibold">
-          Local data is currently stored unencrypted
-        </AlertTitle>
-        <AlertDescription className="text-amber-800 mt-1">
-          The encryption key is unavailable, so Mityu saved your local data
-          without at-rest encryption. Mityu will re-encrypt it automatically on
-          the next launch once your OS keychain is available.
-        </AlertDescription>
+        <LockOpen className="h-5 w-5 text-warning" />
+        <AlertTitle className="text-warning font-semibold"> {translateUI("Local data is currently stored unencrypted")} </AlertTitle>
+        <AlertDescription className="text-warning mt-1"> {translateUI("The encryption key is unavailable, so HuiTrace saved your local data without at-rest encryption. HuiTrace will re-encrypt it automatically on the next launch once your OS keychain is available.")} </AlertDescription>
       </Alert>
     </div>
   );

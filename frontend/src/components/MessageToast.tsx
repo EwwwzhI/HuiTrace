@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import { useEffect } from 'react';
 
 interface MessageToastProps {
     message: string;
@@ -19,7 +19,7 @@ export function MessageToast({ message, type, show, setShow }: MessageToastProps
     
     return (
         show && (
-            <span className={`${type === 'success' ? 'text-green-500' : 'text-red-500'}`}>{message}</span>
+            <span className={`${type === 'success' ? 'text-success' : 'text-destructive'}`}>{message}</span>
         )
     );
 }

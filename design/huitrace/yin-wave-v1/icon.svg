@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="icon-circle">
+      <circle cx="512" cy="512" r="456"/>
+    </clipPath>
+
+    <mask id="black-yin" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="black"/>
+      <g transform="rotate(-35 512 512)">
+        <path d="M512 56A456 456 0 0 0 512 968V56Z" fill="white"/>
+        <circle cx="512" cy="284" r="228" fill="white"/>
+        <circle cx="512" cy="740" r="228" fill="black"/>
+      </g>
+    </mask>
+
+    <g id="waveform">
+      <rect x="298" y="442" width="60" height="140" rx="30"/>
+      <rect x="390" y="387" width="60" height="250" rx="30"/>
+      <rect x="482" y="332" width="60" height="360" rx="30"/>
+      <rect x="574" y="387" width="60" height="250" rx="30"/>
+      <rect x="666" y="442" width="60" height="140" rx="30"/>
+    </g>
+  </defs>
+
+  <g clip-path="url(#icon-circle)">
+    <circle cx="512" cy="512" r="456" fill="#f8f6f0"/>
+    <rect width="1024" height="1024" fill="#111318" mask="url(#black-yin)"/>
+
+    <!-- Wider, optically separated bars remain distinct at UI icon sizes. -->
+    <use href="#waveform" fill="#111318"/>
+    <use href="#waveform" fill="#f8f6f0" mask="url(#black-yin)"/>
+  </g>
+
+  <circle cx="512" cy="512" r="456" fill="none" stroke="#090a0c" stroke-width="28"/>
+</svg>

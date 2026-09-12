@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, ReactNode, useRef, useState, createContext } from 'react';
+import { useEffect, ReactNode, useRef, useState, createContext } from 'react';
 import Analytics from '@/lib/analytics';
 import { load } from '@tauri-apps/plugin-store';
 import { getVersion } from '@tauri-apps/api/app';

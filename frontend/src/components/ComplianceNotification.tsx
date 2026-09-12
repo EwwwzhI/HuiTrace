@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { AlertTriangle, CheckCircle, X } from 'lucide-react';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface ComplianceNotificationProps {
   isOpen: boolean;
@@ -17,6 +20,7 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
   onAcknowledge,
   recordingButtonRef,
 }) => {
+  useUiTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 192 }); // Default width
 
@@ -75,10 +79,8 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
         {/* Header with close button */}
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3 text-amber-500 flex-shrink-0" />
-            <h3 className="text-xs font-semibold text-foreground">
-              Recording Notice
-            </h3>
+            <AlertTriangle className="h-3 w-3 text-warning flex-shrink-0" />
+            <h3 className="text-xs font-semibold text-foreground"> {translateUI("Recording Notice")} </h3>
           </div>
           <button
             onClick={handleClose}
@@ -90,13 +92,9 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
 
         {/* Content */}
         <div className="mb-2">
-          <p className="text-xs text-muted-foreground mb-1">
-            Inform participants about recording.
-          </p>
-          <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/25 rounded p-1">
-            <p className="text-xs text-amber-800 dark:text-amber-200 font-medium">
-              US compliance required
-            </p>
+          <p className="text-xs text-muted-foreground mb-1"> {translateUI("Inform participants about recording.")} </p>
+          <div className="bg-warning/10 dark:bg-warning/10 border border-warning/30 dark:border-warning/25 rounded p-1">
+            <p className="text-xs text-warning dark:text-warning font-medium"> {translateUI("US compliance required")} </p>
           </div>
         </div>
 
@@ -107,17 +105,13 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
             size="sm"
             onClick={handleClose}
             className="text-xs px-2 py-0.5 h-6 flex-1"
-          >
-            Later
-          </Button>
+          > {translateUI("Later")} </Button>
           <Button
             size="sm"
             onClick={handleAcknowledge}
-            className="text-xs px-2 py-0.5 h-6 bg-green-600 hover:bg-green-700 flex-1"
+            className="text-xs px-2 py-0.5 h-6 bg-success hover:bg-success flex-1"
           >
-            <CheckCircle className="h-2 w-2 mr-1" />
-            Done
-          </Button>
+            <CheckCircle className="h-2 w-2 mr-1" /> {translateUI("Done")} </Button>
         </div>
       </div>
     </div>

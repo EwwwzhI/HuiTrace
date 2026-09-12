@@ -10,14 +10,16 @@
 
 import type { ReactNode } from 'react';
 import { Clock, Sparkles } from 'lucide-react';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 /** Non-hideable EU AI Act Art. 50 transparency label. */
 export function AiLabel() {
+  useUiTranslation();
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-accent-foreground">
-      <Sparkles className="h-3 w-3" aria-hidden />
-      AI-generated · review required
-    </span>
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+      <Sparkles className="h-3 w-3" aria-hidden /> {translateUI("AI-generated · review required")} </span>
   );
 }
 
@@ -31,12 +33,13 @@ export function SourceChip({
   onClick?: () => void;
   title?: string;
 }) {
+  useUiTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
-      title={title ?? 'Jump to the source transcript segment'}
-      aria-label="Jump to source transcript segment"
+      title={title ?? translateUI("Jump to the source transcript segment")}
+      aria-label={translateUI("Jump to source transcript segment")}
       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
     >
       <Clock className="h-3 w-3" aria-hidden />
@@ -67,6 +70,7 @@ export function SectionCard({
   actions?: ReactNode;
   children: ReactNode;
 }) {
+  useUiTranslation();
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">

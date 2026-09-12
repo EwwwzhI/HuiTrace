@@ -1,12 +1,15 @@
 'use client'
 
 import './globals.css'
-import { DM_Sans } from 'next/font/google'
+import './bento.css'
+import { UiLanguageProvider } from '@/i18n/UiLanguageProvider'
+import dynamic from 'next/dynamic'
+import localFont from 'next/font/local'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
-import { Toaster, toast } from 'sonner'
+import { toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -16,30 +19,33 @@ import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
 import { RecordingConsentProvider } from '@/contexts/RecordingConsentContext'
 import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
-import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
+import { ConfigProvider } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
-import { OnboardingFlow } from '@/components/onboarding'
-import { loadBetaFeatures } from '@/types/betaFeatures'
+import { translateUI } from '@/i18n'
+import { useUiTranslation } from '@/i18n/client'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
-import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
+import { ImportDropOverlay } from '@/components/ImportAudio/ImportDropOverlay'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { EncryptionStatusBanner } from '@/components/consent/EncryptionStatusBanner'
-import { TrialBanner } from '@/components/licensing/TrialBanner'
 import { LicensingProvider } from '@/contexts/LicensingContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import { isTauri } from '@/lib/isTauri'
-import { ThemeProvider } from '@/components/theme-provider'
+import { ThemeProvider, ThemeToaster } from '@/components/theme-provider'
 import { TourProvider } from '@/components/tour'
 
 
-// Same face as the landing page (closest open-license match to the reference
-// site's Google Sans, which is proprietary). Self-hosted by next/font at build
-// time — no runtime network dependency (local-first).
-const dmSans = DM_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+const OnboardingFlow = dynamic(() => import('@/components/onboarding/OnboardingFlow').then(module => module.OnboardingFlow), { ssr: false })
+const ImportAudioDialog = dynamic(() => import('@/components/ImportAudio/ImportAudioDialog').then(module => module.ImportAudioDialog), { ssr: false })
+
+
+// Bundle the font source too: dev compilation must work without Google Fonts.
+const dmSans = localFont({
+  src: '../../public/fonts/dm-sans-latin.woff2',
+  weight: '100 1000',
+  style: 'normal',
+  display: 'swap',
   variable: '--font-dm-sans',
 })
 
@@ -55,10 +61,10 @@ function ConditionalImportDialog({
   handleImportDialogClose: (open: boolean) => void;
   importFilePath: string | null;
 }) {
-  const { betaFeatures } = useConfig();
+  useUiTranslation();
 
-  // Only mount ImportAudioDialog (and its hooks/listeners) when feature is enabled
-  if (!betaFeatures.importAndRetranscribe) {
+  // Mount import listeners only while the dialog is open.
+  if (!showImportDialog) {
     return null;
   }
 
@@ -78,8 +84,8 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  useUiTranslation();
   const [showOnboarding, setShowOnboarding] = useState(false)
-  const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)
@@ -91,7 +97,6 @@ export default function RootLayout({
     // backend to ask and `invoke` would throw. Render the main shell directly so
     // the UI is inspectable without the desktop app; never show onboarding here.
     if (!isTauri()) {
-      setOnboardingCompleted(true)
       setShowOnboarding(false)
       return
     }
@@ -100,7 +105,6 @@ export default function RootLayout({
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
         const isComplete = status?.completed ?? false
-        setOnboardingCompleted(isComplete)
 
         if (!isComplete) {
           console.log('[Layout] Onboarding not completed, showing onboarding flow')
@@ -113,7 +117,6 @@ export default function RootLayout({
         console.error('[Layout] Failed to check onboarding status:', error)
         // Default to showing onboarding if we can't check
         setShowOnboarding(true)
-        setOnboardingCompleted(false)
       })
   }, [])
 
@@ -131,8 +134,8 @@ export default function RootLayout({
       console.log('[Layout] Received request-recording-toggle from tray');
 
       if (showOnboarding) {
-        toast.error("Please complete setup first", {
-          description: "You need to finish onboarding before you can start recording."
+        toast.error(translateUI("Please complete setup first"), {
+          get description() { return translateUI("You need to finish onboarding before you can start recording."); }
         });
       } else {
         // If in main app, forward to useRecordingStart via window event
@@ -148,16 +151,6 @@ export default function RootLayout({
 
   // Handle file drop for audio import
   const handleFileDrop = useCallback((paths: string[]) => {
-    // Check if beta features are enabled (read from localStorage directly since we're outside ConfigProvider)
-    const betaFeatures = loadBetaFeatures();
-
-    if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
-      });
-      return;
-    }
-
     // Find the first audio file
     const audioFile = paths.find(p => {
       const ext = p.split('.').pop()?.toLowerCase();
@@ -169,7 +162,7 @@ export default function RootLayout({
       setImportFilePath(audioFile);
       setShowImportDialog(true);
     } else if (paths.length > 0) {
-      toast.error('Please drop an audio file', {
+      toast.error(translateUI("Please drop an audio file"), {
         description: `Supported formats: ${getAudioFormatsDisplayList()}`
       });
     }
@@ -183,11 +176,9 @@ export default function RootLayout({
     const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
-      // Drag enter/over - show overlay only if beta feature is enabled
+      // Drag enter/over - audio import is a standard feature.
       const unlistenDragEnter = await listen('tauri://drag-enter', () => {
-        if (loadBetaFeatures().importAndRetranscribe) {
-          setShowDropOverlay(true);
-        }
+        setShowDropOverlay(true);
       });
       if (cleanedUpRef.current) {
         unlistenDragEnter();
@@ -244,15 +235,15 @@ export default function RootLayout({
   const handleOnboardingComplete = () => {
     console.log('[Layout] Onboarding completed, reloading app')
     setShowOnboarding(false)
-    setOnboardingCompleted(true)
     // Optionally reload the window to ensure all state is fresh
     window.location.reload()
   }
 
   return (
     <html lang="en" suppressHydrationWarning>
+      <head><title>HuiTrace</title><meta name="application-name" content="HuiTrace" /></head>
       <body className={`${dmSans.variable} font-sans antialiased`}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <UiLanguageProvider><ThemeProvider attribute="class" defaultTheme="system" enableSystem>
         <AnalyticsProvider>
           <RecordingStateProvider>
             <RecordingConsentProvider>
@@ -265,11 +256,7 @@ export default function RootLayout({
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                            {/* ADR-0023 licensing: status provider + the shared activate/paywall
-                                dialog. Innermost position that still wraps every consumer:
-                                TrialBanner (below), the Settings License section and
-                                useRecordingStart (both under {children}), and
-                                ImportAudioDialog's paywall interception. */}
+                            {/* Compatibility context for legacy hooks; no licensing UI or requests. */}
                             <LicensingProvider>
                               {/* Download progress toast provider - listens for background downloads */}
                               <DownloadProgressToastProvider />
@@ -283,7 +270,7 @@ export default function RootLayout({
                                 // overlay + coach-marks and, post-onboarding, routes to the
                                 // pre-seeded sample meeting. isTauri()-gated internally.
                                 <TourProvider>
-                                  <div className="flex">
+                                  <div className="flex h-screen overflow-hidden bg-sidebar">
                                     <Sidebar />
                                     <MainContent>
                                       {/* ADR-0014: warns when the local DB opened UNENCRYPTED at rest.
@@ -291,10 +278,6 @@ export default function RootLayout({
                                           every main-app view and the recording indicator; not shown
                                           during onboarding (DB may not be initialized yet). */}
                                       <EncryptionStatusBanner />
-                                      {/* ADR-0023: trial/license chrome — quiet chip in the last
-                                          trial week, persistent slim banner once expired/revoked,
-                                          nothing while licensed or early in the trial. */}
-                                      <TrialBanner />
                                       {children}
                                     </MainContent>
                                   </div>
@@ -322,8 +305,8 @@ export default function RootLayout({
           </RecordingStateProvider>
         </AnalyticsProvider>
 
-        <Toaster position="bottom-center" richColors closeButton />
-        </ThemeProvider>
+        <ThemeToaster />
+        </ThemeProvider></UiLanguageProvider>
       </body>
     </html>
   )

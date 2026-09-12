@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Upload,
   Globe,
@@ -39,6 +39,10 @@ import { useRouter } from 'next/navigation';
 import { useSidebar } from '../Sidebar/SidebarProvider';
 import { LANGUAGES } from '@/constants/languages';
 import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 
 interface ImportAudioDialogProps {
@@ -72,12 +76,15 @@ export function ImportAudioDialog({
   preselectedFile,
   onComplete,
 }: ImportAudioDialogProps) {
+  useUiTranslation();
   const router = useRouter();
   const { refetchMeetings } = useSidebar();
-  const { selectedLanguage, transcriptModelConfig } = useConfig();
+  const { selectedLanguage, transcriptModelConfig, isAutoSummary, modelConfig } = useConfig();
+  const [autoSummary, setAutoSummary] = useState(isAutoSummary);
   const { openActivateDialog } = useLicensing();
 
   const [title, setTitle] = useState('');
+  const [isCancelling, setIsCancelling] = useState(false);
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
@@ -104,8 +111,8 @@ export function ImportAudioDialog({
     refetchMeetings();
     onComplete?.();
     onOpenChange(false);
-    router.push(`/meeting-details?id=${result.meeting_id}`);
-  }, [router, refetchMeetings, onComplete, onOpenChange]);
+    router.push(`/meeting-details?id=${encodeURIComponent(result.meeting_id)}&source=import&autoSummary=${autoSummary ? '1' : '0'}`);
+  }, [router, refetchMeetings, onComplete, onOpenChange, autoSummary]);
 
   const handleImportError = useCallback((error: string) => {
     // ADR-0023: import blocked by the license gate — show the paywall dialog
@@ -116,7 +123,7 @@ export function ImportAudioDialog({
       openActivateDialog({ paywall: true });
       return;
     }
-    toast.error('Import failed', { description: error });
+    toast.error(translateUI("Import failed"), { description: error });
   }, [onOpenChange, openActivateDialog]);
 
   const {
@@ -150,6 +157,7 @@ export function ImportAudioDialog({
       setTitleModifiedByUser(false);
       setSelectedLang(selectedLanguage || 'auto');
       setShowAdvanced(false);
+      setAutoSummary(isAutoSummary && !!modelConfig.model);
 
       // Validate preselected file if provided
       if (preselectedFile) {
@@ -196,7 +204,7 @@ export function ImportAudioDialog({
   };
 
   const handleStartImport = async () => {
-    if (!fileInfo) return;
+    if (!fileInfo || !selectedModel || isBusy) return;
 
     await startImport(
       fileInfo.path,
@@ -208,11 +216,16 @@ export function ImportAudioDialog({
   };
 
   const handleCancel = async () => {
-    if (isProcessing) {
-      await cancelImport();
-      toast.info('Import cancelled');
-    }
-    onOpenChange(false);
+    if (isCancelling) return;
+    setIsCancelling(true);
+    try {
+      if (isProcessing) {
+        await cancelImport();
+        toast.info(translateUI("Import task finished"));
+      }
+      onOpenChange(false);
+    } catch (error) { toast.error(translateUI("Could not cancel import"), { description: String(error) }); }
+    finally { setIsCancelling(false); }
   };
 
   // Prevent closing during processing
@@ -238,7 +251,7 @@ export function ImportAudioDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[500px]"
+        className="w-[calc(100%-2rem)] max-w-[500px] max-h-[90dvh] overflow-y-auto rounded-2xl border-border bg-card"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -246,32 +259,24 @@ export function ImportAudioDialog({
           <DialogTitle className="flex items-center gap-2">
             {isProcessing ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                Importing Audio...
-              </>
+                <Loader2 className="h-5 w-5 animate-spin text-primary" /> {translateUI("Importing Audio...")} </>
             ) : error ? (
               <>
-                <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
-                Import Failed
-              </>
+                <AlertCircle className="h-5 w-5 text-destructive dark:text-destructive" /> {translateUI("Import Failed")} </>
             ) : status === 'complete' ? (
               <>
-                <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
-                Import Complete
-              </>
+                <CheckCircle2 className="h-5 w-5 text-success dark:text-success" /> {translateUI("Import Complete")} </>
             ) : (
               <>
-                <Upload className="h-5 w-5 text-primary" />
-                Import Audio File
-              </>
+                <Upload className="h-5 w-5 text-primary" /> {translateUI("Import Audio File")} </>
             )}
           </DialogTitle>
           <DialogDescription>
             {isProcessing
-              ? progress?.message || 'Processing audio...'
+              ? progress?.message || translateUI("Processing audio...")
               : error
-              ? 'An error occurred during import'
-              : 'Import an audio file to create a new meeting with transcripts'}
+              ? translateUI("An error occurred during import")
+              : translateUI("Import an audio file to create a new meeting with transcripts")}
           </DialogDescription>
         </DialogHeader>
 
@@ -301,20 +306,18 @@ export function ImportAudioDialog({
 
                   {/* Editable title */}
                   <div className="space-y-1">
-                    <label className="text-sm font-medium text-foreground">Meeting Title</label>
+                    <label className="text-sm font-medium text-foreground">{translateUI("Meeting Title")}</label>
                     <Input
                       value={title}
                       onChange={(e) => {
                         setTitle(e.target.value);
                         setTitleModifiedByUser(true);
                       }}
-                      placeholder="Enter meeting title"
+                      placeholder={translateUI("Enter meeting title")}
                     />
                   </div>
 
-                  <Button variant="outline" size="sm" onClick={handleSelectFile} className="w-full">
-                    Choose Different File
-                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleSelectFile} className="w-full"> {translateUI("Choose Different File")} </Button>
                 </div>
               ) : (
                 <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
@@ -322,14 +325,10 @@ export function ImportAudioDialog({
                   <Button onClick={handleSelectFile} disabled={status === 'validating'}>
                     {status === 'validating' ? (
                       <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Validating...
-                      </>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" /> {translateUI("Validating...")} </>
                     ) : (
                       <>
-                        <Upload className="h-4 w-4 mr-2" />
-                        Select Audio File
-                      </>
+                        <Upload className="h-4 w-4 mr-2" /> {translateUI("Select Audio File")} </>
                     )}
                   </Button>
                   <p className="text-sm text-muted-foreground mt-2">MP4, WAV, MP3, FLAC, OGG, MKV, WebM, WMA</p>
@@ -343,7 +342,7 @@ export function ImportAudioDialog({
                     onClick={() => setShowAdvanced(!showAdvanced)}
                     className="w-full flex items-center justify-between p-3 text-sm font-medium text-foreground hover:bg-muted"
                   >
-                    <span>Advanced Options</span>
+                    <span>{translateUI("Advanced Options")}</span>
                     {showAdvanced ? (
                       <ChevronUp className="h-4 w-4" />
                     ) : (
@@ -358,11 +357,11 @@ export function ImportAudioDialog({
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
                             <Globe className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-sm font-medium">Language</span>
+                            <span className="text-sm font-medium">{translateUI("Language")}</span>
                           </div>
                           <Select value={selectedLang} onValueChange={setSelectedLang}>
                             <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Select language" />
+                              <SelectValue placeholder={translateUI("Select language")} />
                             </SelectTrigger>
                             <SelectContent className="max-h-60">
                               {LANGUAGES.map((lang) => (
@@ -377,11 +376,9 @@ export function ImportAudioDialog({
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
                             <Globe className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-sm font-medium">Language</span>
+                            <span className="text-sm font-medium">{translateUI("Language")}</span>
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            Language selection isn't supported for Parakeet. It always uses automatic detection.
-                          </p>
+                          <p className="text-xs text-muted-foreground"> {translateUI("Language selection isn't supported for Parakeet. It always uses automatic detection.")} </p>
                         </div>
                       )}
 
@@ -390,7 +387,7 @@ export function ImportAudioDialog({
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
                             <Cpu className="h-4 w-4 text-muted-foreground" />
-                            <span className="text-sm font-medium">Model</span>
+                            <span className="text-sm font-medium">{translateUI("Model")}</span>
                           </div>
                           <Select
                             value={selectedModelKey}
@@ -398,7 +395,7 @@ export function ImportAudioDialog({
                             disabled={loadingModels}
                           >
                             <SelectTrigger className="w-full">
-                              <SelectValue placeholder={loadingModels ? 'Loading models...' : 'Select model'} />
+                              <SelectValue placeholder={loadingModels ? translateUI("Loading models...") : translateUI("Select model")} />
                             </SelectTrigger>
                             <SelectContent>
                               {availableModels.map((model) => (
@@ -441,42 +438,38 @@ export function ImportAudioDialog({
 
           {/* Error display */}
           {error && (
-            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-lg p-3">
-              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            <div className="bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-lg p-3">
+              <p className="text-sm text-destructive dark:text-destructive">{error}</p>
             </div>
           )}
         </div>
 
+        {!isProcessing && <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <input type="checkbox" checked={autoSummary} disabled={!modelConfig.model} onChange={e => setAutoSummary(e.target.checked)} className="mt-1 accent-primary" />
+          <span>{translateUI("Generate AI summary after import")}<span className="mt-1 block text-xs text-muted-foreground">{modelConfig.model ? translateUI("Uses your configured summary model. Cloud models receive the transcript for processing.") : translateUI("Configure a summary model in Settings → Summary first. You can also generate a summary later.")}</span></span>
+        </label>}
         <DialogFooter>
           {!isProcessing && !error && (
             <>
-              <Button variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
-              </Button>
+              <Button variant="outline" onClick={() => onOpenChange(false)}> {translateUI("Cancel")} </Button>
               <Button
                 onClick={handleStartImport}
                 className="bg-primary hover:bg-primary/90"
-                disabled={!fileInfo}
+                disabled={!fileInfo || !selectedModel || isBusy || loadingModels}
               >
-                <Upload className="h-4 w-4 mr-2" />
-                Import
-              </Button>
+                <Upload className="h-4 w-4 mr-2" /> {translateUI("Import")} </Button>
             </>
           )}
           {isProcessing && (
-            <Button variant="outline" onClick={handleCancel}>
+            <Button variant="outline" onClick={handleCancel} disabled={isCancelling}>
               <X className="h-4 w-4 mr-2" />
-              Cancel
+              {isCancelling ? translateUI("Cancelling…") : translateUI("Cancel import")}
             </Button>
           )}
           {error && (
             <>
-              <Button variant="outline" onClick={() => onOpenChange(false)}>
-                Close
-              </Button>
-              <Button onClick={reset} variant="outline">
-                Try Again
-              </Button>
+              <Button variant="outline" onClick={() => onOpenChange(false)}> {translateUI("Close")} </Button>
+              <Button onClick={reset} variant="outline"> {translateUI("Try Again")} </Button>
             </>
           )}
         </DialogFooter>

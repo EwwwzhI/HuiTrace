@@ -1,136 +1,108 @@
 'use client';
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical, KeyRound } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { invoke } from '@tauri-apps/api/core';
-import { motion } from 'framer-motion';
-import { TranscriptSettings } from '@/components/TranscriptSettings';
-import { RecordingSettings } from '@/components/RecordingSettings';
+
 import { PreferenceSettings } from '@/components/PreferenceSettings';
-import { SummaryModelSettings } from '@/components/SummaryModelSettings';
-import { BetaSettings } from '@/components/BetaSettings';
-import { LicenseSettings } from '@/components/licensing/LicenseSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+import { ThemeToggle } from '@/components/ThemeToggle';
+
+
+const loading = () => <p role="status" className="p-4 text-sm text-muted-foreground">{translateUI("Loading settings…")}</p>;
+const TranscriptSettings = dynamic(() => import('@/components/TranscriptSettings').then(module => module.TranscriptSettings), { loading });
+const RecordingSettings = dynamic(() => import('@/components/RecordingSettings').then(module => module.RecordingSettings), { loading });
+const SummaryModelSettings = dynamic(() => import('@/components/SummaryModelSettings').then(module => module.SummaryModelSettings), { loading });
 
 // Tabs configuration (constant)
 const TABS = [
-  { value: 'general', label: 'General', icon: Settings2 },
-  { value: 'recording', label: 'Recordings', icon: Mic },
-  { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
-  { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
-  { value: 'beta', label: 'Beta', icon: FlaskConical },
-  { value: 'license', label: 'License', icon: KeyRound }
+  { value: 'general', get label() { return translateUI("General"); }, icon: Settings2 },
+  { value: 'recording', get label() { return translateUI("Recordings"); }, icon: Mic },
+  { value: 'Transcriptionmodels', get label() { return translateUI("Transcription"); }, icon: DatabaseIcon },
+  { value: 'summaryModels', get label() { return translateUI("Summary"); }, icon: SparkleIcon },
 ] as const;
 
 export default function SettingsPage() {
+  useUiTranslation();
   const router = useRouter();
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
 
   // Animation state for tabs
   const [activeTab, setActiveTab] = useState('general');
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
-
-  // Load saved transcript configuration on mount
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['general']));
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [verticalTabs, setVerticalTabs] = useState(false);
   useEffect(() => {
-    const loadTranscriptConfig = async () => {
-      try {
-        const config = await invoke('api_get_transcript_config') as any;
-        if (config) {
-          console.log('Loaded saved transcript configuration');
-          setTranscriptModelConfig({
-            provider: config.provider || 'localWhisper',
-            model: config.model || 'large-v3',
-            apiKey: config.apiKey || null
-          });
-        }
-      } catch (error) {
-        console.error('Failed to load transcript config:', error);
-      }
-    };
-    loadTranscriptConfig();
-  }, [setTranscriptModelConfig]);
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => setVerticalTabs(entry.contentRect.width >= 900));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const selectTab = (tab: string) => {
+    setVisitedTabs(previous => new Set(previous).add(tab));
+    setActiveTab(tab);
+  };
 
-  // Update underline position when active tab changes
-  useLayoutEffect(() => {
-    const activeIndex = TABS.findIndex(tab => tab.value === activeTab);
-    const activeTabElement = tabRefs.current[activeIndex];
-
-    if (activeTabElement) {
-      const { offsetLeft, offsetWidth } = activeTabElement;
-      setUnderlineStyle({ left: offsetLeft, width: offsetWidth });
-    }
-  }, [activeTab]);
 
   return (
-    <div className="h-screen bg-background flex flex-col">
+    <div ref={containerRef} className="h-screen bg-background flex flex-col ink-settings">
       {/* Fixed Header */}
-      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-border">
-        <div className="max-w-6xl mx-auto px-8 py-6">
-          <div className="flex items-center gap-4">
+      <div className="v2-page-header sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-wrap items-center gap-4">
             <button
               onClick={() => router.back()}
-              className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={translateUI('Back')}
+              className="v2-back text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
             </button>
-            <h1 className="text-3xl font-bold">Settings</h1>
+            <div className="min-w-0 flex-1"><h1 className="font-heading text-[28px] font-semibold">{translateUI("Settings")}</h1><p className="v2-settings-intro">{translateUI('A workspace that feels like yours.')}</p></div>
+            <ThemeToggle compact />
           </div>
         </div>
       </div>
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto p-8 pt-6">
+        <div className="max-w-6xl mx-auto p-6">
           {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="bg-transparent relative rounded-none border-b border-border p-0 h-auto">
-              {TABS.map((tab, index) => {
+          <Tabs className="ink-settings-grid" orientation={verticalTabs ? 'vertical' : 'horizontal'} value={activeTab} onValueChange={selectTab}>
+            <TabsList className="ink-settings-nav flex w-full justify-start overflow-x-auto bg-transparent rounded-none border-b border-border p-0 h-auto">
+              {TABS.map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <TabsTrigger
                     key={tab.value}
                     value={tab.value}
-                    ref={el => { tabRefs.current[index] = el }}
-                    className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none text-muted-foreground hover:text-foreground relative z-10"
+                    className="shrink-0 flex items-center justify-start gap-2 px-4 py-3 text-sm rounded-lg data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none text-muted-foreground hover:text-foreground"
                   >
                     <Icon className="w-4 h-4" />
                     {tab.label}
                   </TabsTrigger>
                 );
               })}
-
-              <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-primary"
-                layoutId="underline"
-                style={{ left: underlineStyle.left, width: underlineStyle.width }}
-                transition={{ type: 'spring', stiffness: 400, damping: 40 }}
-              />
             </TabsList>
 
-            <TabsContent value="general">
-              <PreferenceSettings />
+            <TabsContent className="ink-settings-panel" forceMount hidden={activeTab !== 'general'} value="general">
+              {visitedTabs.has('general') && <PreferenceSettings />}
             </TabsContent>
-            <TabsContent value="recording">
-              <RecordingSettings />
+            <TabsContent className="ink-settings-panel" forceMount hidden={activeTab !== 'recording'} value="recording">
+              {visitedTabs.has('recording') && <RecordingSettings />}
             </TabsContent>
-            <TabsContent value="Transcriptionmodels">
-              <TranscriptSettings
+            <TabsContent className="ink-settings-panel v2-panel border bg-card p-6" forceMount hidden={activeTab !== 'Transcriptionmodels'} value="Transcriptionmodels">
+              {visitedTabs.has('Transcriptionmodels') && <TranscriptSettings
                 transcriptModelConfig={transcriptModelConfig}
                 setTranscriptModelConfig={setTranscriptModelConfig}
-              />
+              />}
             </TabsContent>
-            <TabsContent value="summaryModels">
-              <SummaryModelSettings />
-            </TabsContent>
-            <TabsContent value="beta" className="mt-6">
-              <BetaSettings />
-            </TabsContent>
-            <TabsContent value="license" className="mt-6">
-              <LicenseSettings />
+            <TabsContent className="ink-settings-panel" forceMount hidden={activeTab !== 'summaryModels'} value="summaryModels">
+              {visitedTabs.has('summaryModels') && <SummaryModelSettings />}
             </TabsContent>
           </Tabs>
         </div>

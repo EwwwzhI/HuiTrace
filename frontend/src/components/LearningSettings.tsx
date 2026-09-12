@@ -24,9 +24,13 @@ import {
   type LearningStats,
   type RuleEvidenceResponse,
 } from '@/services/learningService';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 /**
- * What Mityu has learned — the rules screen (ADR-0030 §9).
+ * What HuiTrace has learned — the rules screen (ADR-0030 §9).
  *
  * This is not a nice-to-have panel. ADR-0030 §7 lets a well-supported mined rule
  * activate WITHOUT asking, and that is only defensible because of three bounds,
@@ -62,7 +66,7 @@ export type LearningDataSource = Pick<
 >;
 
 /**
- * The headline: what Mityu has to show for itself.
+ * The headline: what HuiTrace has to show for itself.
  *
  * **The wording here is load-bearing.** The burden number is a correlation, not a
  * result — it measures what the USER did, and someone reviewing less carefully
@@ -73,38 +77,31 @@ export type LearningDataSource = Pick<
  * rules" here — see `learning::burden` for the whole argument.
  */
 function LearningHeadline({ stats }: { stats: LearningStats }) {
+  useUiTranslation();
   const { burden } = stats;
   const rate = (s: BurdenStats) => Math.round((s.accepted_as_written / s.reviewed) * 100);
 
   if (burden.overall.reviewed === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Nothing to measure yet — review a summary and Mityu starts keeping score of how much
-        you had to change.
-      </p>
+      <p className="text-sm text-muted-foreground"> {translateUI("Nothing to measure yet — review a summary and HuiTrace starts keeping score of how much you had to change.")} </p>
     );
   }
 
   return (
     <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-1">
-      <p className="text-sm text-foreground">
-        You&apos;ve reviewed{' '}
+      <p className="text-sm text-foreground"> {translateUI("You've reviewed")}{' '}
         <span className="font-semibold">{burden.overall.reviewed}</span>{' '}
-        {burden.overall.reviewed === 1 ? 'point' : 'points'} and taken{' '}
-        <span className="font-semibold">{rate(burden.overall)}%</span> of them exactly as Mityu
-        wrote them.
-      </p>
+        {burden.overall.reviewed === 1 ? 'point' : 'points'} {translateUI("and taken")}{' '}
+        <span className="font-semibold">{rate(burden.overall)}%</span> {translateUI("of them exactly as HuiTrace wrote them.")} </p>
 
       {burden.recent && burden.earlier && (
-        <p className="text-sm text-muted-foreground">
-          Your last {burden.recent.reviewed}: {rate(burden.recent)}% kept as written. The{' '}
-          {burden.earlier.reviewed} before those: {rate(burden.earlier)}%.
+        <p className="text-sm text-muted-foreground"> {translateUI("Your last")} {burden.recent.reviewed}: {rate(burden.recent)}{translateUI("% kept as written. The")}{' '}
+          {burden.earlier.reviewed} {translateUI("before those:")} {rate(burden.earlier)}%.
         </p>
       )}
 
       <p className="text-xs text-muted-foreground">
-        {stats.rules_active} {stats.rules_active === 1 ? 'rule is' : 'rules are'} in force, learned
-        from {stats.corrections_recorded}{' '}
+        {stats.rules_active} {stats.rules_active === 1 ? translateUI("rule is") : translateUI("rules are")} {translateUI("in force, learned from")} {stats.corrections_recorded}{' '}
         {stats.corrections_recorded === 1 ? 'correction' : 'corrections'}.
       </p>
     </div>
@@ -135,6 +132,7 @@ function RuleEvidencePanel({
   ruleId: string;
   service: LearningDataSource;
 }) {
+  useUiTranslation();
   const [evidence, setEvidence] = useState<RuleEvidenceResponse | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -150,7 +148,7 @@ function RuleEvidencePanel({
   }, [ruleId, service]);
 
   if (failed) {
-    return <p className="text-xs text-muted-foreground">Couldn&apos;t load the evidence.</p>;
+    return <p className="text-xs text-muted-foreground">{translateUI("Couldn't load the evidence.")}</p>;
   }
   if (!evidence) {
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />;
@@ -161,9 +159,8 @@ function RuleEvidencePanel({
       {evidence.events.map((event) => (
         <div key={event.id} className="rounded border border-border bg-muted/50 p-2 text-xs">
           {event.action === 'reject' ? (
-            <p className="text-muted-foreground">
-              You rejected: <span className="line-through">{event.original_text}</span>
-              {event.reason && <span className="block mt-1">Because: {event.reason}</span>}
+            <p className="text-muted-foreground"> {translateUI("You rejected:")} <span className="line-through">{event.original_text}</span>
+              {event.reason && <span className="block mt-1">{translateUI("Because:")} {event.reason}</span>}
             </p>
           ) : (
             <p className="text-muted-foreground">
@@ -186,17 +183,13 @@ function RuleEvidencePanel({
       {evidence.missing_count > 0 && (
         <p className="text-xs text-muted-foreground italic">
           {evidence.missing_count}{' '}
-          {evidence.missing_count === 1 ? 'correction' : 'corrections'} behind this rule{' '}
-          {evidence.missing_count === 1 ? 'has' : 'have'} been erased with{' '}
-          {evidence.missing_count === 1 ? 'its' : 'their'} meeting. The rule itself carries no
-          meeting text, so it stays until you remove it.
-        </p>
+          {evidence.missing_count === 1 ? 'correction' : 'corrections'} {translateUI("behind this rule")}{' '}
+          {evidence.missing_count === 1 ? 'has' : 'have'} {translateUI("been erased with")}{' '}
+          {evidence.missing_count === 1 ? 'its' : 'their'} {translateUI("meeting. The rule itself carries no meeting text, so it stays until you remove it.")} </p>
       )}
 
       {evidence.events.length === 0 && evidence.missing_count === 0 && (
-        <p className="text-xs text-muted-foreground italic">
-          You wrote this rule yourself, so there are no corrections behind it.
-        </p>
+        <p className="text-xs text-muted-foreground italic"> {translateUI("You wrote this rule yourself, so there are no corrections behind it.")} </p>
       )}
     </div>
   );
@@ -219,6 +212,7 @@ function RuleRow({
   isBusy: boolean;
   service: LearningDataSource;
 }) {
+  useUiTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(rule.rule_text);
   const [showEvidence, setShowEvidence] = useState(false);
@@ -248,7 +242,7 @@ function RuleRow({
                   setIsEditing(false);
                 }
               }}
-              aria-label="Rule text"
+              aria-label={translateUI("Rule text")}
               autoFocus
             />
           ) : (
@@ -280,7 +274,7 @@ function RuleRow({
                   setIsEditing(false);
                 }}
                 disabled={isSaving}
-                aria-label="Cancel edit"
+                aria-label={translateUI("Cancel edit")}
               >
                 <X className="h-4 w-4" />
               </Button>
@@ -288,14 +282,10 @@ function RuleRow({
           ) : (
             <>
               {rule.status === 'proposed' && (
-                <Button variant="green" size="sm" onClick={onActivate} disabled={isBusy}>
-                  Use it
-                </Button>
+                <Button variant="green" size="sm" onClick={onActivate} disabled={isBusy}> {translateUI("Use it")} </Button>
               )}
               {rule.status === 'dismissed' && (
-                <Button variant="outline" size="sm" onClick={onActivate} disabled={isBusy}>
-                  Turn on
-                </Button>
+                <Button variant="outline" size="sm" onClick={onActivate} disabled={isBusy}> {translateUI("Turn on")} </Button>
               )}
               {rule.status !== 'dismissed' && (
                 <Button
@@ -303,9 +293,9 @@ function RuleRow({
                   size="sm"
                   onClick={onDismiss}
                   disabled={isBusy}
-                  title="Stop using this, and don't suggest it again"
+                  title={translateUI("Stop using this, and don't suggest it again")}
                 >
-                  {rule.status === 'proposed' ? 'No thanks' : 'Turn off'}
+                  {rule.status === 'proposed' ? translateUI("No thanks") : translateUI("Turn off")}
                 </Button>
               )}
               <Button
@@ -316,8 +306,8 @@ function RuleRow({
                   setIsEditing(true);
                 }}
                 disabled={isBusy}
-                title="Reword this rule"
-                aria-label="Edit rule"
+                title={translateUI("Reword this rule")}
+                aria-label={translateUI("Edit rule")}
               >
                 <Pencil className="h-4 w-4" />
               </Button>
@@ -326,10 +316,10 @@ function RuleRow({
                 size="sm"
                 onClick={onDelete}
                 disabled={isBusy}
-                title="Remove from this list. Mityu may learn it again if you keep making the same correction — use 'Turn off' to refuse it for good."
-                aria-label="Delete rule"
+                title={translateUI("Remove from this list. HuiTrace may learn it again if you keep making the same correction — use 'Turn off' to refuse it for good.")}
+                aria-label={translateUI("Delete rule")}
               >
-                <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
+                <Trash2 className="h-4 w-4 text-destructive dark:text-destructive" />
               </Button>
             </>
           )}
@@ -345,9 +335,7 @@ function RuleRow({
           <ChevronDown className="h-3.5 w-3.5" />
         ) : (
           <ChevronRight className="h-3.5 w-3.5" />
-        )}
-        Why Mityu thinks this
-      </button>
+        )} {translateUI("Why HuiTrace thinks this")} </button>
       {showEvidence && <RuleEvidencePanel ruleId={rule.id} service={service} />}
     </div>
   );
@@ -359,6 +347,7 @@ export default function LearningSettings({
   /** Defaults to the real service; injected only by `/design/learning`. */
   service?: LearningDataSource;
 } = {}) {
+  useUiTranslation();
   const [config, setConfig] = useState<LearningConfig | null>(null);
   const [rules, setRules] = useState<LearnedRule[]>([]);
   const [stats, setStats] = useState<LearningStats | null>(null);
@@ -449,29 +438,21 @@ export default function LearningSettings({
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-foreground mb-2">What Mityu has learned</h3>
-        <p className="text-sm text-muted-foreground mb-4">
-          When you fix a summary, Mityu notices. It turns what you keep changing into plain-language
-          rules and follows them next time. The rules live on this device, you can rewrite or delete
-          any of them, and nothing is ever trained into a model — so removing a rule really removes
-          it.
-        </p>
+        <h3 className="text-base font-semibold text-foreground mb-2">{translateUI("What HuiTrace has learned")}</h3>
+        <p className="text-sm text-muted-foreground mb-4"> {translateUI("When you fix a summary, HuiTrace notices. It turns what you keep changing into plain-language rules and follows them next time. The rules live on this device, you can rewrite or delete any of them, and nothing is ever trained into a model — so removing a rule really removes it.")} </p>
       </div>
 
       {isLoading && (
         <div className="flex items-center gap-2 p-3 bg-muted rounded-lg border border-border">
           <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Loading...</span>
+          <span className="text-sm text-muted-foreground">{translateUI("Loading...")}</span>
         </div>
       )}
 
       {!isLoading && (loadFailed || !config) && (
-        <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/25">
-          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            Learning settings could not be loaded. Your other preferences are unaffected — close and
-            reopen Settings to try again.
-          </p>
+        <div className="flex items-start gap-2 p-3 bg-warning/10 dark:bg-warning/10 rounded-lg border border-warning/30 dark:border-warning/25">
+          <AlertTriangle className="w-4 h-4 text-warning dark:text-warning mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-warning dark:text-warning"> {translateUI("Learning settings could not be loaded. Your other preferences are unaffected — close and reopen Settings to try again.")} </p>
         </div>
       )}
 
@@ -481,42 +462,33 @@ export default function LearningSettings({
 
           <div className="flex items-center justify-between p-3 bg-muted rounded-lg border border-border">
             <div>
-              <h4 className="font-semibold text-foreground">Learn from my corrections</h4>
-              <p className="text-sm text-muted-foreground">
-                Capture what you change, and apply what it learns.
-              </p>
+              <h4 className="font-semibold text-foreground">{translateUI("Learn from my corrections")}</h4>
+              <p className="text-sm text-muted-foreground"> {translateUI("Capture what you change, and apply what it learns.")} </p>
             </div>
             <Switch
               checked={config.enabled}
               onCheckedChange={(enabled) => persistConfig({ ...config, enabled }, config)}
-              aria-label="Learn from my corrections"
+              aria-label={translateUI("Learn from my corrections")}
             />
           </div>
 
           <div className="flex items-center justify-between p-3 rounded-lg border border-border">
             <div>
-              <h4 className="font-semibold text-foreground">Use new rules automatically</h4>
-              <p className="text-sm text-muted-foreground">
-                After the same correction {config.autoActivateMinSupport} times, start following it
-                without asking. Summaries still need your approval either way, and every rule shows
-                up here.
-              </p>
+              <h4 className="font-semibold text-foreground">{translateUI("Use new rules automatically")}</h4>
+              <p className="text-sm text-muted-foreground"> {translateUI("After the same correction")} {config.autoActivateMinSupport} {translateUI("times, start following it without asking. Summaries still need your approval either way, and every rule shows up here.")} </p>
             </div>
             <Switch
               checked={config.autoActivate}
               disabled={!config.enabled}
               onCheckedChange={(autoActivate) => persistConfig({ ...config, autoActivate }, config)}
-              aria-label="Use new rules automatically"
+              aria-label={translateUI("Use new rules automatically")}
             />
           </div>
 
           <div className="flex items-center justify-between p-3 rounded-lg border border-border">
             <div>
-              <h4 className="font-semibold text-foreground">Let the model look for patterns</h4>
-              <p className="text-sm text-muted-foreground">
-                Finds subtler habits than the built-in checks, each time you approve a summary. Free
-                with a local model (Ollama); with a paid provider it spends tokens on every approval.
-              </p>
+              <h4 className="font-semibold text-foreground">{translateUI("Let the model look for patterns")}</h4>
+              <p className="text-sm text-muted-foreground"> {translateUI("Finds subtler habits than the built-in checks, each time you approve a summary. Free with a local model (Ollama); with a paid provider it spends tokens on every approval.")} </p>
             </div>
             <Switch
               checked={config.llmMinerEnabled}
@@ -524,15 +496,14 @@ export default function LearningSettings({
               onCheckedChange={(llmMinerEnabled) =>
                 persistConfig({ ...config, llmMinerEnabled }, config)
               }
-              aria-label="Let the model look for patterns"
+              aria-label={translateUI("Let the model look for patterns")}
             />
           </div>
 
           {proposed.length > 0 && (
             <section className="space-y-2">
               <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                <Sparkles className="h-4 w-4 text-blue-500" />
-                Mityu noticed something ({proposed.length})
+                <Sparkles className="h-4 w-4 text-primary" /> {translateUI("HuiTrace noticed something (")}{proposed.length})
               </h4>
               {proposed.map((rule) => (
                 <RuleRow
@@ -553,14 +524,10 @@ export default function LearningSettings({
           )}
 
           <section className="space-y-2">
-            <h4 className="text-sm font-semibold text-foreground">
-              Rules in use ({active.length})
+            <h4 className="text-sm font-semibold text-foreground"> {translateUI("Rules in use (")}{active.length})
             </h4>
             {active.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nothing yet. Keep reviewing summaries and Mityu will start spotting what you change —
-                or write a rule yourself below.
-              </p>
+              <p className="text-sm text-muted-foreground"> {translateUI("Nothing yet. Keep reviewing summaries and HuiTrace will start spotting what you change — or write a rule yourself below.")} </p>
             ) : (
               active.map((rule) => (
                 <RuleRow
@@ -585,8 +552,8 @@ export default function LearningSettings({
               value={newRule}
               onChange={(e) => setNewRule(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void addRule()}
-              placeholder="Write your own rule — e.g. “Call follow-ups ‘takip’, not ‘aksiyon’.”"
-              aria-label="Write your own rule"
+              placeholder={translateUI("Write your own rule — e.g. “Call follow-ups ‘takip’, not ‘aksiyon’.”")}
+              aria-label={translateUI("Write your own rule")}
               disabled={!config.enabled || isAdding}
             />
             <Button
@@ -596,19 +563,15 @@ export default function LearningSettings({
               disabled={!config.enabled || isAdding || !newRule.trim()}
             >
               {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              <span className="hidden lg:inline">Add</span>
+              <span className="hidden lg:inline">{translateUI("Add")}</span>
             </Button>
           </div>
 
           {dismissed.length > 0 && (
             <section className="space-y-2">
-              <h4 className="text-sm font-semibold text-muted-foreground">
-                Refused ({dismissed.length})
+              <h4 className="text-sm font-semibold text-muted-foreground"> {translateUI("Refused (")}{dismissed.length})
               </h4>
-              <p className="text-xs text-muted-foreground">
-                Mityu won&apos;t suggest these again. Deleting one instead lets it come back if you
-                keep making the same correction.
-              </p>
+              <p className="text-xs text-muted-foreground"> {translateUI("HuiTrace won't suggest these again. Deleting one instead lets it come back if you keep making the same correction.")} </p>
               {dismissed.map((rule) => (
                 <RuleRow
                   key={rule.id}

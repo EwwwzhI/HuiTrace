@@ -7,6 +7,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
 
@@ -39,6 +43,7 @@ export function SettingsModals({
   messages,
   onClose,
 }: SettingsModalsProps) {
+  useUiTranslation();
   // Contexts
   const {
     modelConfig,
@@ -65,7 +70,7 @@ export function SettingsModals({
         <div className="bg-card rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
           {/* Header */}
           <div className="flex justify-between items-center p-6 border-b">
-            <h3 className="text-xl font-semibold text-foreground">Preferences</h3>
+            <h3 className="text-xl font-semibold text-foreground">{translateUI("Preferences")}</h3>
             <button
               onClick={() => onClose("modelSettings")
               }
@@ -84,15 +89,13 @@ export function SettingsModals({
 
             {/* Divider */}
             <div className="border-t pt-8">
-              <h4 className="text-lg font-semibold text-foreground mb-4">AI Model Configuration</h4>
+              <h4 className="text-lg font-semibold text-foreground mb-4">{translateUI("AI Model Configuration")}</h4>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Summarization Model
-                  </label>
+                  <label className="block text-sm font-medium text-foreground mb-1"> {translateUI("Summarization Model")} </label>
                   <div className="flex space-x-2">
                     <select
-                      className="px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      className="px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
                       value={modelConfig.provider}
                       onChange={(e) => {
                         const provider = e.target.value as ModelConfig['provider'];
@@ -103,7 +106,7 @@ export function SettingsModals({
                         });
                       }}
                     >
-                      <option value="builtin-ai">Built-in AI</option>
+                      <option value="builtin-ai">{translateUI("Built-in AI")}</option>
                       <option value="claude">Claude</option>
                       <option value="groq">Groq</option>
                       <option value="ollama">Ollama</option>
@@ -112,7 +115,7 @@ export function SettingsModals({
                     </select>
 
                     <select
-                      className="flex-1 px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      className="flex-1 px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
                       value={modelConfig.model}
                       onChange={(e) => setModelConfig((prev: ModelConfig) => ({ ...prev, model: e.target.value }))}
                     >
@@ -126,9 +129,9 @@ export function SettingsModals({
                 </div>
                 {modelConfig.provider === 'ollama' && (
                   <div>
-                    <h4 className="text-lg font-bold mb-4">Available Ollama Models</h4>
+                    <h4 className="text-lg font-bold mb-4">{translateUI("Available Ollama Models")}</h4>
                     {error && (
-                      <div className="bg-red-100 border border-red-400 text-red-700 dark:text-red-300 px-4 py-3 rounded mb-4">
+                      <div className="bg-destructive/10 border border-destructive text-destructive dark:text-destructive px-4 py-3 rounded mb-4">
                         {error}
                       </div>
                     )}
@@ -136,13 +139,13 @@ export function SettingsModals({
                       {models.map((model) => (
                         <div
                           key={model.id}
-                          className={`bg-card p-4 rounded-lg shadow cursor-pointer transition-colors ${modelConfig.model === model.name ? 'ring-2 ring-blue-500 bg-accent' : 'hover:bg-muted'
+                          className={`bg-card p-4 rounded-lg shadow cursor-pointer transition-colors ${modelConfig.model === model.name ? 'ring-2 ring-primary bg-accent' : 'hover:bg-muted'
                             }`}
                           onClick={() => setModelConfig((prev: ModelConfig) => ({ ...prev, model: model.name }))}
                         >
                           <h3 className="font-bold">{model.name}</h3>
-                          <p className="text-muted-foreground">Size: {model.size}</p>
-                          <p className="text-muted-foreground">Modified: {model.modified}</p>
+                          <p className="text-muted-foreground">{translateUI("Size:")} {model.size}</p>
+                          <p className="text-muted-foreground">{translateUI("Modified:")} {model.modified}</p>
                         </div>
                       ))}
                     </div>
@@ -156,10 +159,8 @@ export function SettingsModals({
           <div className="border-t p-6 flex justify-end">
             <button
               onClick={() => onClose('modelSettings')}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            > {translateUI("Done")} </button>
           </div>
         </div>
       </div>
@@ -170,7 +171,7 @@ export function SettingsModals({
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-card rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-foreground">Audio Device Settings</h3>
+            <h3 className="text-lg font-semibold text-foreground">{translateUI("Audio Device Settings")}</h3>
             <button
               onClick={() => onClose('deviceSettings')}
               className="text-muted-foreground hover:text-foreground"
@@ -192,15 +193,13 @@ export function SettingsModals({
               onClick={() => {
                 const micDevice = selectedDevices.micDevice || 'Default';
                 const systemDevice = selectedDevices.systemDevice || 'Default';
-                toast.success("Devices selected", {
+                toast.success(translateUI("Devices selected"), {
                   description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
                 });
                 onClose('deviceSettings');
               }}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            > {translateUI("Done")} </button>
           </div>
         </div>
       </div>
@@ -211,7 +210,7 @@ export function SettingsModals({
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-card rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-foreground">Language Settings</h3>
+            <h3 className="text-lg font-semibold text-foreground">{translateUI("Language Settings")}</h3>
             <button
               onClick={() => onClose('languageSettings')}
               className="text-muted-foreground hover:text-foreground"
@@ -232,10 +231,8 @@ export function SettingsModals({
           <div className="mt-6 flex justify-end">
             <button
               onClick={() => onClose('languageSettings')}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              Done
-            </button>
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            > {translateUI("Done")} </button>
           </div>
         </div>
       </div>
@@ -248,7 +245,7 @@ export function SettingsModals({
           {/* Fixed Header */}
           <div className="flex justify-between items-center p-6 pb-4 border-b border-border">
             <h3 className="text-lg font-semibold text-foreground">
-              {messages.modelSelector ? 'Speech Recognition Setup Required' : 'Transcription Model Settings'}
+              {messages.modelSelector ? translateUI("Speech Recognition Setup Required") : translateUI("Transcription Model Settings")}
             </h3>
             <button
               onClick={() => onClose('modelSelector')}
@@ -280,19 +277,19 @@ export function SettingsModals({
                   onChange={(e) => toggleConfidenceIndicator(e.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-border after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-card after:border-border after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                <div className="w-11 h-6 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary/30 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-border after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-card after:border-border after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
               </label>
               <div>
-                <p className="text-sm font-medium text-foreground">Show Confidence Indicators</p>
-                <p className="text-xs text-muted-foreground">Display colored dots showing transcription confidence quality</p>
+                <p className="text-sm font-medium text-foreground">{translateUI("Show Confidence Indicators")}</p>
+                <p className="text-xs text-muted-foreground">{translateUI("Display colored dots showing transcription confidence quality")}</p>
               </div>
             </div>
 
             <button
               onClick={() => onClose('modelSelector')}
-              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+              className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring"
             >
-              {messages.modelSelector ? 'Cancel' : 'Done'}
+              {messages.modelSelector ? translateUI("Cancel") : translateUI("Done")}
             </button>
           </div>
         </div>
@@ -302,16 +299,14 @@ export function SettingsModals({
     {/* Error Alert Modal */}
     {modals.errorAlert && (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <Alert className="max-w-md mx-4 border-red-200 dark:border-red-500/25 bg-card shadow-xl">
-          <AlertTitle className="text-red-800 dark:text-red-200">Recording Stopped</AlertTitle>
-          <AlertDescription className="text-red-700 dark:text-red-300">
+        <Alert className="max-w-md mx-4 border-destructive/30 dark:border-destructive/25 bg-card shadow-xl">
+          <AlertTitle className="text-destructive dark:text-destructive">{translateUI("Recording Stopped")}</AlertTitle>
+          <AlertDescription className="text-destructive dark:text-destructive">
             {messages.errorAlert}
             <button
               onClick={() => onClose('errorAlert')}
-              className="ml-2 text-red-600 dark:text-red-400 hover:text-red-800 dark:text-red-200 underline"
-            >
-              Dismiss
-            </button>
+              className="ml-2 text-destructive dark:text-destructive hover:text-destructive dark:text-destructive underline"
+            > {translateUI("Dismiss")} </button>
           </AlertDescription>
         </Alert>
       </div>
@@ -320,16 +315,14 @@ export function SettingsModals({
     {/* Chunk Drop Warning Modal */}
     {modals.chunkDropWarning && (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <Alert className="max-w-lg mx-4 border-yellow-200 bg-card shadow-xl">
-          <AlertTitle className="text-yellow-800">Transcription Performance Warning</AlertTitle>
-          <AlertDescription className="text-yellow-700">
+        <Alert className="max-w-lg mx-4 border-warning/30 bg-card shadow-xl">
+          <AlertTitle className="text-warning">{translateUI("Transcription Performance Warning")}</AlertTitle>
+          <AlertDescription className="text-warning">
             {messages.chunkDropWarning}
             <button
               onClick={() => onClose('chunkDropWarning')}
-              className="ml-2 text-yellow-600 hover:text-yellow-800 underline"
-            >
-              Dismiss
-            </button>
+              className="ml-2 text-warning hover:text-warning underline"
+            > {translateUI("Dismiss")} </button>
           </AlertDescription>
         </Alert>
       </div>

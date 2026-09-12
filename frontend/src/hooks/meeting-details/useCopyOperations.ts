@@ -6,6 +6,8 @@ import {
   fetchAllTranscripts as fetchAllTranscriptsShared,
   formatTime,
 } from '@/lib/transcriptTimestamps';
+import { translateUI } from '@/i18n';
+
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -28,7 +30,7 @@ export function useCopyOperations({
       return transcripts;
     } catch (error) {
       console.error('❌ Error fetching all transcripts:', error);
-      toast.error('Failed to fetch transcripts for copying');
+      toast.error(translateUI("Failed to fetch transcripts for copying"));
       return [];
     }
   }, []);
@@ -57,7 +59,7 @@ export function useCopyOperations({
       .join('\n');
 
     await navigator.clipboard.writeText(header + date + fullTranscript);
-    toast.success("Transcript copied to clipboard");
+    toast.success(translateUI("Transcript copied to clipboard"));
 
     // Track copy analytics
     const wordCount = allTranscripts

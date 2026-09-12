@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Transcript, MeetingMetadata, PaginatedTranscriptsResponse, TranscriptSegmentData } from "@/types";
+import { translateUI } from '@/i18n';
+
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -53,11 +55,15 @@ export function usePaginatedTranscripts({
     const [error, setError] = useState<string | null>(null);
 
     const offsetRef = useRef(0);
-    const loadedMeetingIdRef = useRef<string | null>(null);
+    const generationRef = useRef(0);
+    const activeMeetingRef = useRef(meetingId);
+    activeMeetingRef.current = meetingId;
     const isLoadingRef = useRef(false);
 
     // Reset state when meeting changes
     const reset = useCallback(() => {
+        generationRef.current++;
+        isLoadingRef.current = false;
         setMetadata(null);
         setTranscripts([]);
         setTotalCount(0);
@@ -71,16 +77,20 @@ export function usePaginatedTranscripts({
     // Load meeting metadata
     const loadMetadata = useCallback(async (): Promise<MeetingMetadata | null> => {
         if (!meetingId) return null;
+        const generation = generationRef.current;
+        const isCurrent = () => generation === generationRef.current && meetingId === activeMeetingRef.current;
 
         try {
             const data = await invoke<MeetingMetadata>('api_get_meeting_metadata', {
                 meetingId,
             });
+            if (!isCurrent()) return null;
             setMetadata(data);
             return data;
         } catch (err) {
+            if (!isCurrent()) return null;
             console.error('Failed to load meeting metadata:', err);
-            setError('Failed to load meeting details');
+            setError(translateUI("Failed to load meeting details"));
             return null;
         }
     }, [meetingId]);
@@ -91,6 +101,8 @@ export function usePaginatedTranscripts({
         append: boolean = true
     ): Promise<Transcript[]> => {
         if (!meetingId) return [];
+        const generation = generationRef.current;
+        const isCurrent = () => generation === generationRef.current && meetingId === activeMeetingRef.current;
 
         try {
             const response = await invoke<PaginatedTranscriptsResponse>(
@@ -102,6 +114,7 @@ export function usePaginatedTranscripts({
                 }
             );
 
+            if (!isCurrent()) return [];
             const newTranscripts = response.transcripts;
 
             if (append) {
@@ -124,8 +137,9 @@ export function usePaginatedTranscripts({
 
             return newTranscripts;
         } catch (err) {
+            if (!isCurrent()) return [];
             console.error('Failed to load transcripts:', err);
-            setError('Failed to load transcripts');
+            setError(translateUI("Failed to load transcripts"));
             return [];
         }
     }, [meetingId]);
@@ -137,12 +151,15 @@ export function usePaginatedTranscripts({
         if (isLoadingRef.current || !hasMore || !meetingId || isLoading) return;
 
         isLoadingRef.current = true;
+        const generation = generationRef.current;
         setIsLoadingMore(true);
         try {
             await loadTranscriptsAtOffset(offsetRef.current, true);
         } finally {
-            setIsLoadingMore(false);
-            isLoadingRef.current = false;
+            if (generation === generationRef.current && meetingId === activeMeetingRef.current) {
+                setIsLoadingMore(false);
+                isLoadingRef.current = false;
+            }
         }
     }, [hasMore, meetingId, loadTranscriptsAtOffset, isLoading]);
 
@@ -151,12 +168,12 @@ export function usePaginatedTranscripts({
         if (!meetingId) return;
 
         reset();
+        const generation = generationRef.current;
         setIsLoading(true);
         try {
-            await loadMetadata();
-            await loadTranscriptsAtOffset(0, false);
+            await Promise.all([loadMetadata(), loadTranscriptsAtOffset(0, false)]);
         } finally {
-            setIsLoading(false);
+            if (generation === generationRef.current && meetingId === activeMeetingRef.current) setIsLoading(false);
         }
     }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
 
@@ -167,23 +184,20 @@ export function usePaginatedTranscripts({
             return;
         }
 
-        // Avoid reloading the same meeting
-        if (loadedMeetingIdRef.current === meetingId) return;
-        loadedMeetingIdRef.current = meetingId;
-
         reset();
+        const generation = generationRef.current;
 
         const loadInitial = async () => {
             setIsLoading(true);
             try {
-                await loadMetadata();
-                await loadTranscriptsAtOffset(0, false);
+                await Promise.all([loadMetadata(), loadTranscriptsAtOffset(0, false)]);
             } finally {
-                setIsLoading(false);
+                if (generation === generationRef.current && meetingId === activeMeetingRef.current) setIsLoading(false);
             }
         };
 
         loadInitial();
+        return () => { generationRef.current++; };
     }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
 
     // Convert to segments (memoized)

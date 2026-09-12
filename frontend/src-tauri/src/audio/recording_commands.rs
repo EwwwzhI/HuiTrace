@@ -36,6 +36,8 @@ pub use super::transcription::TranscriptUpdate;
 // Simple recording state tracking
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 static STOP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static DISCARD_FOLDER: Mutex<Option<PathBuf>> = Mutex::new(None);
+static DISCARD_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
@@ -123,12 +125,14 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             .unwrap_or(0)
     );
 
+    let _capture_start_lock = super::import::CAPTURE_START_LOCK.lock().await;
+    if super::import::is_import_in_progress() { return Err("Wait for audio import to finish before recording.".into()); }
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) {
+    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_FOLDER.lock().unwrap().is_some() {
         return Err("Recording already in progress".to_string());
     }
     if is_recording_post_processing_pending() {
@@ -394,12 +398,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             .unwrap_or(0)
     );
 
+    let _capture_start_lock = super::import::CAPTURE_START_LOCK.lock().await;
+    if super::import::is_import_in_progress() { return Err("Wait for audio import to finish before recording.".into()); }
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) {
+    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_FOLDER.lock().unwrap().is_some() {
         return Err("Recording already in progress".to_string());
     }
     if is_recording_post_processing_pending() {
@@ -565,6 +571,14 @@ pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
 ) -> Result<bool, String> {
+    finish_recording(app, false).await
+}
+
+pub async fn discard_recording<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    finish_recording(app, true).await
+}
+
+async fn finish_recording<R: Runtime>(app: AppHandle<R>, discard: bool) -> Result<bool, String> {
     info!(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
@@ -575,11 +589,22 @@ pub async fn stop_recording<R: Runtime>(
         info!("Recording shutdown is already in progress");
         return Ok(false);
     };
+    if !discard && DISCARD_IN_PROGRESS.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+
+    if discard && DISCARD_FOLDER.lock().unwrap().is_some() {
+        erase_discarded_recording(&app).await?;
+        return Ok(true);
+    }
 
     // Check if recording is active
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
         return Ok(false);
+    }
+    if discard {
+        DISCARD_IN_PROGRESS.store(true, Ordering::SeqCst);
     }
 
     // Emit shutdown progress to frontend
@@ -618,6 +643,7 @@ pub async fn stop_recording<R: Runtime>(
         }
         Err(e) => {
             error!("❌ Failed to stop audio streams: {}", e);
+            *RECORDING_MANAGER.lock().unwrap() = manager_for_cleanup;
             return Err(format!("Failed to stop audio streams: {}", e));
         }
     }
@@ -648,7 +674,7 @@ pub async fn stop_recording<R: Runtime>(
         global_task.take()
     };
 
-    if let Some(task_handle) = transcription_task {
+    if let Some(mut task_handle) = transcription_task {
         info!("⏳ Waiting for ALL transcription chunks to be processed (no timeout - preserving every chunk)");
 
         // Enhanced progress monitoring during shutdown
@@ -677,7 +703,7 @@ pub async fn stop_recording<R: Runtime>(
         // Wait up to 10 minutes for transcription completion to prevent indefinite hangs
         match tokio::time::timeout(
             tokio::time::Duration::from_secs(600), // 10 minutes max
-            task_handle,
+            &mut task_handle,
         )
         .await
         {
@@ -689,6 +715,13 @@ pub async fn stop_recording<R: Runtime>(
                 // Continue anyway - the worker may have processed most chunks
             }
             Err(_) => {
+                if discard {
+                    // Never erase files while a detached worker can still write.
+                    *TRANSCRIPTION_TASK.lock().unwrap() = Some(task_handle);
+                    *RECORDING_MANAGER.lock().unwrap() = manager_for_cleanup;
+                    progress_task.abort();
+                    return Err("Transcription is still shutting down. Retry discard after it finishes.".to_string());
+                }
                 warn!("⏱️ Transcription timeout (10 minutes) reached, continuing shutdown to prevent indefinite hang");
                 // Continue shutdown even on timeout - better to lose some chunks than hang forever
             }
@@ -786,6 +819,19 @@ pub async fn stop_recording<R: Runtime>(
                 warn!("⚠️ No Whisper engine found to unload model");
             }
         }
+    }
+
+    // Discard never issues a completion token or enters the Notes save flow.
+    // Workers have drained and released their handles before deleting artifacts.
+    if discard {
+        if let Some(mut manager) = manager_for_cleanup {
+            *DISCARD_FOLDER.lock().unwrap() = manager.get_meeting_folder();
+            manager.cleanup_without_save().await;
+            drop(manager);
+        }
+        IS_RECORDING.store(false, Ordering::SeqCst);
+        erase_discarded_recording(&app).await?;
+        return Ok(true);
     }
 
     // Step 3.5: Track meeting ended analytics with privacy-safe metadata
@@ -998,6 +1044,25 @@ pub async fn stop_recording<R: Runtime>(
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
     Ok(true)
+}
+
+async fn erase_discarded_recording<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let folder = DISCARD_FOLDER.lock().unwrap().clone();
+    if let Some(folder) = folder {
+        let ctx = crate::context::current();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::database::deletion::erase_recording_folder(
+                &folder,
+                &[super::recording_preferences::get_default_recordings_folder()],
+                &ctx,
+            ).map_err(|e| e.to_string())
+        }).await.map_err(|e| e.to_string())??;
+    }
+    *DISCARD_FOLDER.lock().unwrap() = None;
+    DISCARD_IN_PROGRESS.store(false, Ordering::SeqCst);
+    app.emit("recording-discarded", ()).map_err(|e| e.to_string())?;
+    crate::tray::update_tray_menu(app);
+    Ok(())
 }
 
 /// Check if recording is active

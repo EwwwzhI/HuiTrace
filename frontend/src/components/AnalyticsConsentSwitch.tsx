@@ -1,4 +1,4 @@
-import React, { useContext, useState, useEffect } from 'react';
+import { useContext, useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Info, Loader2, Copy, Check } from 'lucide-react';
@@ -9,10 +9,15 @@ import { getVersion } from '@tauri-apps/api/app';
 import { openExternalUrl } from '@/services/systemService';
 import { Analytics } from '@/lib/analytics';
 import AnalyticsDataModal from './AnalyticsDataModal';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 const ANALYTICS_DEFAULT_OFF_MIGRATION_KEY = 'analyticsDefaultOffMigrationV1';
 
 export default function AnalyticsConsentSwitch() {
+  useUiTranslation();
   const { setIsAnalyticsOptedIn, isAnalyticsOptedIn } = useContext(AnalyticsContext);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -158,17 +163,15 @@ export default function AnalyticsConsentSwitch() {
     <>
       <div className="space-y-4">
         <div>
-          <h3 className="text-base font-semibold text-foreground mb-2">Usage Analytics</h3>
-          <p className="text-sm text-muted-foreground mb-4">
-            Usage analytics is off by default. You can turn it on to share anonymous product and performance data; no personal content is collected.
-          </p>
+          <h3 className="text-base font-semibold text-foreground mb-2">{translateUI("Usage Analytics")}</h3>
+          <p className="text-sm text-muted-foreground mb-4"> {translateUI("Usage analytics is off by default. You can turn it on to share anonymous product and performance data; no personal content is collected.")} </p>
         </div>
 
         <div className="flex items-center justify-between p-3 bg-muted rounded-lg border border-border">
           <div>
-            <h4 className="font-semibold text-foreground">Enable Analytics</h4>
+            <h4 className="font-semibold text-foreground">{translateUI("Enable Analytics")}</h4>
             <p className="text-sm text-muted-foreground">
-              {isProcessing ? 'Updating...' : 'Off unless you choose to enable it'}
+              {isProcessing ? translateUI("Updating...") : translateUI("Off unless you choose to enable it")}
             </p>
           </div>
           <div className="flex items-center gap-2 ml-4">
@@ -188,10 +191,8 @@ export default function AnalyticsConsentSwitch() {
           <div className="p-4 border rounded-lg bg-muted">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-foreground mb-1">Your User ID</div>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Share this ID when reporting issues to help us investigate your issue logs
-                </p>
+                <div className="font-medium text-foreground mb-1">{translateUI("Your User ID")}</div>
+                <p className="text-xs text-muted-foreground mb-2"> {translateUI("Share this ID when reporting issues to help us investigate your issue logs")} </p>
                 <div className="flex items-center gap-2">
                   <code className="text-xs text-foreground bg-card px-2 py-1 rounded border border-border font-mono flex-1 truncate">
                     {userId}
@@ -201,17 +202,17 @@ export default function AnalyticsConsentSwitch() {
                     variant="outline"
                     size="sm"
                     className="flex-shrink-0"
-                    title="Copy User ID"
+                    title={translateUI("Copy User ID")}
                   >
                     {isCopied ? (
                       <>
-                        <Check className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
-                        <span className="text-green-600 dark:text-green-400">Copied!</span>
+                        <Check className="w-3.5 h-3.5 text-success dark:text-success" />
+                        <span className="text-success dark:text-success">{translateUI("Copied!")}</span>
                       </>
                     ) : (
                       <>
                         <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
+                        <span>{translateUI("Copy")}</span>
                       </>
                     )}
                   </Button>
@@ -224,15 +225,11 @@ export default function AnalyticsConsentSwitch() {
         <div className="flex items-start gap-2 p-2 bg-accent rounded border border-primary/20">
           <Info className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
           <div className="text-xs text-primary">
-            <p className="mb-1">
-              Your meetings, transcripts, and recordings remain completely private and local.
-            </p>
+            <p className="mb-1"> {translateUI("Your meetings, transcripts, and recordings remain completely private and local.")} </p>
             <button
               onClick={handlePrivacyPolicyClick}
               className="text-primary hover:text-primary underline hover:no-underline"
-            >
-              View Privacy Policy
-            </button>
+            > {translateUI("View Privacy Policy")} </button>
           </div>
         </div>
       </div>

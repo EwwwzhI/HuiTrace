@@ -22,9 +22,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { openExternalUrl } from '@/services/systemService';
 import { getOllamaModels } from '@/services/providerModelsService';
 import { toast } from 'sonner';
-import { useState, useEffect, useRef, ReactNode } from 'react';
+import { useState, useEffect, ReactNode } from 'react';
 import { isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface SummaryGeneratorButtonGroupProps {
   languageSlot?: ReactNode;
@@ -35,7 +39,7 @@ interface SummaryGeneratorButtonGroupProps {
   onStopGeneration: () => void;
   customPrompt: string;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
-  availableTemplates: Array<{ id: string, name: string, description: string }>;
+  availableTemplates: Array<{ id: string, name: string, description: string, source?: 'builtin' | 'bundled' | 'custom' }>;
   selectedTemplate: string;
   onTemplateSelect: (templateId: string, templateName: string) => void;
   hasTranscripts?: boolean;
@@ -61,6 +65,7 @@ export function SummaryGeneratorButtonGroup({
   onOpenModelSettings,
   languageSlot
 }: SummaryGeneratorButtonGroupProps) {
+  useUiTranslation();
   const [isCheckingModels, setIsCheckingModels] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
@@ -92,8 +97,8 @@ export function SummaryGeneratorButtonGroup({
 
       // Check if specific model is configured
       if (!selectedModel) {
-        toast.error('No built-in AI model selected', {
-          description: 'Please select a model in settings',
+        toast.error(translateUI("No built-in AI model selected"), {
+          get description() { return translateUI("Please select a model in settings"); },
           duration: 5000,
         });
         setSettingsDialogOpen(true);
@@ -118,7 +123,7 @@ export function SummaryGeneratorButtonGroup({
       });
 
       if (!modelInfo) {
-        toast.error('Model not found', {
+        toast.error(translateUI("Model not found"), {
           description: `Could not find information for model: ${selectedModel}`,
           duration: 5000,
         });
@@ -130,7 +135,7 @@ export function SummaryGeneratorButtonGroup({
       const status = modelInfo.status;
 
       if (status.type === 'downloading') {
-        toast.info('Model download in progress', {
+        toast.info(translateUI("Model download in progress"), {
           description: `${selectedModel} is downloading (${status.progress}%). Please wait until download completes.`,
           duration: 5000,
         });
@@ -138,7 +143,7 @@ export function SummaryGeneratorButtonGroup({
       }
 
       if (status.type === 'not_downloaded') {
-        toast.error('Model not downloaded', {
+        toast.error(translateUI("Model not downloaded"), {
           description: `${selectedModel} needs to be downloaded before use. Opening model settings...`,
           duration: 5000,
         });
@@ -147,7 +152,7 @@ export function SummaryGeneratorButtonGroup({
       }
 
       if (status.type === 'corrupted') {
-        toast.error('Model file corrupted', {
+        toast.error(translateUI("Model file corrupted"), {
           description: `${selectedModel} file is corrupted. Please delete and re-download.`,
           duration: 7000,
         });
@@ -156,8 +161,8 @@ export function SummaryGeneratorButtonGroup({
       }
 
       if (status.type === 'error') {
-        toast.error('Model error', {
-          description: status.Error || 'An error occurred with the model',
+        toast.error(translateUI("Model error"), {
+          description: status.Error || translateUI("An error occurred with the model"),
           duration: 5000,
         });
         setSettingsDialogOpen(true);
@@ -165,15 +170,15 @@ export function SummaryGeneratorButtonGroup({
       }
 
       // Fallback
-      toast.error('Model not available', {
-        description: 'The selected model is not ready for use',
+      toast.error(translateUI("Model not available"), {
+        get description() { return translateUI("The selected model is not ready for use"); },
         duration: 5000,
       });
       setSettingsDialogOpen(true);
 
     } catch (error) {
       console.error('Error checking built-in AI models:', error);
-      toast.error('Failed to check model status', {
+      toast.error(translateUI("Failed to check model status"), {
         description: error instanceof Error ? error.message : String(error),
         duration: 5000,
       });
@@ -203,7 +208,7 @@ export function SummaryGeneratorButtonGroup({
       if (!models || models.length === 0) {
         // No models available, show message and open settings
         toast.error(
-          'No Ollama models found. Please download gemma2:2b from Model Settings.',
+          translateUI("No Ollama models found. Please download gemma2:2b from Model Settings."),
           { duration: 5000 }
         );
         setSettingsDialogOpen(true);
@@ -219,12 +224,12 @@ export function SummaryGeneratorButtonGroup({
       if (isOllamaNotInstalledError(errorMessage)) {
         // Ollama is not installed - show specific message with download link
         toast.error(
-          'Ollama is not installed',
+          translateUI("Ollama is not installed"),
           {
-            description: 'Please download and install Ollama to use local models.',
+            get description() { return translateUI("Please download and install Ollama to use local models."); },
             duration: 7000,
             action: {
-              label: 'Download',
+              get label() { return translateUI("Download"); },
               onClick: () => openExternalUrl('https://ollama.com/download')
             }
           }
@@ -232,7 +237,7 @@ export function SummaryGeneratorButtonGroup({
       } else {
         // Other error - generic message
         toast.error(
-          'Failed to check Ollama models. Please check if Ollama is running and download a model.',
+          translateUI("Failed to check Ollama models. Please check if Ollama is running and download a model."),
           { duration: 5000 }
         );
       }
@@ -259,15 +264,15 @@ export function SummaryGeneratorButtonGroup({
         <Button
           variant="outline"
           size="sm"
-          className="shrink-0 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 xl:px-4"
+          className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 dark:border-destructive/30 dark:text-destructive dark:hover:bg-destructive/10 xl:px-4"
           onClick={() => {
             Analytics.trackButtonClick('stop_summary_generation', 'meeting_details');
             onStopGeneration();
           }}
-          title="Stop summary generation"
+          title={translateUI("Stop summary generation")}
         >
           <Square className="xl:mr-2" size={18} fill="currentColor" />
-          <span className="hidden xl:inline">Stop</span>
+          <span className="hidden xl:inline">{translateUI("Stop")}</span>
         </Button>
       ) : (
         <Button
@@ -280,21 +285,21 @@ export function SummaryGeneratorButtonGroup({
           disabled={isCheckingModels || isModelConfigLoading}
           title={
             isModelConfigLoading
-              ? 'Loading model configuration...'
+              ? translateUI("Loading model configuration...")
               : isCheckingModels
-                ? 'Checking models...'
-                : hasSummary ? 'Regenerate AI Summary' : 'Generate AI Summary'
+                ? translateUI("Checking models...")
+                : hasSummary ? translateUI("Regenerate AI Summary") : translateUI("Generate AI Summary")
           }
         >
           {isCheckingModels || isModelConfigLoading ? (
             <>
               <Loader2 className="animate-spin xl:mr-2" size={18} />
-              <span className="hidden xl:inline">Processing...</span>
+              <span className="hidden xl:inline">{translateUI("Processing...")}</span>
             </>
           ) : (
             <>
               <Sparkles className="xl:mr-2" size={18} />
-              <span className="hidden xl:inline">{hasSummary ? 'Regenerate Summary' : 'Generate Summary'}</span>
+              <span className="hidden xl:inline">{hasSummary ? translateUI("Regenerate Summary") : translateUI("Generate Summary")}</span>
             </>
           )}
         </Button>
@@ -310,8 +315,8 @@ export function SummaryGeneratorButtonGroup({
             variant="outline"
             size="sm"
             className="shrink-0"
-            title="Summary Settings (AI Model)"
-            aria-label="Summary settings (AI model)"
+            title={translateUI("Summary Settings (AI Model)")}
+            aria-label={translateUI("Summary settings (AI model)")}
           >
             <Settings />
           </Button>
@@ -320,7 +325,7 @@ export function SummaryGeneratorButtonGroup({
           aria-describedby={undefined}
         >
           <VisuallyHidden>
-            <DialogTitle>Model Settings</DialogTitle>
+            <DialogTitle>{translateUI("Model Settings")}</DialogTitle>
           </VisuallyHidden>
           <ModelSettingsModal
             onSave={async (config) => {
@@ -344,26 +349,47 @@ export function SummaryGeneratorButtonGroup({
               variant="outline"
               size="sm"
               className="shrink-0"
-              title="Select summary template"
-              aria-label="Select summary template"
+              title={translateUI("Select summary template")}
+              aria-label={translateUI("Select summary template")}
             >
               <FileText />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {availableTemplates.map((template) => (
-              <DropdownMenuItem
-                key={template.id}
-                onClick={() => onTemplateSelect(template.id, template.name)}
-                title={template.description}
-                className="flex items-center justify-between gap-2"
-              >
-                <span>{template.name}</span>
-                {selectedTemplate === template.id && (
-                  <Check className="h-4 w-4 text-green-600" />
-                )}
-              </DropdownMenuItem>
-            ))}
+            {availableTemplates.map((template) => {
+              const source = template.source ?? (
+                template.id === 'daily_standup' || template.id === 'standard_meeting'
+                  ? 'builtin'
+                  : 'custom'
+              );
+              return (
+                <DropdownMenuItem
+                  key={template.id}
+                  onClick={() => onTemplateSelect(template.id, template.name)}
+                  title={translateUI(template.description)}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate">{translateUI(template.name)}</span>
+                    <span className="block max-w-[280px] truncate text-xs text-muted-foreground">
+                      {translateUI(template.description)}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-medium text-muted-foreground">
+                    {translateUI(
+                      source === 'builtin'
+                        ? 'Source: built-in template'
+                        : source === 'bundled'
+                          ? 'Source: bundled template'
+                          : 'Source: custom template'
+                    )}
+                  </span>
+                  {selectedTemplate === template.id && (
+                    <Check className="h-4 w-4 text-success" />
+                  )}
+                </DropdownMenuItem>
+              );
+            })}
 
           </DropdownMenuContent>
         </DropdownMenu>

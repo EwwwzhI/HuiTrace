@@ -2,7 +2,6 @@
 
 import { Summary, SummaryResponse, Transcript } from '@/types';
 import { SummaryDraftResponse } from '@/services/summaryDraftService';
-import { EditableTitle } from '@/components/EditableTitle';
 import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { AskPanel } from '@/components/AskThisMeeting/AskPanel';
 import { EmptyStateSummary } from '@/components/EmptyStateSummary';
@@ -22,6 +21,10 @@ import {
   saveMeetingSummaryLanguage,
   SummaryLanguageStorage,
 } from '@/lib/summary-language-preferences';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface SummaryPanelProps {
   meeting: {
@@ -51,7 +54,7 @@ interface SummaryPanelProps {
   summaryError: string | null;
   onRegenerateSummary: () => Promise<void>;
   getSummaryStatusMessage: (status: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error') => string;
-  availableTemplates: Array<{ id: string, name: string, description: string }>;
+  availableTemplates: Array<{ id: string, name: string, description: string, source?: 'builtin' | 'bundled' | 'custom' }>;
   selectedTemplate: string;
   onTemplateSelect: (templateId: string, templateName: string) => void;
   isModelConfigLoading?: boolean;
@@ -117,6 +120,7 @@ export function SummaryPanel({
   showCollapseButton = false,
   onCollapse,
 }: SummaryPanelProps) {
+  useUiTranslation();
   const [summaryLang, setSummaryLang] = useState<string | null>(null);
   const [summaryLangStorage, setSummaryLangStorage] = useState<SummaryLanguageStorage>('metadata');
   const [langPickerOpen, setLangPickerOpen] = useState(false);
@@ -156,8 +160,8 @@ export function SummaryPanel({
         }
       } catch (err) {
         console.error('Failed to load summary language:', err);
-        toast.warning('Could not load saved summary language', {
-          description: 'Using Auto until meeting metadata can be read.',
+        toast.warning(translateUI("Could not load saved summary language"), {
+          get description() { return translateUI("Using Auto until meeting metadata can be read."); },
         });
         if (!cancelled && languageLoadVersionRef.current === loadVersion) setSummaryLang(null);
       }
@@ -189,8 +193,8 @@ export function SummaryPanel({
             setSummaryLang(saved.language);
             setSummaryLangStorage(saved.storage);
             if (saved.storage === 'local_fallback') {
-              toast.info('Summary language saved on this device', {
-                description: 'This meeting has no recording folder, so the preference cannot be written to meeting metadata.',
+              toast.info(translateUI("Summary language saved on this device"), {
+                get description() { return translateUI("This meeting has no recording folder, so the preference cannot be written to meeting metadata."); },
               });
             }
             if (request.language) {
@@ -207,7 +211,7 @@ export function SummaryPanel({
             activeMeetingIdRef.current === request.meetingId
           ) {
             console.error('Failed to persist summary language:', err);
-            toast.error('Failed to save summary language');
+            toast.error(translateUI("Failed to save summary language"));
             setSummaryLang(request.rollback.language);
             setSummaryLangStorage(request.rollback.storage);
             return;
@@ -252,8 +256,8 @@ export function SummaryPanel({
           variant="outline"
           size="sm"
           className="shrink-0"
-          title={`Summary language: ${effectiveLangLabel}${isLocalFallbackLanguage ? ' (saved on this device)' : ''}`}
-          aria-label="Set summary language"
+          title={`Summary language: ${effectiveLangLabel}${isLocalFallbackLanguage ? translateUI(" (saved on this device)") : ''}`}
+          aria-label={translateUI("Set summary language")}
         >
           <Languages size={18} />
           {/* Language VALUE label: 2xl only (the panel is capped at 640px, so
@@ -293,10 +297,10 @@ export function SummaryPanel({
           <Button
             variant="ghost"
             size="sm"
-            className="hidden shrink-0 md:inline-flex text-muted-foreground hover:text-foreground"
+            className="ink-summary-collapse shrink-0 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={onCollapse}
-            title="Collapse summary panel"
-            aria-label="Collapse summary panel"
+            title={translateUI("Collapse summary panel")}
+            aria-label={translateUI("Collapse summary panel")}
           >
             <PanelRightClose size={18} />
           </Button>
@@ -391,7 +395,7 @@ export function SummaryPanel({
         <div className="flex items-center justify-center flex-1">
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mb-4"></div>
-            <p className="text-muted-foreground">Generating AI Summary...</p>
+            <p className="text-muted-foreground">{translateUI("Generating AI Summary...")}</p>
           </div>
         </div>
       ) : !aiSummary ? (
@@ -405,10 +409,10 @@ export function SummaryPanel({
         <div className="flex-1 overflow-y-auto min-h-0">
           {summaryResponse && (
             <div className="fixed bottom-0 left-0 right-0 bg-card shadow-lg p-4 max-h-1/3 overflow-y-auto">
-              <h3 className="text-lg font-semibold mb-2">Meeting Summary</h3>
+              <h3 className="text-lg font-semibold mb-2">{translateUI("Meeting Summary")}</h3>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-card p-4 rounded-lg shadow-sm">
-                  <h4 className="font-medium mb-1">Key Points</h4>
+                  <h4 className="font-medium mb-1">{translateUI("Key Points")}</h4>
                   <ul className="list-disc pl-4">
                     {summaryResponse.summary.key_points.blocks.map((block, i) => (
                       <li key={i} className="text-sm">{block.content}</li>
@@ -416,7 +420,7 @@ export function SummaryPanel({
                   </ul>
                 </div>
                 <div className="bg-card p-4 rounded-lg shadow-sm mt-4">
-                  <h4 className="font-medium mb-1">Action Items</h4>
+                  <h4 className="font-medium mb-1">{translateUI("Action Items")}</h4>
                   <ul className="list-disc pl-4">
                     {summaryResponse.summary.action_items.blocks.map((block, i) => (
                       <li key={i} className="text-sm">{block.content}</li>
@@ -424,7 +428,7 @@ export function SummaryPanel({
                   </ul>
                 </div>
                 <div className="bg-card p-4 rounded-lg shadow-sm mt-4">
-                  <h4 className="font-medium mb-1">Decisions</h4>
+                  <h4 className="font-medium mb-1">{translateUI("Decisions")}</h4>
                   <ul className="list-disc pl-4">
                     {summaryResponse.summary.decisions.blocks.map((block, i) => (
                       <li key={i} className="text-sm">{block.content}</li>
@@ -432,7 +436,7 @@ export function SummaryPanel({
                   </ul>
                 </div>
                 <div className="bg-card p-4 rounded-lg shadow-sm mt-4">
-                  <h4 className="font-medium mb-1">Main Topics</h4>
+                  <h4 className="font-medium mb-1">{translateUI("Main Topics")}</h4>
                   <ul className="list-disc pl-4">
                     {summaryResponse.summary.main_topics.blocks.map((block, i) => (
                       <li key={i} className="text-sm">{block.content}</li>
@@ -442,7 +446,7 @@ export function SummaryPanel({
               </div>
               {summaryResponse.raw_summary ? (
                 <div className="mt-4">
-                  <h4 className="font-medium mb-1">Full Summary</h4>
+                  <h4 className="font-medium mb-1">{translateUI("Full Summary")}</h4>
                   <p className="text-sm whitespace-pre-wrap">{summaryResponse.raw_summary}</p>
                 </div>
               ) : null}
@@ -470,8 +474,8 @@ export function SummaryPanel({
             />
           </div>
           {summaryStatus !== 'idle' && (
-            <div className={`mt-4 p-4 rounded-lg ${summaryStatus === 'error' ? 'bg-red-100 text-red-700 dark:text-red-300' :
-              summaryStatus === 'completed' ? 'bg-green-100 text-green-700 dark:text-green-400' :
+            <div className={`mt-4 p-4 rounded-lg ${summaryStatus === 'error' ? 'bg-destructive/10 text-destructive dark:text-destructive' :
+              summaryStatus === 'completed' ? 'bg-success/10 text-success dark:text-success' :
                 'bg-accent text-primary'
               }`}>
               <p className="text-sm font-medium">{getSummaryStatusMessage(summaryStatus)}</p>

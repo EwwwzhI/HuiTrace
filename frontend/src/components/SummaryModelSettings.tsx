@@ -8,12 +8,17 @@ import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal
 import { SummaryLanguageSettings } from '@/components/SummaryLanguageSettings';
 import { Switch } from './ui/switch';
 import { useConfig } from '@/contexts/ConfigContext';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface SummaryModelSettingsProps {
   refetchTrigger?: number; // Change this to trigger refetch
 }
 
 export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsProps) {
+  useUiTranslation();
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
     model: 'llama3.2:latest',
@@ -53,7 +58,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       }
     } catch (error) {
       console.error('Failed to fetch model config:', error);
-      toast.error('Failed to load model settings');
+      toast.error(translateUI("Failed to load model settings"));
     }
   }, []);
 
@@ -106,10 +111,10 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', config);
 
-      toast.success('Model settings saved successfully');
+      toast.success(translateUI("Model settings saved successfully"));
     } catch (error) {
       console.error('Error saving model config:', error);
-      toast.error('Failed to save model settings');
+      toast.error(translateUI("Failed to save model settings"));
     }
   };
 
@@ -118,8 +123,8 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">Auto Summary</h3>
-            <p className="text-sm text-muted-foreground">Auto Generating summary after meeting completion(Stopping)</p>
+            <h3 className="text-lg font-semibold text-foreground mb-2">{translateUI("Auto Summary")}</h3>
+            <p className="text-sm text-muted-foreground">{translateUI("Auto Generating summary after meeting completion(Stopping)")}</p>
           </div>
           <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} />
         </div>
@@ -128,10 +133,8 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       <SummaryLanguageSettings />
 
       <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
-        <h3 className="text-lg font-semibold mb-4">Summary Model Configuration</h3>
-        <p className="text-sm text-muted-foreground mb-6">
-          Configure the AI model used for generating meeting summaries.
-        </p>
+        <h3 className="text-lg font-semibold mb-4">{translateUI("Summary Model Configuration")}</h3>
+        <p className="text-sm text-muted-foreground mb-6"> {translateUI("Configure the AI model used for generating meeting summaries.")} </p>
 
         <ModelSettingsModal
           modelConfig={modelConfig}

@@ -3,8 +3,11 @@
 import { Section as SectionType, Block } from '@/types';
 import { BlockComponent } from './Block';
 import { EditableTitle } from '../EditableTitle';
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface SectionProps {
   section: SectionType;
@@ -41,18 +44,12 @@ export const Section: React.FC<SectionProps> = ({
   onBlockNavigate,
   onCreateNewBlock,
 }) => {
+  useUiTranslation();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const handleTitleChange = (newTitle: string) => {
     if (onTitleChange) {
       onTitleChange(sectionKey, newTitle);
-    }
-  };
-
-  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      setIsEditingTitle(false);
     }
   };
 
@@ -75,10 +72,8 @@ export const Section: React.FC<SectionProps> = ({
         {onSectionDelete && (
           <button
             onClick={() => onSectionDelete(sectionKey)}
-            className="text-gray-400 hover:text-gray-600"
-          >
-            Delete
-          </button>
+            className="text-muted-foreground hover:text-muted-foreground"
+          > {translateUI("Delete")} </button>
         )}
       </div>
       <motion.div

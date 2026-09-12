@@ -360,10 +360,10 @@ pub async fn show_recording_started_notification<R: Runtime>(
                 }
 
                 // Fallback: Use Tauri's notification API directly
-                let title = "Mityu";
+                let title = "HuiTrace";
                 let body = match meeting_name {
-                    Some(name) => format!("Recording started for meeting: {}", name),
-                    None => "Recording has started. Please inform others in the meeting that you are recording.".to_string(),
+                    Some(name) => format!("{}{}", crate::ui_language::text("Recording started for meeting: ", "已开始会议录音："), name),
+                    None => crate::ui_language::text("Recording has started. Please inform others in the meeting that you are recording.", "录音已开始，请告知其他会议参与者。").to_string(),
                 };
 
                 log_info!(
@@ -416,8 +416,8 @@ pub async fn show_recording_stopped_notification<R: Runtime>(
         }
 
         // Use direct Tauri notification as fallback for stop notification
-        let title = "Mityu";
-        let body = "Recording has stopped";
+        let title = "HuiTrace";
+        let body = crate::ui_language::text("Recording has stopped", "录音已停止");
 
         log_info!(
             "Using direct Tauri notification fallback (title_chars={}, body_chars={})",

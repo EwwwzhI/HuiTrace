@@ -1,0 +1,88 @@
+.root { container: detail / inline-size; }
+.layout { min-width: 0; }
+.tabs { display: flex; }
+.transcript { display: none; width: 100%; min-width: 0; }
+.transcript[data-active='true'] { display: flex; }
+
+.pane {
+  display: none;
+  width: 100%;
+  min-width: 0;
+}
+.pane[data-active='true'] { display: flex; }
+
+.content {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+}
+
+.rail {
+  display: none;
+}
+
+@container detail (min-width: 820px) {
+  .tabs { display: none; }
+  .transcript { display: flex; flex: 1; min-width: 360px; }
+  .pane {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    width: 50cqw;
+    overflow: hidden;
+    border-left: 1px solid hsl(var(--border));
+    transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: width;
+  }
+
+  .pane[data-collapsed='true'] {
+    width: 44px;
+  }
+
+  /* The editor keeps its final width while its viewport slides closed. */
+  .content {
+    flex-shrink: 0;
+    width: calc(50cqw - 1px);
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+    transition: opacity 180ms ease-out, transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
+  }
+
+  .pane[data-collapsed='true'] .content {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(10px);
+    transition: opacity 140ms ease-out, transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 300ms;
+  }
+
+  .rail {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 43px;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 120ms ease-out, visibility 0s 120ms;
+  }
+
+  .pane[data-collapsed='true'] .rail {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 180ms ease-out 100ms, visibility 0s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane, .content, .rail,
+  .pane[data-collapsed='true'] .content,
+  .pane[data-collapsed='true'] .rail {
+    transition: none;
+  }
+}

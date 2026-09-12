@@ -16,7 +16,6 @@
  * Semantic theme tokens only, so dark mode is automatic.
  */
 
-import React from 'react';
 import { KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLicensing } from '@/contexts/LicensingContext';

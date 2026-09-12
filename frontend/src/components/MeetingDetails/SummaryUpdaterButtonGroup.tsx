@@ -2,8 +2,12 @@
 
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, Save, Loader2, Search, FolderOpen } from 'lucide-react';
+import { Copy, Save, Loader2 } from 'lucide-react';
 import Analytics from '@/lib/analytics';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface SummaryUpdaterButtonGroupProps {
   isSaving: boolean;
@@ -24,6 +28,7 @@ export function SummaryUpdaterButtonGroup({
   onOpenFolder,
   hasSummary
 }: SummaryUpdaterButtonGroupProps) {
+  useUiTranslation();
   // Labels show from 2xl only: this group lives in the summary panel toolbar,
   // and that panel is capped at 640px wide (page-content), so the app-wide
   // `lg` label breakpoint would overflow it. Icon-only below 2xl; the title
@@ -35,8 +40,8 @@ export function SummaryUpdaterButtonGroup({
       <Button
         variant="outline"
         size="sm"
-        className={`shrink-0 ${isDirty ? 'bg-green-200' : ""}`}
-        title={isSaving ? "Saving" : "Save Changes"}
+        className={`shrink-0 ${isDirty ? 'bg-success/10' : ""}`}
+        title={isSaving ? translateUI("Saving") : translateUI("Save Changes")}
         onClick={() => {
           Analytics.trackButtonClick('save_changes', 'meeting_details');
           onSave();
@@ -46,12 +51,12 @@ export function SummaryUpdaterButtonGroup({
         {isSaving ? (
           <>
             <Loader2 className="animate-spin" />
-            <span className="hidden 2xl:inline">Saving...</span>
+            <span className="hidden 2xl:inline">{translateUI("Saving...")}</span>
           </>
         ) : (
           <>
             <Save />
-            <span className="hidden 2xl:inline">Save</span>
+            <span className="hidden 2xl:inline">{translateUI("Save")}</span>
           </>
         )}
       </Button>
@@ -60,7 +65,7 @@ export function SummaryUpdaterButtonGroup({
       <Button
         variant="outline"
         size="sm"
-        title="Copy Summary"
+        title={translateUI("Copy Summary")}
         onClick={() => {
           Analytics.trackButtonClick('copy_summary', 'meeting_details');
           onCopy();
@@ -69,7 +74,7 @@ export function SummaryUpdaterButtonGroup({
         className="shrink-0 cursor-pointer"
       >
         <Copy />
-        <span className="hidden 2xl:inline">Copy</span>
+        <span className="hidden 2xl:inline">{translateUI("Copy")}</span>
       </Button>
 
       {/* Find button */}

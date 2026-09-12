@@ -11,9 +11,35 @@ use crate::context::AuthContext;
 use crate::database::deletion::ArtifactEraseReport;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingCleanupStatus {
+    Removed,
+    #[default]
+    Absent,
+    RetainedUntrusted,
+    RetainedShared,
+    RetainedOwnershipMismatch,
+}
+
+impl RecordingCleanupStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Removed => "removed",
+            Self::Absent => "absent",
+            Self::RetainedUntrusted => "retained_untrusted",
+            Self::RetainedShared => "retained_shared",
+            Self::RetainedOwnershipMismatch => "retained_ownership_mismatch",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedMeetingDeletion {
     pub already_absent: bool,
     pub artifacts: ArtifactEraseReport,
+    pub recording_cleanup: RecordingCleanupStatus,
+    /// Logical rows are gone, but the best-effort FTS/WAL/free-page compaction
+    /// still needs a later retry. Recording cleanup is reported independently.
+    pub maintenance_pending: bool,
 }
 
 #[derive(Clone)]
@@ -358,10 +384,12 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Delete all Mityu-managed local copies for a meeting, then prove the
-    /// SQLite/FTS/free-page/WAL maintenance cycle before reporting success.
-    /// Unknown user-added files in the meeting directory are retained and
-    /// counted; storage-level forensic erasure is explicitly out of scope.
+    /// Delete tenant-scoped meeting/search rows and, when the recording folder
+    /// can be proven safe, its HuiTrace-managed artifacts. A folder that is
+    /// shared, outside the trusted root, linked, or owned by another workspace
+    /// is left untouched and reported separately; it never blocks logical
+    /// meeting deletion. Operational filesystem failures remain fatal so a
+    /// partially completed cleanup is never reported as successful.
     pub async fn delete_meeting_verified(
         &self,
         ctx: &AuthContext,
@@ -371,8 +399,16 @@ impl DatabaseManager {
         let _guard = self.deletion_lock.lock().await;
 
         // A previous crash may have committed logical deletion before VACUUM.
-        // Finish that cycle before accepting another delete request.
-        self.resume_pending_privacy_maintenance().await?;
+        // Retry it first, but do not let a persistent checkpoint/VACUUM failure
+        // make every future meeting undeletable. The content-free marker stays
+        // pending and this request performs its own tenant-scoped logical delete.
+        let mut maintenance_pending = false;
+        if self.resume_pending_privacy_maintenance().await.is_err() {
+            log::warn!(
+                "Local privacy maintenance is still pending; continuing with logical meeting deletion"
+            );
+            maintenance_pending = true;
+        }
 
         let meeting =
             crate::database::repositories::meeting::MeetingsRepository::get_meeting_metadata(
@@ -385,30 +421,74 @@ impl DatabaseManager {
             return Ok(VerifiedMeetingDeletion {
                 already_absent: true,
                 artifacts: ArtifactEraseReport::default(),
+                recording_cleanup: RecordingCleanupStatus::Absent,
+                maintenance_pending,
             });
         };
 
         let mut artifacts = ArtifactEraseReport::default();
+        let mut recording_cleanup = RecordingCleanupStatus::Absent;
         if let Some(folder_path) = meeting.folder_path.filter(|path| !path.trim().is_empty()) {
-            crate::database::deletion::ensure_folder_not_shared(
+            let shared = crate::database::repositories::meeting::MeetingsRepository::recording_folder_has_other_same_workspace_reference(
                 &self.pool,
                 ctx,
                 meeting_id,
                 &folder_path,
             )
-            .await?;
-
-            let target = PathBuf::from(folder_path);
-            let erase_ctx = ctx.clone();
-            artifacts = tokio::task::spawn_blocking(move || {
-                crate::database::deletion::erase_recording_folder(
-                    &target,
-                    &allowed_recording_roots,
-                    &erase_ctx,
-                )
-            })
             .await
-            .map_err(|error| anyhow::anyhow!("recording cleanup task failed: {error}"))??;
+            .map_err(|error| anyhow::anyhow!("check for a shared recording folder: {error}"))?;
+
+            if shared {
+                recording_cleanup = RecordingCleanupStatus::RetainedShared;
+            } else {
+                let target = PathBuf::from(folder_path);
+                let target_was_present = target.exists();
+                let erase_ctx = ctx.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::database::deletion::erase_recording_folder(
+                        &target,
+                        &allowed_recording_roots,
+                        &erase_ctx,
+                    )
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!("recording cleanup task failed: {error}"))?
+                {
+                    Ok(report) => {
+                        artifacts = report;
+                        recording_cleanup = if target_was_present {
+                            RecordingCleanupStatus::Removed
+                        } else {
+                            RecordingCleanupStatus::Absent
+                        };
+                    }
+                    Err(error) => {
+                        // These failures occur during trust/ownership validation,
+                        // before erase_recording_folder touches any artifact.
+                        // Keep the folder and continue with the database delete.
+                        let chain = format!("{error:#}").to_ascii_lowercase();
+                        recording_cleanup = if chain.contains("different workspace")
+                            || chain.contains("ownership marker")
+                            || chain.contains("restricted to the local workspace")
+                        {
+                            RecordingCleanupStatus::RetainedOwnershipMismatch
+                        } else if chain.contains("outside the managed")
+                            || chain.contains("must be an absolute path")
+                            || chain.contains("must be a real directory")
+                            || chain.contains("read recording folder metadata")
+                            || chain.contains("canonicalize recording folder")
+                        {
+                            RecordingCleanupStatus::RetainedUntrusted
+                        } else {
+                            return Err(error);
+                        };
+                        log::warn!(
+                            "Meeting recording folder was retained because it could not be safely verified (status={})",
+                            recording_cleanup.as_str()
+                        );
+                    }
+                }
+            }
         }
 
         let deleted =
@@ -417,13 +497,27 @@ impl DatabaseManager {
             return Ok(VerifiedMeetingDeletion {
                 already_absent: true,
                 artifacts,
+                recording_cleanup,
+                maintenance_pending,
             });
         }
 
-        crate::database::deletion::complete_privacy_maintenance(&self.pool).await?;
+        if crate::database::deletion::complete_privacy_maintenance(&self.pool)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "Meeting rows were deleted, but local privacy maintenance remains pending for retry"
+            );
+            maintenance_pending = true;
+        } else {
+            maintenance_pending = false;
+        }
         Ok(VerifiedMeetingDeletion {
             already_absent: false,
             artifacts,
+            recording_cleanup,
+            maintenance_pending,
         })
     }
 
@@ -470,5 +564,278 @@ impl DatabaseManager {
         log::info!("Database connection pool closed");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::migrate::Migrator;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+    #[tokio::test]
+    async fn pending_wal_maintenance_does_not_make_meetings_undeletable() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let database = temp.path().join("pending-maintenance.sqlite");
+        let recording_root = temp.path().join("recordings");
+        let meeting_folder = recording_root.join("meeting-folder");
+        std::fs::create_dir_all(&meeting_folder).expect("recording folder");
+        std::fs::write(
+            meeting_folder.join("metadata.json"),
+            br#"{"workspace_id":"local"}"#,
+        )
+        .expect("ownership marker");
+        std::fs::write(meeting_folder.join("audio.mp4"), b"managed audio").expect("managed audio");
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("secure_delete", "ON");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect_with(options)
+            .await
+            .expect("open database");
+        MIGRATOR.run(&pool).await.expect("apply migrations");
+        crate::database::deletion::complete_privacy_maintenance(&pool)
+            .await
+            .expect("finish initial maintenance");
+
+        let now = "2026-09-11T00:00:00.000Z";
+        sqlx::query(
+            "INSERT INTO meetings \
+             (id, workspace_id, title, created_at, updated_at, folder_path) \
+             VALUES ('meeting-pending-maintenance', 'local', 'Pending maintenance', ?, ?, ?)",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(meeting_folder.to_string_lossy().to_string())
+        .execute(&pool)
+        .await
+        .expect("seed meeting");
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&pool)
+            .await
+            .expect("checkpoint seed");
+
+        // Hold a read snapshot while creating newer WAL frames. A TRUNCATE
+        // checkpoint cannot finish until this reader leaves, reproducing the
+        // persistent maintenance marker that previously blocked every delete.
+        let mut reader = pool.begin().await.expect("begin reader");
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM meetings")
+            .fetch_one(&mut *reader)
+            .await
+            .expect("establish read snapshot");
+        sqlx::query(
+            "UPDATE local_privacy_maintenance SET required = 1, completed_at = NULL \
+             WHERE singleton = 1",
+        )
+        .execute(&pool)
+        .await
+        .expect("mark maintenance pending after reader snapshot");
+
+        let manager = DatabaseManager {
+            pool: pool.clone(),
+            deletion_lock: Arc::new(Mutex::new(())),
+            at_rest_encrypted: false,
+        };
+        let outcome = manager
+            .delete_meeting_verified(
+                &AuthContext::local(),
+                "meeting-pending-maintenance",
+                vec![recording_root],
+            )
+            .await
+            .expect("logical deletion must not be blocked by pending maintenance");
+
+        assert!(!outcome.already_absent);
+        assert!(outcome.maintenance_pending);
+        assert!(!meeting_folder.exists());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM meetings WHERE id = 'meeting-pending-maintenance'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("meeting count"),
+            0
+        );
+        assert!(
+            crate::database::deletion::privacy_maintenance_required(&pool)
+                .await
+                .expect("pending marker")
+        );
+
+        reader.rollback().await.expect("release reader");
+        crate::database::deletion::complete_privacy_maintenance(&pool)
+            .await
+            .expect("retry maintenance after reader leaves");
+        assert!(
+            !crate::database::deletion::privacy_maintenance_required(&pool)
+                .await
+                .expect("cleared marker")
+        );
+    }
+
+    #[tokio::test]
+    async fn untrusted_recording_folder_is_retained_without_blocking_meeting_deletion() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let database = temp.path().join("untrusted-recording.sqlite");
+        let recording_root = temp.path().join("recordings");
+        let outside_folder = temp.path().join("legacy-recording");
+        std::fs::create_dir_all(&recording_root).expect("recording root");
+        std::fs::create_dir_all(&outside_folder).expect("outside folder");
+        std::fs::write(outside_folder.join("audio.mp4"), b"must survive").expect("audio");
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("secure_delete", "ON");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect_with(options)
+            .await
+            .expect("open database");
+        MIGRATOR.run(&pool).await.expect("apply migrations");
+        crate::database::deletion::complete_privacy_maintenance(&pool)
+            .await
+            .expect("finish initial maintenance");
+
+        let now = "2026-09-11T00:00:00.000Z";
+        sqlx::query(
+            "INSERT INTO meetings \
+             (id, workspace_id, title, created_at, updated_at, folder_path) \
+             VALUES ('meeting-untrusted-recording', 'local', 'Legacy path', ?, ?, ?)",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(outside_folder.to_string_lossy().to_string())
+        .execute(&pool)
+        .await
+        .expect("seed meeting");
+
+        let manager = DatabaseManager {
+            pool: pool.clone(),
+            deletion_lock: Arc::new(Mutex::new(())),
+            at_rest_encrypted: false,
+        };
+        let outcome = manager
+            .delete_meeting_verified(
+                &AuthContext::local(),
+                "meeting-untrusted-recording",
+                vec![recording_root],
+            )
+            .await
+            .expect("untrusted folder must not block logical deletion");
+
+        assert_eq!(
+            outcome.recording_cleanup,
+            RecordingCleanupStatus::RetainedUntrusted
+        );
+        assert!(outside_folder.join("audio.mp4").exists());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM meetings WHERE id = 'meeting-untrusted-recording'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("meeting count"),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_recording_folder_is_retained_without_blocking_target_deletion() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let database = temp.path().join("shared-recording.sqlite");
+        let recording_root = temp.path().join("recordings");
+        let shared_folder = recording_root.join("shared-folder");
+        std::fs::create_dir_all(&shared_folder).expect("shared folder");
+        std::fs::write(
+            shared_folder.join("metadata.json"),
+            br#"{"workspace_id":"local"}"#,
+        )
+        .expect("ownership marker");
+        std::fs::write(shared_folder.join("audio.mp4"), b"shared audio").expect("audio");
+
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("secure_delete", "ON");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(3)
+            .connect_with(options)
+            .await
+            .expect("open database");
+        MIGRATOR.run(&pool).await.expect("apply migrations");
+        crate::database::deletion::complete_privacy_maintenance(&pool)
+            .await
+            .expect("finish initial maintenance");
+
+        let now = "2026-09-11T00:00:00.000Z";
+        for (id, title) in [
+            ("meeting-shared-target", "Shared target"),
+            ("meeting-shared-owner", "Shared owner"),
+        ] {
+            sqlx::query(
+                "INSERT INTO meetings \
+                 (id, workspace_id, title, created_at, updated_at, folder_path) \
+                 VALUES (?, 'local', ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(title)
+            .bind(now)
+            .bind(now)
+            .bind(shared_folder.to_string_lossy().to_string())
+            .execute(&pool)
+            .await
+            .expect("seed shared meeting");
+        }
+
+        let manager = DatabaseManager {
+            pool: pool.clone(),
+            deletion_lock: Arc::new(Mutex::new(())),
+            at_rest_encrypted: false,
+        };
+        let outcome = manager
+            .delete_meeting_verified(
+                &AuthContext::local(),
+                "meeting-shared-target",
+                vec![recording_root],
+            )
+            .await
+            .expect("shared folder must not block target deletion");
+
+        assert_eq!(
+            outcome.recording_cleanup,
+            RecordingCleanupStatus::RetainedShared
+        );
+        assert!(shared_folder.join("audio.mp4").exists());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM meetings WHERE id = 'meeting-shared-target'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("target count"),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM meetings WHERE id = 'meeting-shared-owner'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("owner count"),
+            1
+        );
     }
 }

@@ -4,8 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { SpeakerChips, TalkTimePanel } from './SpeakerTurns';
 import type { SpeakerTurn } from '@/lib/speakerTurns';
+import { uiI18n } from '@/i18n';
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await uiI18n.changeLanguage('en');
+});
 
 const turn = (start_ms: number, end_ms: number, speaker_label: string): SpeakerTurn => ({
   start_ms,
@@ -103,6 +107,17 @@ describe('TalkTimePanel: what the numbers are allowed to claim', () => {
     const text = document.body.textContent ?? '';
     expect(text).toContain('best-effort estimate');
     expect(text).toMatch(/has not been measured/);
+  });
+
+  it('uses the Speaker product term in the Chinese speaker count sentence', async () => {
+    await uiI18n.changeLanguage('zh-CN');
+    render(<TalkTimePanel state={{ kind: 'done', diarizedAt: 'x', turns: TURNS }} />);
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('3 Speakers已在本机完成区分');
+    expect(text).toContain('这是尽力识别的估计结果：');
+    expect(text).toContain('全部发言时长的比例');
+    expect(text).not.toContain('这是 尽力识别');
+    expect(text).not.toContain('说话人');
   });
 
   /** Naming a voice is a human act; nothing here may offer to do it. */

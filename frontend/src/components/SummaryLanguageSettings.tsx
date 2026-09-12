@@ -6,8 +6,13 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
 import { useRecentLanguages } from '@/hooks/useRecentLanguages';
 import { labelForCode } from '@/lib/summary-languages';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export function SummaryLanguageSettings() {
+  useUiTranslation();
   const { recents, pinned, addRecent, removeRecent, setPinned } = useRecentLanguages();
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -19,12 +24,9 @@ export function SummaryLanguageSettings() {
     <div className="bg-card rounded-lg border border-border p-6 shadow-sm relative">
       <div className="flex items-center gap-2 mb-2">
         <Globe size={18} className="text-muted-foreground" />
-        <h3 className="text-lg font-semibold text-foreground">Summary Language</h3>
+        <h3 className="text-lg font-semibold text-foreground">{translateUI("Summary Language")}</h3>
       </div>
-      <p className="text-sm text-muted-foreground mb-4">
-        Pin one language as the default for new meetings. Unpinned languages remain as
-        quick-switch options in the summary generator. Auto uses the dominant transcript language.
-      </p>
+      <p className="text-sm text-muted-foreground mb-4"> {translateUI("Pin one language as the default for new meetings. Unpinned languages remain as quick-switch options in the summary generator. Auto uses the dominant transcript language.")} </p>
 
       <div className="flex flex-wrap items-center gap-2">
         {recents.map((code) => {
@@ -42,7 +44,7 @@ export function SummaryLanguageSettings() {
                 type="button"
                 aria-label={isPinned ? `Unpin ${labelForCode(code)} as default` : `Pin ${labelForCode(code)} as default`}
                 aria-pressed={isPinned}
-                title={isPinned ? 'Click to unset as default' : 'Click to set as default'}
+                title={isPinned ? translateUI("Click to unset as default") : translateUI("Click to set as default")}
                 onClick={() => togglePin(code)}
                 className={`flex items-center gap-1.5 pl-3 pr-2 py-1 hover:brightness-95 active:brightness-90 ${
                   isPinned ? 'text-primary' : 'text-foreground'
@@ -73,9 +75,7 @@ export function SummaryLanguageSettings() {
               type="button"
               disabled={recents.length >= 5}
               className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-sm text-muted-foreground hover:border-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              ＋ Add language
-            </button>
+            > {translateUI("＋ Add language")} </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-auto p-0 border-0 shadow-none bg-transparent">
             <LanguagePickerPopover
@@ -94,7 +94,7 @@ export function SummaryLanguageSettings() {
       <p className="text-xs text-muted-foreground mt-3">
         {pinned
           ? `Default: ${labelForCode(pinned)} - click it again to unset. Max 5 quick-switch options.`
-          : 'Click any language to set it as your default. Max 5 quick-switch options.'}
+          : translateUI("Click any language to set it as your default. Max 5 quick-switch options.")}
       </p>
     </div>
   );

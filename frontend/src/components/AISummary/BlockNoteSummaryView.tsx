@@ -1,5 +1,6 @@
 "use client";
 
+import { useTheme } from "next-themes";
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import dynamic from 'next/dynamic';
 import { Summary, SummaryDataResponse, SummaryFormat, BlockNoteBlock } from '@/types';
@@ -11,6 +12,10 @@ import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { blocksToMarkdownSafely } from '@/lib/blocknote-markdown';
 import "@blocknote/shadcn/style.css";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 // Dynamically import BlockNote Editor to avoid SSR issues
 const Editor = dynamic(() => import('../BlockNoteEditor/Editor'), { ssr: false });
@@ -105,25 +110,21 @@ function detectSummaryFormat(
 }
 
 function LegacyUnverifiedBanner({ onRegenerate }: { onRegenerate?: () => void }) {
+  useUiTranslation();
   return (
     <div
       role="note"
-      aria-label="Legacy AI-generated summary is unverified"
-      className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
+      aria-label={translateUI("Legacy AI-generated summary is unverified")}
+      className="mb-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-warning dark:border-warning/30 dark:bg-warning/10 dark:text-warning"
     >
-      <p className="font-semibold">Legacy AI-generated summary · unverified</p>
-      <p className="mt-1 text-sm">
-        This summary predates source-linked review. Source links are unavailable,
-        so it is shown read-only and cannot be copied or exported.
-      </p>
+      <p className="font-semibold">{translateUI("Legacy AI-generated summary · unverified")}</p>
+      <p className="mt-1 text-sm"> {translateUI("This summary predates source-linked review. Source links are unavailable, so it is shown read-only and cannot be copied or exported.")} </p>
       {onRegenerate ? (
         <button
           type="button"
-          className="mt-3 rounded-md border border-amber-400 px-3 py-1.5 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-500/20"
+          className="mt-3 rounded-md border border-warning px-3 py-1.5 text-sm font-medium hover:bg-warning/10 dark:hover:bg-warning/20"
           onClick={onRegenerate}
-        >
-          Regenerate with sources
-        </button>
+        > {translateUI("Regenerate with sources")} </button>
       ) : null}
     </div>
   );
@@ -146,7 +147,9 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   onSummaryApproved,
   legacyReadOnly = false,
 }, ref) => {
+  useUiTranslation();
   const { format, data } = detectSummaryFormat(summaryData, structuredEnabled);
+  const { resolvedTheme } = useTheme();
   const [isDirty, setIsDirty] = useState(false);
   const [currentBlocks, setCurrentBlocks] = useState<Block[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -231,7 +234,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
       console.log('✅ Save successful');
     } catch {
       console.error('Summary save failed');
-      alert('Failed to save changes. Please try again.');
+      alert(translateUI("Failed to save changes. Please try again."));
     } finally {
       setIsSaving(false);
     }
@@ -323,7 +326,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
       return (
         <div className="w-full">
           <LegacyUnverifiedBanner onRegenerate={onRegenerateSummary} />
-          <div className="space-y-5" aria-label="Read-only legacy summary">
+          <div className="space-y-5" aria-label={translateUI("Read-only legacy summary")}>
             {sections.map(([key, section]) => (
               <section key={key} className="rounded-lg border border-border bg-card p-4">
                 <h3 className="font-semibold text-foreground">{section.title || key}</h3>
@@ -387,7 +390,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
                 handleEditorChange(editor.document);
               }
             }}
-            theme="light"
+            theme={resolvedTheme === "dark" ? "dark" : "light"}
           />
         </div>
       </div>

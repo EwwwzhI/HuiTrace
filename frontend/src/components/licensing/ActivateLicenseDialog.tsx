@@ -16,7 +16,7 @@
  *               copy says so explicitly.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, KeyRound, Loader2 } from 'lucide-react';
 import {
   Dialog,

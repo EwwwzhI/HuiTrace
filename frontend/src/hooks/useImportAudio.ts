@@ -4,6 +4,8 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import Analytics from '@/lib/analytics';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
+import { translateUI } from '@/i18n';
+
 
 export interface AudioFileInfo {
   path: string;
@@ -74,6 +76,7 @@ export function useImportAudio({
 
   // Cancellation guard: prevents late events from updating state after cancel
   const isCancelledRef = useRef(false);
+  const cancellingRef = useRef(false);
 
   // Set up event listeners (registered once, use refs for callbacks)
   useEffect(() => {
@@ -102,11 +105,11 @@ export function useImportAudio({
         async (event) => {
           if (isCancelledRef.current) return;
 
-          await Analytics.track('import_audio_completed', {
+          void Analytics.track('import_audio_completed', {
             success: 'true',
             duration_seconds: event.payload.duration_seconds.toString(),
             segments_count: event.payload.segments_count.toString()
-          });
+          }).catch(() => {});
 
           setStatus('complete');
           setProgress(null);
@@ -114,8 +117,8 @@ export function useImportAudio({
             await applyPinnedSummaryLanguageToMeeting(event.payload.meeting_id);
           } catch (error) {
             console.warn('Failed to apply pinned summary language to imported meeting:', error);
-            toast.warning('Could not apply default summary language', {
-              description: 'The imported meeting was saved, but the default summary language was not applied.',
+            toast.warning(translateUI("Could not apply default summary language"), {
+              description: translateUI("The imported meeting was saved, but the default summary language was not applied."),
             });
           }
           onCompleteRef.current?.(event.payload);
@@ -133,8 +136,9 @@ export function useImportAudio({
         'import-error',
         async (event) => {
           if (isCancelledRef.current) return;
+          if (cancellingRef.current && event.payload.error === 'Import cancelled') return;
 
-          await Analytics.trackError('import_audio_failed');
+          void Analytics.trackError('import_audio_failed').catch(() => {});
 
           setStatus('error');
           setError(event.payload.error);
@@ -217,13 +221,13 @@ export function useImportAudio({
 
       try {
         if (fileInfo) {
-          await Analytics.track('import_audio_started', {
+          void Analytics.track('import_audio_started', {
             file_size_bytes: fileInfo.size_bytes.toString(),
             duration_seconds: fileInfo.duration_seconds.toString(),
             language: language || 'auto',
             model_provider: provider || '',
             model_name: model || ''
-          });
+          }).catch(() => {});
         }
 
         await invoke('start_import_audio_command', {
@@ -248,13 +252,16 @@ export function useImportAudio({
 
   // Cancel ongoing import
   const cancelImport = useCallback(async () => {
-    isCancelledRef.current = true;
+    cancellingRef.current = true;
     try {
       await invoke('cancel_import_command');
       setStatus('idle');
       setProgress(null);
     } catch (err: any) {
       console.error('Failed to cancel import:', err);
+      throw err;
+    } finally {
+      cancellingRef.current = false;
     }
   }, []);
 

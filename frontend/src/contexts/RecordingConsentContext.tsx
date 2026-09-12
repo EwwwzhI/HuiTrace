@@ -1,108 +1,82 @@
 'use client';
 
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useRef,
-  useState,
-} from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { RecordingConsentDialog } from '@/components/consent/RecordingConsentDialog';
-import {
-  setRecordingConsentAcknowledged,
-  shouldPromptBeforeRecording,
-} from '@/lib/recordingConsent';
+import { setRememberRecordingPermission, shouldPromptBeforeRecording } from '@/lib/recordingConsent';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
 
-/**
- * RecordingConsentContext (BACKLOG C5).
- *
- * Owns the single, app-level pre-recording consent dialog and exposes one
- * promise-based gate — {@link RecordingConsentContextType.ensureRecordingConsent} —
- * that every recording-start path awaits. This keeps the gate in ONE place
- * regardless of which trigger started the recording (record button, sidebar
- * auto-start, tray/keyboard "start-recording-from-sidebar").
- *
- * ensureRecordingConsent():
- *  - reads the local consent flags (recording-consent.json);
- *  - if no prompt is required (already acknowledged and not "ask every time"),
- *    resolves `true` immediately — recording proceeds with no interruption;
- *  - otherwise shows the dialog and resolves `true` on confirm (persisting the
- *    acknowledgment if the user ticked "don't show again") or `false` on cancel.
- *
- * Local-first: all persistence is a local plugin-store; no network.
- */
+
 interface RecordingConsentContextType {
-  /**
-   * Resolve `true` to proceed with the recording start, `false` to abort.
-   * Shows the consent dialog only when the local gate requires it.
-   */
   ensureRecordingConsent: () => Promise<boolean>;
 }
-
 const RecordingConsentContext = createContext<RecordingConsentContextType | null>(null);
-
 export function useRecordingConsent(): RecordingConsentContextType {
   const ctx = useContext(RecordingConsentContext);
-  if (!ctx) {
-    throw new Error('useRecordingConsent must be used within a RecordingConsentProvider');
-  }
+  if (!ctx) throw new Error('useRecordingConsent must be used within a RecordingConsentProvider');
   return ctx;
 }
 
 export function RecordingConsentProvider({ children }: { children: React.ReactNode }) {
+  useUiTranslation();
   const [isOpen, setIsOpen] = useState(false);
-  // The pending gate's resolver — settled exactly once per open dialog.
-  const resolverRef = useRef<((proceed: boolean) => void) | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = useRef(false);
+  const submitting = useRef(false);
+  const resolver = useRef<((proceed: boolean) => void) | null>(null);
+
+  useEffect(() => () => { resolver.current?.(false); resolver.current = null; }, []);
 
   const settle = useCallback((proceed: boolean) => {
-    const resolve = resolverRef.current;
-    resolverRef.current = null;
+    const resolve = resolver.current;
+    resolver.current = null;
+    active.current = false;
     setIsOpen(false);
     resolve?.(proceed);
   }, []);
 
   const ensureRecordingConsent = useCallback(async (): Promise<boolean> => {
-    const mustPrompt = await shouldPromptBeforeRecording();
-    if (!mustPrompt) {
-      return true;
-    }
-
-    // If a dialog is somehow already pending (double-trigger), reuse it by
-    // rejecting the new caller's need to open a second one: resolve the previous
-    // as cancelled so we never leak a hanging promise, then open fresh.
-    if (resolverRef.current) {
-      settle(false);
-    }
-
-    return new Promise<boolean>((resolve) => {
-      resolverRef.current = resolve;
-      setIsOpen(true);
-    });
-  }, [settle]);
-
-  const handleConfirm = useCallback(
-    (dontShowAgain: boolean) => {
-      // Persist the one-time acknowledgment if requested. Best-effort: even if the
-      // store write fails, we still proceed with THIS recording (the user already
-      // confirmed); the gate will simply re-prompt next time.
-      if (dontShowAgain) {
-        setRecordingConsentAcknowledged(true).catch((error) => {
-          console.error('[RecordingConsent] Failed to persist acknowledgment:', error);
-        });
+    // Ignore duplicate starts, including while the preference is still loading.
+    if (active.current) return false;
+    active.current = true;
+    try {
+      if (!(await shouldPromptBeforeRecording())) {
+        active.current = false;
+        return true;
       }
-      settle(true);
-    },
-    [settle],
-  );
+      setError(null);
+      setIsOpen(true);
+      return new Promise<boolean>((resolve) => { resolver.current = resolve; });
+    } catch {
+      active.current = false;
+      return false;
+    }
+  }, []);
 
-  const handleCancel = useCallback(() => {
-    settle(false);
-  }, [settle]);
+  const handleConfirm = async (remember: boolean) => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      if (remember) await setRememberRecordingPermission(true);
+      // One-use native approval for this attempt; never remembered per process.
+      await invoke('confirm_recording_consent');
+      settle(true);
+    } catch {
+      setError(translateUI("Could not confirm recording permission. Please try again."));
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
 
   return (
     <RecordingConsentContext.Provider value={{ ensureRecordingConsent }}>
       {children}
-      <RecordingConsentDialog open={isOpen} onConfirm={handleConfirm} onCancel={handleCancel} />
+      <RecordingConsentDialog open={isOpen} busy={busy} error={error} onConfirm={handleConfirm} onCancel={() => { if (!submitting.current) settle(false); }} />
     </RecordingConsentContext.Provider>
   );
 }

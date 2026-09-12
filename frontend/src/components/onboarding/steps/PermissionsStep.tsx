@@ -1,12 +1,17 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Mic, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { PermissionRow } from '../shared';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export function PermissionsStep() {
+  useUiTranslation();
   const { setPermissionStatus, setPermissionsSkipped, permissions, completeOnboarding } = useOnboarding();
   const [isPending, setIsPending] = useState(false);
 
@@ -32,7 +37,7 @@ export function PermissionsStep() {
       try {
         await invoke('open_system_settings');
       } catch {
-        alert('Please enable microphone access in System Preferences > Security & Privacy > Microphone');
+        alert(translateUI("Please enable microphone access in System Preferences > Security & Privacy > Microphone"));
       }
       return;
     }
@@ -64,7 +69,7 @@ export function PermissionsStep() {
       try {
         await invoke('open_system_settings');
       } catch {
-        alert('Please enable Audio Capture in System Settings → Privacy & Security → Audio Capture');
+        alert(translateUI("Please enable Audio Capture in System Settings → Privacy & Security → Audio Capture"));
       }
       return;
     }
@@ -113,8 +118,8 @@ export function PermissionsStep() {
 
   return (
     <OnboardingContainer
-      title="Grant Permissions"
-      description="Mityu needs access to your microphone and system audio to record meetings"
+      title={translateUI("Grant Permissions")}
+      description="HuiTrace needs access to your microphone and system audio to record meetings"
       step={4}
       hideProgress={true}
       showNavigation={allPermissionsGranted}
@@ -126,7 +131,7 @@ export function PermissionsStep() {
           {/* Microphone */}
           <PermissionRow
             icon={<Mic className="w-5 h-5" />}
-            title="Microphone"
+            title={translateUI("Microphone")}
             description="Required to capture your voice during meetings"
             status={permissions.microphone}
             isPending={isPending}
@@ -136,7 +141,7 @@ export function PermissionsStep() {
           {/* System Audio */}
           <PermissionRow
             icon={<Volume2 className="w-5 h-5" />}
-            title="System Audio"
+            title={translateUI("System Audio")}
             description="Click Enable to grant Audio Capture permission"
             status={permissions.systemAudio}
             isPending={isPending}
@@ -146,21 +151,15 @@ export function PermissionsStep() {
 
         {/* Action Buttons */}
         <div className="flex flex-col gap-3 pt-4">
-          <Button onClick={handleFinish} disabled={!allPermissionsGranted} className="w-full h-11">
-            Finish Setup
-          </Button>
+          <Button onClick={handleFinish} disabled={!allPermissionsGranted} className="w-full h-11"> {translateUI("Finish Setup")} </Button>
 
           <button
             onClick={handleSkip}
-            className="text-sm text-neutral-500 hover:text-neutral-700 transition-colors"
-          >
-            I'll do this later
-          </button>
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          > {translateUI("I'll do this later")} </button>
 
           {!allPermissionsGranted && (
-            <p className="text-xs text-center text-muted-foreground">
-              Recording won't work without permissions. You can grant them later in settings.
-            </p>
+            <p className="text-xs text-center text-muted-foreground"> {translateUI("Recording won't work without permissions. You can grant them later in settings.")} </p>
           )}
         </div>
       </div>

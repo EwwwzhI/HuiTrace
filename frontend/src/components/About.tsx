@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { getVersion } from '@tauri-apps/api/app';
 import { openExternalUrl } from '@/services/systemService';
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch";
@@ -8,9 +8,14 @@ import { Button } from './ui/button';
 import { Loader2, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { APP_VERSION } from '@/lib/appVersion';
+import { translateUI, uiI18n } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 
 export function About() {
+  useUiTranslation();
     const [currentVersion, setCurrentVersion] = useState<string>(APP_VERSION);
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [isChecking, setIsChecking] = useState(false);
@@ -21,13 +26,6 @@ export function About() {
         getVersion().then(setCurrentVersion).catch(console.error);
     }, []);
 
-    const handleContactClick = async () => {
-        try {
-            await openExternalUrl('https://bluedev.dev');
-        } catch (error) {
-            console.error('Failed to open link:', error);
-        }
-    };
 
     const openExternalLink = async (url: string) => {
         try {
@@ -45,11 +43,11 @@ export function About() {
             if (info.available) {
                 setShowUpdateDialog(true);
             } else {
-                toast.success('You are running the latest version');
+                toast.success(translateUI("You are running the latest version"));
             }
         } catch (error: any) {
             console.error('Failed to check for updates:', error);
-            toast.error('Failed to check for updates: ' + (error.message || 'Unknown error'));
+            toast.error(translateUI("Failed to check for updates: ") + (error.message || translateUI("Unknown error")));
         } finally {
             setIsChecking(false);
         }
@@ -62,65 +60,58 @@ export function About() {
                 <div className="mb-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                        src="/mityu-mark.svg"
-                        alt="Mityu logo"
+                        src="/huitrace-icon-yin-wave.svg"
+                        alt={translateUI("HuiTrace logo")}
                         width={64}
                         height={64}
-                        className="mx-auto"
+                        className="mx-auto block"
                     />
                 </div>
+                <h1 className="font-heading text-[28px] font-semibold">{uiI18n.language.startsWith('zh') ? '会迹' : 'HuiTrace'}</h1>
+                {uiI18n.language.startsWith('zh') && <p className="mt-1 text-xs tracking-widest text-muted-foreground">HuiTrace</p>}
                 <span className="text-sm text-muted-foreground"> v{currentVersion}</span>
-                <p className="text-medium text-muted-foreground mt-1">
-                    Meetings captured and reviewed — entirely on your machine. No bots, no uploads, no account.
-                </p>
+                <p className="text-medium text-muted-foreground mt-1"> {translateUI("Meetings captured and reviewed — entirely on your machine. No bots, no uploads, no account.")} </p>
                 <div className="mt-3">
                     <Button
                         onClick={handleCheckForUpdates}
-                        disabled={isChecking}
+                        disabled
                         variant="outline"
                         size="sm"
                         className="text-xs"
                     >
                         {isChecking ? (
                             <>
-                                <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                                Checking...
-                            </>
+                                <Loader2 className="h-3 w-3 mr-2 animate-spin" /> {translateUI("Checking...")} </>
                         ) : (
                             <>
-                                <CheckCircle2 className="h-3 w-3 mr-2" />
-                                Check for Updates
-                            </>
+                                <CheckCircle2 className="h-3 w-3 mr-2" /> {translateUI("HuiTrace updates not configured")} </>
                         )}
                     </Button>
                     {updateInfo?.available && (
-                        <div className="mt-2 text-xs text-primary">
-                            Update available: v{updateInfo.version}
+                        <div className="mt-2 text-xs text-primary"> {translateUI("Update available: v")}{updateInfo.version}
                         </div>
                     )}
                 </div>
             </div>
 
-            <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
-                <span className="font-semibold">Validation and storage notice:</span>{' '}
-                transcription quality varies by language, microphone, overlap, and noise; the target-environment benchmark and human pilot have not been performed. Review important text against its source audio. Raw meeting audio remains local on this device until you delete the meeting.
-            </div>
+            <div className="rounded border border-warning/30 bg-warning/10 p-3 text-xs leading-relaxed text-warning">
+                <span className="font-semibold">{translateUI("Validation and storage notice:")}</span>{' '} {translateUI("transcription quality varies by language, microphone, overlap, and noise; the target-environment benchmark and human pilot have not been performed. Review important text against its source audio. Raw meeting audio remains local on this device until you delete the meeting.")} </div>
 
-            {/* Why Mityu - three pillars, aligned with the landing page copy */}
+            {/* Why HuiTrace - three pillars, aligned with the landing page copy */}
             <div className="space-y-3">
-                <h2 className="text-base font-semibold text-foreground">Why Mityu</h2>
+                <h2 className="text-base font-semibold text-foreground">{translateUI("Why HuiTrace")}</h2>
                 <div className="space-y-2">
                     <div className="bg-muted rounded p-3 hover:bg-muted transition-colors">
-                        <h3 className="font-bold text-sm text-foreground mb-1">On-device</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Recording and transcription run locally with Whisper large-v3 or Parakeet — no network needed, encrypted at rest (SQLCipher), with opt-in PII redaction.</p>
+                        <h3 className="font-bold text-sm text-foreground mb-1">{translateUI("On-device")}</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{translateUI("Recording and transcription run locally with Whisper large-v3 or Parakeet — no network needed, encrypted at rest (SQLCipher), with opt-in PII redaction.")}</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-muted transition-colors">
-                        <h3 className="font-bold text-sm text-foreground mb-1">Any meeting app</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Mityu captures your microphone and system audio on the machine itself, so it works with Zoom, Google Meet, or Microsoft Teams — no bot joins your call. Windows 10/11 (64-bit); macOS in development.</p>
+                        <h3 className="font-bold text-sm text-foreground mb-1">{translateUI("Any meeting app")}</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{translateUI("HuiTrace captures your microphone and system audio on the machine itself, so it works with Zoom, Google Meet, or Microsoft Teams — no bot joins your call. Windows 10/11 (64-bit); macOS in development.")}</p>
                     </div>
                     <div className="bg-muted rounded p-3 hover:bg-muted transition-colors">
-                        <h3 className="font-bold text-sm text-foreground mb-1">Human-approved</h3>
-                        <p className="text-xs text-muted-foreground leading-relaxed">Every AI-generated line is a labeled draft linked to its source in the transcript — nothing is final until you approve it. Bring your own key: Ollama, OpenAI, Anthropic, Groq, OpenRouter.</p>
+                        <h3 className="font-bold text-sm text-foreground mb-1">{translateUI("Human-approved")}</h3>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{translateUI("Every AI-generated line is a labeled draft linked to its source in the transcript — nothing is final until you approve it. Bring your own key: Ollama, OpenAI, Anthropic, Groq, OpenRouter.")}</p>
                     </div>
                 </div>
             </div>
@@ -128,62 +119,38 @@ export function About() {
             {/* Coming Soon - Compact */}
             <div className="bg-accent rounded p-3">
                 <p className="text-s text-primary">
-                    <span className="font-bold">Coming soon:</span> A library of on-device AI agents — drafting follow-ups, tracking action items, and more. Draft-only: nothing is sent until you approve it.
-                </p>
+                    <span className="font-bold">{translateUI("Coming soon:")}</span> {translateUI("A library of on-device AI agents — drafting follow-ups, tracking action items, and more. Draft-only: nothing is sent until you approve it.")} </p>
             </div>
 
-            {/* CTA Section - Compact */}
-            <div className="text-center space-y-2">
-                <h3 className="text-medium font-semibold text-foreground">Ready to push your business further?</h3>
-                <p className="text-s text-muted-foreground">
-                    If you&apos;re planning to build privacy-first custom AI agents or a fully tailored product for your <span className="font-bold">business</span>, we can help you build it.
-                </p>
-                <button
-                    onClick={handleContactClick}
-                    className="inline-flex items-center px-4 py-2 bg-primary hover:bg-primary/90 text-white text-sm font-medium rounded transition-colors duration-200 shadow-sm hover:shadow-md"
-                >
-                    Chat with the bluedev team
-                </button>
+            <div className="rounded-lg border border-border p-3 text-sm text-muted-foreground"> {translateUI("HuiTrace is a personal fork of Mityu, originally based on Meetily.")} <p className="mt-1 text-xs">{translateUI("Automatic updates are paused until a HuiTrace release channel is configured.")}</p>
             </div>
 
             {/* Acknowledgments - Compact */}
             <div className="pt-2 border-t border-border">
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Acknowledgments</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                    On-device transcription is powered by{' '}
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">{translateUI("Acknowledgments")}</h3>
+                <p className="text-xs text-muted-foreground leading-relaxed"> {translateUI("On-device transcription is powered by")}{' '}
                     <button onClick={() => openExternalLink('https://github.com/ggerganov/whisper.cpp')} className="underline hover:text-foreground">
                         whisper.cpp
-                    </button>{' '}
-                    (OpenAI Whisper, MIT license) and{' '}
-                    <button onClick={() => openExternalLink('https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3')} className="underline hover:text-foreground">
-                        NVIDIA&apos;s Parakeet
-                    </button>{' '}
-                    model (CC BY 4.0), with an ONNX conversion by{' '}
+                    </button>{' '} {translateUI("(OpenAI Whisper, MIT license) and")}{' '}
+                    <button onClick={() => openExternalLink('https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3')} className="underline hover:text-foreground"> {translateUI("NVIDIA's Parakeet")} </button>{' '} {translateUI("model (CC BY 4.0), with an ONNX conversion by")}{' '}
                     <button onClick={() => openExternalLink('https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx')} className="underline hover:text-foreground">
                         istupakov
                     </button>.
-                    {' '}Built-in summarization models include{' '}
+                    {' '}{translateUI("Built-in summarization models include")}{' '}
                     <button onClick={() => openExternalLink('https://huggingface.co/Qwen/Qwen3.5-2B')} className="underline hover:text-foreground">
                         Qwen 3.5
-                    </button>{' '}
-                    (Apache 2.0) and{' '}
+                    </button>{' '} {translateUI("(Apache 2.0) and")}{' '}
                     <button onClick={() => openExternalLink('https://ai.google.dev/gemma/terms')} className="underline hover:text-foreground">
                         Gemma 3
-                    </button>{' '}
-                    (subject to Google&apos;s Gemma Terms and prohibited-use policy). Model notices are included with the app.
-                    {' '}Audio conversion uses a separately bundled{' '}
+                    </button>{' '} {translateUI("(subject to Google's Gemma Terms and prohibited-use policy). Model notices are included with the app.")} {' '}{translateUI("Audio conversion uses a separately bundled")}{' '}
                     <button onClick={() => openExternalLink('https://ffmpeg.org/')} className="underline hover:text-foreground">
                         FFmpeg
-                    </button>{' '}
-                    executable (this build: LGPL v3 or later); license and source details are included with the app.
-                </p>
+                    </button>{' '} {translateUI("executable (this build: LGPL v3 or later); license and source details are included with the app.")} </p>
             </div>
 
             {/* Footer - Compact */}
             <div className="pt-2 border-t border-border text-center">
-                <p className="text-xs text-muted-foreground">
-                    Built by bluedev
-                </p>
+                <p className="text-xs text-muted-foreground"> {translateUI("Built by bluedev")} </p>
             </div>
             <AnalyticsConsentSwitch />
 

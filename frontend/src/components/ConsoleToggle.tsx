@@ -3,8 +3,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 export function ConsoleToggle() {
+  useUiTranslation();
   const [isLoading, setIsLoading] = useState(false);
   const [consoleVisible, setConsoleVisible] = useState(false);
 
@@ -58,9 +62,7 @@ export function ConsoleToggle() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <Label htmlFor="console-toggle">
-          Developer Console
-        </Label>
+        <Label htmlFor="console-toggle"> {translateUI("Developer Console")} </Label>
         <Switch
           id="console-toggle"
           checked={consoleVisible}
@@ -80,13 +82,9 @@ export function ConsoleToggle() {
           size="sm"
           onClick={handleToggleConsole}
           disabled={isLoading}
-        >
-          Toggle Console
-        </Button>
+        > {translateUI("Toggle Console")} </Button>
       </div>
-      <p className="text-sm text-muted-foreground">
-        Show or hide the developer console window. On Windows, this controls the console window. On macOS, this opens Terminal with app logs.
-      </p>
+      <p className="text-sm text-muted-foreground"> {translateUI("Show or hide the developer console window. On Windows, this controls the console window. On macOS, this opens Terminal with app logs.")} </p>
     </div>
   );
 }

@@ -1,8 +1,10 @@
 'use client';
 
-import React from 'react';
 import { X, Info, Shield } from 'lucide-react';
 import { APP_VERSION } from '@/lib/appVersion';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface AnalyticsDataModalProps {
   isOpen: boolean;
@@ -11,6 +13,7 @@ interface AnalyticsDataModalProps {
 }
 
 export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }: AnalyticsDataModalProps) {
+  useUiTranslation();
   if (!isOpen) return null;
 
   return (
@@ -20,7 +23,7 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
         <div className="flex items-center justify-between p-6 border-b border-border">
           <div className="flex items-center gap-3">
             <Shield className="w-6 h-6 text-primary" />
-            <h2 className="text-xl font-semibold text-foreground">What Analytics Collects</h2>
+            <h2 className="text-xl font-semibold text-foreground">{translateUI("What Analytics Collects")}</h2>
           </div>
           <button
             onClick={onClose}
@@ -33,105 +36,97 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
         {/* Content */}
         <div className="p-6 space-y-6">
           {/* Privacy Notice */}
-          <div className="bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/25 rounded-lg p-4">
+          <div className="bg-success/10 dark:bg-success/10 border border-success/30 dark:border-success/25 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
-              <div className="text-sm text-green-800 dark:text-green-200">
-                <p className="font-semibold mb-1">Analytics Is Optional and Content-Free</p>
-                <p>
-                  Analytics is off by default. If you enable it, Mityu sends pseudonymous usage
-                  metrics under a random installation identifier. It never sends meeting content,
-                  meeting identifiers, names, file paths, raw errors, or account details.
-                </p>
+              <Info className="w-5 h-5 text-success dark:text-success mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-success dark:text-success">
+                <p className="font-semibold mb-1">{translateUI("Analytics Is Optional and Content-Free")}</p>
+                <p> {translateUI("Analytics is off by default. If you enable it, HuiTrace sends pseudonymous usage metrics under a random installation identifier. It never sends meeting content, meeting identifiers, names, file paths, raw errors, or account details.")} </p>
               </div>
             </div>
           </div>
 
           {/* Data Categories */}
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-foreground">Data We Collect When Enabled:</h3>
+            <h3 className="text-lg font-semibold text-foreground">{translateUI("Data We Collect When Enabled:")}</h3>
 
             {/* Model Families */}
             <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">1. Model Families</h4>
+              <h4 className="font-semibold text-foreground mb-2">{translateUI("1. Model Families")}</h4>
               <ul className="text-sm text-foreground space-y-1 ml-4">
-                <li>• Transcription model family (e.g., "whisper", "parakeet")</li>
-                <li>• Summary model family (e.g., "llama", "claude", "custom")</li>
-                <li>• Model provider (e.g., "Local", "Ollama", "OpenRouter")</li>
+                <li>{translateUI("• Transcription model family (e.g., \"whisper\", \"parakeet\")")}</li>
+                <li>{translateUI("• Summary model family (e.g., \"llama\", \"claude\", \"custom\")")}</li>
+                <li>{translateUI("• Model provider (e.g., \"Local\", \"Ollama\", \"OpenRouter\")")}</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">Exact or custom model names are reduced to a fixed family bucket before sending</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">{translateUI("Exact or custom model names are reduced to a fixed family bucket before sending")}</p>
             </div>
 
             {/* Meeting Metrics */}
             <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">2. Aggregate Meeting Metrics</h4>
+              <h4 className="font-semibold text-foreground mb-2">{translateUI("2. Aggregate Meeting Metrics")}</h4>
               <ul className="text-sm text-foreground space-y-1 ml-4">
-                <li>• Recording duration (e.g., "125 seconds")</li>
-                <li>• Pause duration (e.g., "5 seconds")</li>
-                <li>• Number of transcript segments</li>
-                <li>• Number of audio chunks processed</li>
+                <li>{translateUI("• Recording duration (e.g., \"125 seconds\")")}</li>
+                <li>{translateUI("• Pause duration (e.g., \"5 seconds\")")}</li>
+                <li>{translateUI("• Number of transcript segments")}</li>
+                <li>{translateUI("• Number of audio chunks processed")}</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">Helps us optimize performance and understand usage patterns</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">{translateUI("Helps us optimize performance and understand usage patterns")}</p>
             </div>
 
             {/* Device Types */}
             <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">3. Device Types (Not Names)</h4>
+              <h4 className="font-semibold text-foreground mb-2">{translateUI("3. Device Types (Not Names)")}</h4>
               <ul className="text-sm text-foreground space-y-1 ml-4">
-                <li>• Microphone type: "Bluetooth" or "Wired" or "Unknown"</li>
-                <li>• System audio type: "Bluetooth" or "Wired" or "Unknown"</li>
+                <li>{translateUI("• Microphone type: \"Bluetooth\" or \"Wired\" or \"Unknown\"")}</li>
+                <li>{translateUI("• System audio type: \"Bluetooth\" or \"Wired\" or \"Unknown\"")}</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">Helps us improve compatibility, NOT the actual device names</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">{translateUI("Helps us improve compatibility, NOT the actual device names")}</p>
             </div>
 
             {/* Usage Patterns */}
             <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">4. App Usage Patterns</h4>
+              <h4 className="font-semibold text-foreground mb-2">{translateUI("4. App Usage Patterns")}</h4>
               <ul className="text-sm text-foreground space-y-1 ml-4">
-                <li>• App started/stopped events</li>
-                <li>• Session duration</li>
-                <li>• Feature usage (e.g., "settings changed")</li>
-                <li>• Success or error occurrence only, never the error message</li>
+                <li>{translateUI("• App started/stopped events")}</li>
+                <li>{translateUI("• Session duration")}</li>
+                <li>{translateUI("• Feature usage (e.g., \"settings changed\")")}</li>
+                <li>{translateUI("• Success or error occurrence only, never the error message")}</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">Helps us improve user experience</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">{translateUI("Helps us improve user experience")}</p>
             </div>
 
             {/* Platform Info */}
             <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">5. Platform Information</h4>
+              <h4 className="font-semibold text-foreground mb-2">{translateUI("5. Platform Information")}</h4>
               <ul className="text-sm text-foreground space-y-1 ml-4">
-                <li>• Operating-system family (e.g., "macOS", "Windows")</li>
-                <li>• App version (automatically included in all events)</li>
-                <li>• Architecture (e.g., "x86_64", "aarch64")</li>
+                <li>{translateUI("• Operating-system family (e.g., \"macOS\", \"Windows\")")}</li>
+                <li>{translateUI("• App version (automatically included in all events)")}</li>
+                <li>{translateUI("• Architecture (e.g., \"x86_64\", \"aarch64\")")}</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">Helps us prioritize platform support</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">{translateUI("Helps us prioritize platform support")}</p>
             </div>
           </div>
 
           {/* What We DON'T Collect */}
-          <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/25 rounded-lg p-4">
-            <h4 className="font-semibold text-red-900 dark:text-red-200 mb-2">What We DON'T Collect:</h4>
-            <ul className="text-sm text-red-800 dark:text-red-200 space-y-1 ml-4">
-              <li>• ❌ Meeting names or titles</li>
-              <li>• ❌ File names, file paths, or meeting folders</li>
-              <li>• ❌ Meeting transcripts or content</li>
-              <li>• ❌ Audio recordings</li>
-              <li>• ❌ Device names (only types: Bluetooth/Wired)</li>
-              <li>• ❌ Meeting IDs or the random installation ID in custom event fields</li>
-              <li>• ❌ Raw error messages, provider responses, or settings values</li>
-              <li>• ❌ Exact OS versions, user-agent strings, email, or account details</li>
+          <div className="bg-destructive/10 dark:bg-destructive/10 border border-destructive/30 dark:border-destructive/25 rounded-lg p-4">
+            <h4 className="font-semibold text-destructive dark:text-destructive mb-2">{translateUI("What We DON'T Collect:")}</h4>
+            <ul className="text-sm text-destructive dark:text-destructive space-y-1 ml-4">
+              <li>{translateUI("• ❌ Meeting names or titles")}</li>
+              <li>{translateUI("• ❌ File names, file paths, or meeting folders")}</li>
+              <li>{translateUI("• ❌ Meeting transcripts or content")}</li>
+              <li>{translateUI("• ❌ Audio recordings")}</li>
+              <li>{translateUI("• ❌ Device names (only types: Bluetooth/Wired)")}</li>
+              <li>{translateUI("• ❌ Meeting IDs or the random installation ID in custom event fields")}</li>
+              <li>{translateUI("• ❌ Raw error messages, provider responses, or settings values")}</li>
+              <li>{translateUI("• ❌ Exact OS versions, user-agent strings, email, or account details")}</li>
             </ul>
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            PostHog receives the random installation identifier only as the event&apos;s pseudonymous
-            distinct ID so events from one installation can be grouped. The identifier is not a
-            meeting ID, account ID, or email address, and it is not added to custom event fields.
-          </p>
+          <p className="text-xs text-muted-foreground"> {translateUI("PostHog receives the random installation identifier only as the event's pseudonymous distinct ID so events from one installation can be grouped. The identifier is not a meeting ID, account ID, or email address, and it is not added to custom event fields.")} </p>
 
           {/* Example Event */}
           <div className="bg-muted border border-border rounded-lg p-4">
-            <h4 className="font-semibold text-foreground mb-2">Example Event:</h4>
+            <h4 className="font-semibold text-foreground mb-2">{translateUI("Example Event:")}</h4>
             <pre className="text-xs text-foreground overflow-x-auto">
               {`{
   "event": "meeting_ended",
@@ -155,15 +150,11 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
           <button
             onClick={onClose}
             className="px-4 py-2 text-foreground bg-card border border-border rounded-md hover:bg-muted transition-colors"
-          >
-            Keep Analytics Enabled
-          </button>
+          > {translateUI("Keep Analytics Enabled")} </button>
           <button
             onClick={onConfirmDisable}
-            className="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
-          >
-            Confirm: Disable Analytics
-          </button>
+            className="px-4 py-2 text-destructive-foreground bg-destructive rounded-md hover:bg-destructive transition-colors"
+          > {translateUI("Confirm: Disable Analytics")} </button>
         </div>
       </div>
     </div>

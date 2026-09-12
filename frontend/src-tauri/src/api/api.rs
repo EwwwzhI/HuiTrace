@@ -663,30 +663,60 @@ pub async fn api_delete_meeting<R: Runtime>(
     {
         Ok(outcome) => {
             log_info!(
-                "Verified local meeting deletion completed (already_absent={}, managed_files_removed={}, retained_user_entries={})",
+                "Local meeting deletion completed (already_absent={}, recording_cleanup={}, managed_files_removed={}, retained_user_entries={}, maintenance_pending={})",
                 outcome.already_absent,
+                outcome.recording_cleanup.as_str(),
                 outcome.artifacts.managed_files_removed,
-                outcome.artifacts.retained_user_entries
+                outcome.artifacts.retained_user_entries,
+                outcome.maintenance_pending
             );
             Ok(serde_json::json!({
                 "status": "success",
-                "message": "Mityu-managed local meeting data deleted successfully",
+                "message": if outcome.maintenance_pending {
+                    "Meeting deleted; encrypted database compaction will retry automatically"
+                } else {
+                    "HuiTrace-managed local meeting data deleted successfully"
+                },
                 "already_absent": outcome.already_absent,
+                "recording_cleanup_status": outcome.recording_cleanup.as_str(),
                 "managed_files_removed": outcome.artifacts.managed_files_removed,
                 "retained_user_entries": outcome.artifacts.retained_user_entries,
-                "scope": "sqlite_fts_wal_and_mityu_managed_recording_artifacts",
+                "maintenance_pending": outcome.maintenance_pending,
+                "scope": "sqlite_fts_wal_and_huitrace_managed_recording_artifacts",
                 "storage_limitations": "SSD wear-leveling, copy-on-write snapshots, backups, exports, and other external copies are outside application-controlled deletion."
             }))
         }
-        Err(_error) => {
-            // The anyhow chain can contain a user-local recording path. Keep
-            // diagnostic logs content-free because users may export them when
-            // requesting support.
-            log_error!("Verified local meeting deletion failed; no success was reported");
-            Err(
-                "Meeting deletion did not complete; no success was reported. Check that the recording folder is under the configured Mityu recording location, close any application using its files, and retry."
-                    .to_string(),
-            )
+        Err(error) => {
+            // Classify the chain in memory, but never log or return it verbatim:
+            // it can contain a user-local recording path.
+            let chain = format!("{error:#}").to_ascii_lowercase();
+            let (reason, message) = if chain.contains("hard links") {
+                (
+                    "recording_hard_link",
+                    "A managed recording file has another hard link, so HuiTrace refused to overwrite it.",
+                )
+            } else if chain.contains("permission denied")
+                || chain.contains("access is denied")
+                || chain.contains("os error 5")
+                || chain.contains("being used by another process")
+            {
+                (
+                    "recording_file_busy",
+                    "A recording file could not be modified. Close applications using it and try again.",
+                )
+            } else if chain.contains("database is locked") || chain.contains("database is busy") {
+                (
+                    "database_busy",
+                    "The local database is busy. Please wait a moment and try again.",
+                )
+            } else {
+                (
+                    "unclassified",
+                    "Meeting deletion could not be completed. No meeting data was reported as deleted.",
+                )
+            };
+            log_error!("Local meeting deletion failed (reason={reason})");
+            Err(message.to_string())
         }
     }
 }
@@ -1136,6 +1166,57 @@ pub async fn open_meeting_folder<R: Runtime>(
             Err("Meeting not found".to_string())
         }
     }
+}
+
+/// Resolves the recorded/imported audio file for a workspace-scoped meeting.
+///
+/// The renderer receives an exact file path only after the meeting folder has
+/// passed the same managed-storage validation used for opening and deleting
+/// recordings. Imported meetings preserve their original extension (for
+/// example `audio.mp3` or `audio.m4a`), so callers must not assume `audio.mp4`.
+#[tauri::command]
+pub async fn api_get_meeting_audio_path<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Option<String>, String> {
+    let pool = state.db_manager.pool();
+    let ctx = crate::context::current();
+    let meeting = MeetingsRepository::get_meeting_metadata(pool, &ctx, &meeting_id)
+        .await
+        .map_err(|e| format!("Database error: {e}"))?;
+
+    let Some(meeting) = meeting else {
+        return Err("Meeting not found".to_string());
+    };
+    let Some(folder_path) = meeting.folder_path else {
+        return Ok(None);
+    };
+
+    let allowed_roots = [crate::audio::recording_preferences::get_default_recordings_folder()];
+    let canonical_folder = match crate::database::deletion::validate_managed_recording_folder(
+        std::path::Path::new(&folder_path),
+        &allowed_roots,
+    ) {
+        Ok(folder) => folder,
+        Err(_) => {
+            log_warn!("Playback unavailable because the meeting folder is not managed storage");
+            return Ok(None);
+        }
+    };
+
+    let audio_path = match crate::audio::retranscription::find_audio_file(&canonical_folder) {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    let canonical_audio = std::fs::canonicalize(&audio_path)
+        .map_err(|e| format!("Failed to resolve meeting audio: {e}"))?;
+    if !canonical_audio.starts_with(&canonical_folder) || !canonical_audio.is_file() {
+        log_warn!("Rejected audio file outside the validated meeting folder");
+        return Ok(None);
+    }
+
+    Ok(Some(canonical_audio.to_string_lossy().to_string()))
 }
 
 fn validate_external_url(url: &str) -> Result<url::Url, String> {

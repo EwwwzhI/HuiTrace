@@ -13,6 +13,9 @@
 
 import { Hash } from 'lucide-react';
 import type { Transcript } from '@/types';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 export interface Chapter {
   label: string;
@@ -87,6 +90,7 @@ export function TopicsTimeline({
   /** Receives the chapter's first segment id AND its start second (scroll + seek). */
   onJumpToSegment?: (segmentId: string, startSec: number) => void;
 }) {
+  useUiTranslation();
   const chapters = deriveChapters(transcripts);
   if (chapters.length === 0) return null;
   const total = Math.max(...chapters.map((c) => c.endSec));
@@ -95,16 +99,14 @@ export function TopicsTimeline({
   return (
     <div className="border-b border-border bg-background px-6 py-2.5">
       <div className="flex items-center gap-3">
-        <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-          <Hash className="h-3.5 w-3.5" aria-hidden />
-          Chapters
-        </span>
+        <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">
+          <Hash className="h-3.5 w-3.5" aria-hidden /> {translateUI("Chapters")} </span>
         {/* Chapter chips: content-hugging (proportional widths made short chapters
             unreadable), horizontally scrollable when they overflow; click → jump. */}
         <div
           className="flex flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:thin]"
           role="list"
-          aria-label="Meeting chapters"
+          aria-label={translateUI("Meeting chapters")}
         >
           {chapters.map((c, i) => (
             <button
@@ -115,8 +117,8 @@ export function TopicsTimeline({
               title={`${fmt(c.startSec)} — ${c.label}`}
               className="group inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-card pl-2 pr-2.5 transition-colors hover:border-primary/40 hover:bg-accent"
             >
-              <span className="text-[11px] tabular-nums text-primary">{fmt(c.startSec)}</span>
-              <span className="max-w-[180px] truncate text-[11px] text-muted-foreground group-hover:text-foreground">
+              <span className="text-xs tabular-nums text-primary">{fmt(c.startSec)}</span>
+              <span className="max-w-[180px] truncate text-xs text-muted-foreground group-hover:text-foreground">
                 {c.label}
               </span>
             </button>

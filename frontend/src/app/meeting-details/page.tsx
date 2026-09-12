@@ -1,16 +1,28 @@
 "use client"
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { Transcript, Summary } from "@/types";
-import PageContent from "./page-content";
+import MeetingDetailsSkeleton from './meeting-details-skeleton';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
 import { getOllamaModels } from "@/services/providerModelsService";
 import { configService } from "@/services/configService";
-import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
+
+
+let pageContentPromise: ReturnType<typeof importPageContent> | undefined;
+function importPageContent() { return import('./page-content'); }
+function loadPageContent() {
+  return pageContentPromise ??= importPageContent().catch(error => {
+    pageContentPromise = undefined;
+    throw error;
+  });
+}
+let loadedPageContent: typeof import('./page-content').default | null = null;
 
 interface MeetingDetailsResponse {
   id: string;
@@ -22,17 +34,32 @@ interface MeetingDetailsResponse {
 }
 
 function MeetingDetailsContent() {
+  useUiTranslation();
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
   const source = searchParams.get('source'); // Check if navigated from recording
+  const importAutoSummary = source === 'import' && searchParams.get('autoSummary') === '1';
+
   const initialSegmentId = searchParams.get('segment');
   const initialJumpId = searchParams.get('jump');
   const { setCurrentMeeting, refetchMeetings, stopSummaryPolling } = useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
   const router = useRouter();
-  const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [PageContent, setPageContent] = useState(() => loadedPageContent);
+  useEffect(() => {
+    let cancelled = false;
+    if (meetingId && meetingId !== 'intro-call') {
+      void loadPageContent().then(module => {
+        loadedPageContent = module.default;
+        if (!cancelled) setPageContent(() => module.default);
+      }).catch(() => {
+        if (!cancelled) setError(translateUI("Could not load the meeting page. Go back and try again."));
+      });
+    }
+    return () => { cancelled = true; };
+  }, [meetingId]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
   const [hasCheckedAutoGen, setHasCheckedAutoGen] = useState<boolean>(false);
@@ -52,6 +79,17 @@ function MeetingDetailsContent() {
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || '' });
 
+  // Derive from the loaded data rather than clearing a mirrored state in a
+  // later effect (which could erase metadata that had already arrived).
+  const meetingDetails = useMemo<MeetingDetailsResponse | null>(() => metadata?.id === meetingId ? {
+    id: metadata.id,
+    title: metadata.title,
+    created_at: metadata.created_at,
+    updated_at: metadata.updated_at,
+    transcripts,
+    folder_path: metadata.folder_path,
+  } : null, [metadata, meetingId, transcripts]);
+
   // Check if gemma3:1b model is available in Ollama
   const checkForGemmaModel = useCallback(async (): Promise<boolean> => {
     try {
@@ -70,14 +108,14 @@ function MeetingDetailsContent() {
     if (hasCheckedAutoGen) return; // Only check once
 
     // Only auto-generate if navigated from recording
-    if (source !== 'recording') {
+    if (source !== 'recording' && !importAutoSummary) {
       console.log('Not from recording navigation, skipping auto-generation');
       setHasCheckedAutoGen(true);
       return;
     }
 
     // Respect user's auto-summary toggle preference
-    if (!isAutoSummary) {
+    if (!isAutoSummary && !importAutoSummary) {
       console.log('Auto-summary is disabled in settings');
       setHasCheckedAutoGen(true);
       return;
@@ -118,7 +156,7 @@ function MeetingDetailsContent() {
     }
 
     setHasCheckedAutoGen(true);
-  }, [hasCheckedAutoGen, checkForGemmaModel, source, isAutoSummary]);
+  }, [hasCheckedAutoGen, checkForGemmaModel, source, isAutoSummary, importAutoSummary]);
 
   // Sync meeting metadata from pagination hook to meeting details state
   useEffect(() => {
@@ -127,23 +165,13 @@ function MeetingDetailsContent() {
       return;
     }
 
-    if (metadata) {
+    if (metadata && metadata.id === meetingId) {
       console.log('Meeting metadata loaded');
-
-      // Build meeting details from metadata and paginated transcripts
-      setMeetingDetails({
-        id: metadata.id,
-        title: metadata.title,
-        created_at: metadata.created_at,
-        updated_at: metadata.updated_at,
-        transcripts: transcripts, // Paginated transcripts from hook
-        folder_path: metadata.folder_path, // For retranscription feature
-      });
 
       // Sync with sidebar context
       setCurrentMeeting({ id: metadata.id, title: metadata.title });
     }
-  }, [metadata, transcripts, meetingId, setCurrentMeeting]);
+  }, [metadata, meetingId, setCurrentMeeting]);
 
   // Handle transcript loading errors
   useEffect(() => {
@@ -166,7 +194,6 @@ function MeetingDetailsContent() {
 
   // Reset states when meetingId changes (prevent race conditions)
   useEffect(() => {
-    setMeetingDetails(null);
     setMeetingSummary(null);
     setError(null);
     setIsLoading(true);
@@ -190,7 +217,7 @@ function MeetingDetailsContent() {
 
     if (!meetingId || meetingId === 'intro-call') {
       console.warn('No valid meeting ID in URL');
-      setError("No meeting selected");
+      setError(translateUI("No meeting selected"));
       setIsLoading(false);
       Analytics.trackPageView('meeting_details');
       return;
@@ -198,16 +225,17 @@ function MeetingDetailsContent() {
 
     console.log('Valid meeting ID found; fetching details');
 
-    setMeetingDetails(null);
     setMeetingSummary(null);
     setError(null);
     setIsLoading(true);
 
+    let cancelled = false;
     const fetchMeetingSummary = async () => {
       try {
         const summary = await invoke('api_get_summary', {
           meetingId: meetingId,
         }) as any;
+        if (cancelled) return;
 
         console.log('Meeting summary response received');
 
@@ -299,6 +327,7 @@ function MeetingDetailsContent() {
         console.log('Legacy summary formatted');
         setMeetingSummary(formattedSummary);
       } catch (error) {
+        if (cancelled) return;
         console.error('Error fetching meeting summary');
         // Don't set error state for summary fetch failure, set to null to show generate button
         setMeetingSummary(null);
@@ -309,11 +338,12 @@ function MeetingDetailsContent() {
       try {
         await fetchMeetingSummary();
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     loadData();
+    return () => { cancelled = true; };
   }, [meetingId]);
 
   // Auto-generation check: runs when meeting is loaded with no summary
@@ -325,7 +355,7 @@ function MeetingDetailsContent() {
       // 3. Meeting has transcripts
       // 4. Haven't checked yet
       if (
-        meetingDetails &&
+        !isLoading && meetingDetails &&
         meetingSummary === null &&
         meetingDetails.transcripts &&
         meetingDetails.transcripts.length > 0 &&
@@ -337,32 +367,30 @@ function MeetingDetailsContent() {
     };
 
     checkAutoGen();
-  }, [meetingDetails, meetingSummary, hasCheckedAutoGen, setupAutoGeneration]);
+  }, [isLoading, meetingDetails, meetingSummary, hasCheckedAutoGen, setupAutoGeneration]);
 
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-center">
-          <p className="text-red-500 mb-4">{error}</p>
+          <p className="text-destructive mb-4">{error}</p>
           <button
             onClick={() => router.push('/')}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-          >
-            Go Back
-          </button>
+            className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+          > {translateUI("Go Back")} </button>
         </div>
       </div>
     );
   }
 
   // Show loading spinner while initial data loads
-  if ((isLoading || isLoadingTranscripts) || !meetingDetails) {
-    return <div className="flex items-center justify-center h-screen">
-      <LoaderIcon className="animate-spin size-6 " />
-    </div>;
+  if (isLoadingTranscripts || !meetingDetails || meetingDetails.id !== meetingId || !PageContent) {
+    return <MeetingDetailsSkeleton meetingId={meetingId} />;
   }
 
   return <PageContent
+    key={meetingId}
+    isSummaryLoading={isLoading}
     meeting={meetingDetails}
     summaryData={meetingSummary}
     initialSegmentId={initialSegmentId}
@@ -386,14 +414,18 @@ function MeetingDetailsContent() {
   />;
 }
 
+function MeetingDetailsRoute() {
+  useUiTranslation();
+  const params = useSearchParams();
+  // Reset all per-meeting state synchronously, before the new record paints.
+  return <MeetingDetailsContent key={params.get('id')} />;
+}
+
 export default function MeetingDetails() {
+  useUiTranslation();
   return (
-    <Suspense fallback={
-      <div className="flex items-center justify-center h-screen">
-        <LoaderIcon className="animate-spin size-6" />
-      </div>
-    }>
-      <MeetingDetailsContent />
+    <Suspense fallback={<MeetingDetailsSkeleton />}>
+      <MeetingDetailsRoute />
     </Suspense>
   );
 }

@@ -74,6 +74,7 @@ pub mod learning;
 /// lazy/fail-open, and expiry gates ONLY new capture (recording/import) — never
 /// existing data.
 pub mod licensing;
+mod ui_language;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -142,8 +143,7 @@ async fn start_recording<R: Runtime>(
     // consumed before any recording implementation can be entered.
     recording_consent::consume_recording_start_authorization(&app, &consent_ticket)?;
 
-    // Licensing gate (ADR-0023 §5): TrialExpired/Revoked block starting a NEW
-    // recording; Trial/Licensed pass. Existing data is never gated.
+    // Legacy compatibility hook; HuiTrace has no commercial capture restriction.
     licensing::commands::ensure_capture_allowed(&app).await?;
 
     if is_recording().await {
@@ -257,6 +257,16 @@ async fn stop_recording<R: Runtime>(
             Err(format!("Failed to stop recording: {}", e))
         }
     }
+}
+
+#[tauri::command]
+async fn discard_recording<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    let result = audio::recording_commands::discard_recording(app.clone()).await;
+    if !audio::recording_commands::is_recording().await {
+        RECORDING_FLAG.store(false, Ordering::SeqCst);
+        tray::update_tray_menu(&app);
+    }
+    result
 }
 
 #[tauri::command]
@@ -592,6 +602,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
+            discard_recording,
             is_recording,
             get_transcription_status,
             analytics::commands::init_analytics,
@@ -661,6 +672,7 @@ pub fn run() {
             get_audio_devices,
             trigger_microphone_permission,
             recording_consent::authorize_recording_start,
+            recording_consent::confirm_recording_consent,
             start_recording_with_devices,
             start_recording_with_devices_and_meeting,
             start_audio_level_monitoring,
@@ -720,6 +732,7 @@ pub fn run() {
             api::api_get_pending_recording_post_processing,
             api::api_abandon_recording_post_processing,
             api::open_meeting_folder,
+            api::api_get_meeting_audio_path,
             api::open_external_url,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
@@ -729,6 +742,7 @@ pub fn run() {
             api::api_get_redaction_config,
             api::api_set_redaction_config,
             // Licensing & trial commands (ADR-0023)
+            ui_language::set_ui_language,
             licensing::commands::get_licensing_status,
             licensing::commands::activate_license,
             licensing::commands::deactivate_license,
@@ -840,7 +854,11 @@ pub fn run() {
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
-            // Import/retranscription commands are intentionally not exposed in
+            audio::import::select_and_validate_audio_command,
+            audio::import::start_import_audio_command,
+            audio::import::cancel_import_command,
+            audio::import::is_import_in_progress_command,
+            // Retranscription commands remain unexposed in
             // v1.0.4. Their UI flag is forced off until every filesystem path is
             // resolved from tenant-scoped Rust state rather than renderer input.
         ])

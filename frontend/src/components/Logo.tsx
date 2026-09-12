@@ -2,37 +2,39 @@ import React from "react";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
+import { translateUI, uiI18n } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface LogoProps {
     isCollapsed: boolean;
 }
 
 const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(({ isCollapsed }, ref) => {
+  useUiTranslation();
   return (
     <Dialog aria-describedby={undefined}>
       {isCollapsed ? (
         <DialogTrigger asChild>
-          <button ref={ref} className="flex items-center justify-start mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity">
+          <button ref={ref} aria-label={translateUI("About HuiTrace")} className="flex items-center justify-start cursor-pointer rounded-xl border-none bg-transparent p-1 transition-colors hover:bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/mityu-mark.svg" alt="Mityu" width={32} height={32} />
+            <img src="/huitrace-icon-yin-wave.svg" alt="HuiTrace" width={30} height={30} className="block shrink-0" />
           </button>
         </DialogTrigger>
       ) : (
         <DialogTrigger asChild>
-          {/* Premium wordmark: product mark + gradient lowercase wordmark (bluedev
-              brand DNA), a quiet hover surface instead of the old washed pill. */}
-          <button className="group -mx-1 flex items-center gap-2 rounded-lg px-1 py-0.5 transition-colors hover:bg-muted">
+          <button ref={ref} aria-label={translateUI("About HuiTrace")} className="group -mx-1 flex items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/mityu-mark.svg" alt="" width={26} height={26} className="shrink-0" />
-            <span className="bg-gradient-to-r from-primary to-[#4B78FF] bg-clip-text text-[17px] font-bold leading-none tracking-tight text-transparent">
-              mityu
+            <img src="/huitrace-icon-yin-wave-small.svg" alt="" width={24} height={24} className="block shrink-0" />
+            <span className="font-heading text-[15px] font-semibold leading-none tracking-tight text-foreground">
+              {uiI18n.language.startsWith('zh') ? '会迹' : 'HuiTrace'}
             </span>
           </button>
         </DialogTrigger>
       )}
       <DialogContent>
         <VisuallyHidden>
-          <DialogTitle>About Mityu</DialogTitle>
+          <DialogTitle>{translateUI("About HuiTrace")}</DialogTitle>
         </VisuallyHidden>
         <About />
       </DialogContent>

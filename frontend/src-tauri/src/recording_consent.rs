@@ -11,8 +11,11 @@ use crate::context;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
+
+#[path = "recording_consent_session.rs"]
+mod session;
 
 const RECORDING_CONSENT_TICKET_TTL: Duration = Duration::from_secs(60);
 const CONSENT_REQUIRED_ERROR: &str =
@@ -42,6 +45,9 @@ enum TicketValidationError {
 #[derive(Debug, Default)]
 pub struct RecordingConsentTicketState {
     current: Mutex<Option<RecordingConsentTicket>>,
+    // Serialize one-use dialog approvals; never persist this acknowledgment or accept it
+    // as an authorization ticket. A new process always starts unconfirmed.
+    session: tokio::sync::Mutex<session::ConsentSession>,
 }
 
 impl RecordingConsentTicketState {
@@ -91,39 +97,48 @@ impl RecordingConsentTicketState {
     }
 }
 
-/// Show a Rust-owned confirmation and issue a one-time recording authorization.
-///
-/// Keeping the decisive confirmation outside the WebView means a renderer bug
-/// or injected script cannot silently mint a capture ticket. The renderer's
-/// richer consent screen remains useful guidance, while this native prompt is
-/// the security boundary immediately before capture. The ticket is never
-/// persisted or logged.
+/// Record an explicit confirmation from the app's themed consent dialog.
+/// This approval is consumed by the next authorization request only.
 #[tauri::command]
-pub async fn authorize_recording_start<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
-    let dialog_app = app.clone();
-    let confirmed = tauri::async_runtime::spawn_blocking(move || {
-        dialog_app
-            .dialog()
-            .message(
-                "Start recording only after informing all participants and confirming you have permission under the applicable rules.",
-            )
-            .title("Confirm recording permission")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::YesNo)
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| "Recording consent confirmation is temporarily unavailable.".to_string())?;
-
-    if !confirmed {
-        return Err(CONSENT_REQUIRED_ERROR.to_string());
-    }
-
+pub async fn confirm_recording_consent<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let ctx = context::current();
     let state = app.state::<RecordingConsentTicketState>();
-    state.issue_at(ctx.tenant_id.as_str(), ctx.user_id.as_str(), Instant::now())
+    state
+        .session
+        .lock()
+        .await
+        .confirm(ctx.tenant_id.as_str(), ctx.user_id.as_str());
+    Ok(())
 }
 
+/// Issue a ticket only for a remembered preference or a fresh dialog approval.
+#[tauri::command]
+pub async fn authorize_recording_start<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let ctx = context::current();
+    let state = app.state::<RecordingConsentTicketState>();
+    let confirmed = state
+        .session
+        .lock()
+        .await
+        .take_confirmation(ctx.tenant_id.as_str(), ctx.user_id.as_str());
+    let remembered = app
+        .store("recording-consent.json")
+        .ok()
+        .is_some_and(|store| {
+            store
+                .get("recordingConsentAcknowledged")
+                .and_then(|v| v.as_bool())
+                == Some(true)
+                && store
+                    .get("recordingConsentAlwaysAsk")
+                    .and_then(|v| v.as_bool())
+                    != Some(true)
+        });
+    if !confirmed && !remembered {
+        return Err(CONSENT_REQUIRED_ERROR.to_string());
+    }
+    state.issue_at(ctx.tenant_id.as_str(), ctx.user_id.as_str(), Instant::now())
+}
 /// Consume an authorization before entering any recording-start implementation.
 pub fn consume_recording_start_authorization<R: Runtime>(
     app: &AppHandle<R>,

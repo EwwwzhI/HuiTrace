@@ -1,30 +1,33 @@
-import React from 'react';
 import { Lock, Sparkles, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 export function WelcomeStep() {
+  useUiTranslation();
   const { goNext } = useOnboarding();
 
   const features = [
     {
       icon: Lock,
-      title: 'Your data never leaves your device',
+      get title() { return translateUI("Your data never leaves your device"); },
     },
     {
       icon: Sparkles,
-      title: 'Intelligent summaries & insights',
+      get title() { return translateUI("Intelligent summaries & insights"); },
     },
     {
       icon: Cpu,
-      title: 'Works offline, no cloud required',
+      get title() { return translateUI("Works offline, no cloud required"); },
     },
   ];
 
   return (
     <OnboardingContainer
-      title="Welcome to Mityu"
+      title={translateUI("Welcome to HuiTrace")}
       description="Record. Transcribe. Summarize. All on your device."
       step={1}
       hideProgress={true}
@@ -55,10 +58,8 @@ export function WelcomeStep() {
           <Button
             onClick={goNext}
             className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground"
-          >
-            Get Started
-          </Button>
-          <p className="text-xs text-center text-muted-foreground">Takes less than 3 minutes</p>
+          > {translateUI("Get Started")} </Button>
+          <p className="text-xs text-center text-muted-foreground">{translateUI("Takes less than 3 minutes")}</p>
         </div>
       </div>
     </OnboardingContainer>

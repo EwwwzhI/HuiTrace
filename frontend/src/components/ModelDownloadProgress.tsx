@@ -1,6 +1,8 @@
-import React from 'react';
 import { ModelStatus } from '../lib/whisper';
-import { Button } from './ui/button';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface ModelDownloadProgressProps {
   status: ModelStatus;
@@ -9,6 +11,7 @@ interface ModelDownloadProgressProps {
 }
 
 export function ModelDownloadProgress({ status, modelName, onCancel }: ModelDownloadProgressProps) {
+  useUiTranslation();
   if (typeof status !== 'object' || !('Downloading' in status)) {
     return null;
   }
@@ -22,7 +25,7 @@ export function ModelDownloadProgress({ status, modelName, onCancel }: ModelDown
         <div className="flex items-center space-x-2">
           <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
           <span className="text-sm font-medium text-primary">
-            {isCompleted ? 'Finalizing...' : `Downloading ${modelName}`}
+            {isCompleted ? translateUI("Finalizing...") : `Downloading ${modelName}`}
           </span>
         </div>
       </div>
@@ -35,17 +38,15 @@ export function ModelDownloadProgress({ status, modelName, onCancel }: ModelDown
           />
         </div>
         <div className="flex justify-between text-xs text-primary mt-1">
-          <span>{Math.round(progress)}% complete</span>
+          <span>{Math.round(progress)}{translateUI("% complete")}</span>
           {!isCompleted && (
-            <span className="animate-pulse">Downloading...</span>
+            <span className="animate-pulse">{translateUI("Downloading...")}</span>
           )}
         </div>
       </div>
       
       {isCompleted && (
-        <div className="mt-2 text-xs text-green-700 dark:text-green-400">
-          ✓ Download completed, loading model...
-        </div>
+        <div className="mt-2 text-xs text-success dark:text-success"> {translateUI("✓ Download completed, loading model...")} </div>
       )}
     </div>
   );
@@ -58,6 +59,7 @@ interface ProgressRingProps {
 }
 
 export function ProgressRing({ progress, size = 40, strokeWidth = 3 }: ProgressRingProps) {
+  useUiTranslation();
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
   const strokeDasharray = circumference;
@@ -74,7 +76,7 @@ export function ProgressRing({ progress, size = 40, strokeWidth = 3 }: ProgressR
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="#e5e7eb"
+          stroke="hsl(var(--border))"
           strokeWidth={strokeWidth}
           fill="transparent"
         />
@@ -82,7 +84,7 @@ export function ProgressRing({ progress, size = 40, strokeWidth = 3 }: ProgressR
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke="#3b82f6"
+          stroke="hsl(var(--primary))"
           strokeWidth={strokeWidth}
           strokeDasharray={strokeDasharray}
           strokeDashoffset={strokeDashoffset}
@@ -105,6 +107,7 @@ interface DownloadSummaryProps {
 }
 
 export function DownloadSummary({ totalModels, downloadedModels, totalSizeMb }: DownloadSummaryProps) {
+  useUiTranslation();
   const formatSize = (mb: number) => {
     if (mb >= 1000) return `${(mb / 1000).toFixed(1)}GB`;
     return `${mb}MB`;
@@ -114,16 +117,12 @@ export function DownloadSummary({ totalModels, downloadedModels, totalSizeMb }: 
     <div className="bg-muted rounded-lg p-3 text-sm">
       <div className="flex items-center justify-between">
         <span className="text-foreground">
-          📦 {downloadedModels} of {totalModels} models available
-        </span>
+          📦 {downloadedModels} {translateUI("of")} {totalModels} {translateUI("models available")} </span>
         <span className="text-muted-foreground">
-          💾 {formatSize(totalSizeMb)} total
-        </span>
+          💾 {formatSize(totalSizeMb)} {translateUI("total")} </span>
       </div>
       {downloadedModels > 0 && (
-        <div className="mt-1 text-xs text-green-600 dark:text-green-400">
-          ✓ Models run locally - no internet required for transcription
-        </div>
+        <div className="mt-1 text-xs text-success dark:text-success"> {translateUI("✓ Models run locally - no internet required for transcription")} </div>
       )}
     </div>
   );

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64">
+  <title>会迹 · 黑白之间，声声相应</title>
+  <circle cx="32" cy="32" r="29" fill="#fcfbf7"/>
+  <path d="M32 3 A29 29 0 0 0 32 61 A14.5 14.5 0 0 1 32 32 A14.5 14.5 0 0 0 32 3Z" fill="#141619" transform="rotate(40 32 32)"/>
+  <!-- Opposite-color voices take the place of the two traditional eyes. -->
+  <g id="voices">
+    <g fill="#fcfbf7">
+      <rect x="34.82" y="17.89" width="3" height="6" rx="1.5"/>
+      <rect x="39.82" y="14.39" width="3" height="13" rx="1.5"/>
+      <rect x="44.82" y="16.89" width="3" height="8" rx="1.5"/>
+    </g>
+    <g fill="#141619">
+      <rect x="16.18" y="39.11" width="3" height="8" rx="1.5"/>
+      <rect x="21.18" y="36.61" width="3" height="13" rx="1.5"/>
+      <rect x="26.18" y="40.11" width="3" height="6" rx="1.5"/>
+    </g>
+  </g>
+  <!-- A quiet neutral edge keeps both halves visible on light and dark desktops. -->
+  <circle cx="32" cy="32" r="29" fill="none" stroke="#898a88" stroke-width="0.6"/>
+</svg>

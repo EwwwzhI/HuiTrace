@@ -10,6 +10,10 @@ import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatSummaryModelSizeLabelFromMb } from '@/lib/onboarding-summary-model';
 import { openExternalUrl } from '@/services/systemService';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface ModelInfo {
   name: string;
@@ -43,6 +47,7 @@ export function BuiltInModelManager({
   onModelSelect,
   layout = 'inline',
 }: BuiltInModelManagerProps) {
+  useUiTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hasFetched, setHasFetched] = useState<boolean>(false);
@@ -65,7 +70,7 @@ export function BuiltInModelManager({
       }
     } catch (error) {
       console.error('Failed to fetch built-in AI models:', error);
-      toast.error('Failed to load models');
+      toast.error(translateUI("Failed to load models"));
     } finally {
       setIsLoading(false);
       setHasFetched(true);
@@ -261,9 +266,7 @@ export function BuiltInModelManager({
   if (isLoading && downloadingModels.size === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" />
-        Loading models...
-      </div>
+        <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" /> {translateUI("Loading models...")} </div>
     );
   }
 
@@ -271,9 +274,7 @@ export function BuiltInModelManager({
   if (hasFetched && models.length === 0) {
     return (
       <Alert>
-        <AlertDescription>
-          No models found. Download a model to get started with Built-in AI.
-        </AlertDescription>
+        <AlertDescription> {translateUI("No models found. Download a model to get started with Built-in AI.")} </AlertDescription>
       </Alert>
     );
   }
@@ -281,7 +282,7 @@ export function BuiltInModelManager({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <h4 className="text-sm font-bold">{translateUI("Built-in AI Models")}</h4>
       </div>
 
       <div
@@ -325,27 +326,19 @@ export function BuiltInModelManager({
                     <span className="min-w-0 break-words text-base font-bold leading-snug text-foreground">{model.display_name || model.name}</span>
                     {isAvailable && (
                       <>
-                        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
-                          <span className="h-2 w-2 rounded-full bg-green-600"></span>
-                          Ready
-                        </span>
+                        <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-success dark:text-success">
+                          <span className="h-2 w-2 rounded-full bg-success"></span> {translateUI("Ready")} </span>
                         {selectedModel === model.name && (
-                          <span className="shrink-0 rounded bg-accent px-2 py-0.5 text-xs font-medium text-primary">
-                            Selected
-                          </span>
+                          <span className="shrink-0 rounded bg-accent px-2 py-0.5 text-xs font-medium text-primary"> {translateUI("Selected")} </span>
                         )}
                       </>
                     )}
                     {isCorrupted && (
-                      <span className="flex shrink-0 items-center gap-1 rounded bg-red-100 dark:bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-300">
-                        <BadgeAlert className="h-3 w-3" />
-                        Corrupted
-                      </span>
+                      <span className="flex shrink-0 items-center gap-1 rounded bg-destructive/10 dark:bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive dark:text-destructive">
+                        <BadgeAlert className="h-3 w-3" /> {translateUI("Corrupted")} </span>
                     )}
                     {isError && (
-                      <span className="shrink-0 rounded bg-red-100 dark:bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-300">
-                        Error
-                      </span>
+                      <span className="shrink-0 rounded bg-destructive/10 dark:bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive dark:text-destructive"> {translateUI("Error")} </span>
                     )}
                   </div>
                 </div>
@@ -361,9 +354,7 @@ export function BuiltInModelManager({
                         downloadModel(model.name);
                       }}
                     >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </Button>
+                      <Download className="mr-2 h-4 w-4" /> {translateUI("Download")} </Button>
                   )}
                   {/* Downloading - Show Cancel button */}
                   {modelIsDownloading && (
@@ -375,9 +366,7 @@ export function BuiltInModelManager({
                         e.stopPropagation();
                         cancelDownload(model.name);
                       }}
-                    >
-                      Cancel
-                    </Button>
+                    > {translateUI("Cancel")} </Button>
                   )}
                   {/* Error - Show Retry button */}
                   {isError && !modelIsDownloading && (
@@ -390,9 +379,7 @@ export function BuiltInModelManager({
                         downloadModel(model.name);
                       }}
                     >
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      Retry
-                    </Button>
+                      <RefreshCw className="mr-2 h-4 w-4" /> {translateUI("Retry")} </Button>
                   )}
                   {/* Corrupted - Show both Retry and Delete buttons */}
                   {isCorrupted && !modelIsDownloading && (
@@ -405,9 +392,7 @@ export function BuiltInModelManager({
                           downloadModel(model.name);
                         }}
                       >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Retry
-                      </Button>
+                        <RefreshCw className="mr-2 h-4 w-4" /> {translateUI("Retry")} </Button>
                       <Button
                         variant="outline"
                         size="sm"
@@ -416,20 +401,18 @@ export function BuiltInModelManager({
                           deleteModel(model.name);
                         }}
                       >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </Button>
+                        <Trash2 className="mr-2 h-4 w-4" /> {translateUI("Delete")} </Button>
                     </>
                   )}
                   {/* Available - Show small trash icon (only if not currently selected) */}
                   {isAvailable && !modelIsDownloading && selectedModel !== model.name && (
                     <button
-                      className="p-2 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-red-600 dark:text-red-400"
+                      className="p-2 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-destructive dark:text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteModel(model.name);
                       }}
-                      title="Delete model"
+                      title={translateUI("Delete model")}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -441,23 +424,23 @@ export function BuiltInModelManager({
                   <p className="mb-1">{model.description}</p>
                 )}
                 {(isError || isCorrupted) && (
-                  <p className="mb-1 text-xs text-red-600 dark:text-red-400">
-                    {isError && typeof model.status === 'object' && 'Error' in model.status
+                  <p className="mb-1 text-xs text-destructive dark:text-destructive">
+                    {isError && typeof model.status === 'object' && translateUI("Error") in model.status
                       ? (model.status as any).Error
                       : isCorrupted
-                      ? 'File is corrupted. Retry download or delete.'
-                      : 'An error occurred'}
+                      ? translateUI("File is corrupted. Retry download or delete.")
+                      : translateUI("An error occurred")}
                   </p>
                 )}
                 <div className="text-xs text-muted-foreground">
-                  <span>{formatSummaryModelSizeLabelFromMb(model.size_mb)} • {model.context_size} tokens • </span>
+                  <span>{formatSummaryModelSizeLabelFromMb(model.size_mb)} • {model.context_size} {translateUI("tokens •")} </span>
                   <button
                     type="button"
                     className="underline hover:text-foreground"
                     onClick={(event) => {
                       event.stopPropagation();
                       void openExternalUrl(model.license_url).catch(() => {
-                        toast.error('Could not open the model terms');
+                        toast.error(translateUI("Could not open the model terms"));
                       });
                     }}
                   >
@@ -471,7 +454,7 @@ export function BuiltInModelManager({
               {modelIsDownloading && progress !== undefined && (
                 <div className="mt-3 pt-3 border-t border-border">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-foreground">Downloading...</span>
+                    <span className="text-sm font-medium text-foreground">{translateUI("Downloading...")}</span>
                     <span className="text-sm font-semibold text-foreground">
                       {Math.round(progress)}%
                     </span>

@@ -20,6 +20,10 @@
  */
 
 import { Users } from 'lucide-react';
+import { translateUI, uiI18n } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 /**
  * Megabytes actually fetched over the network, not what lands on disk: the
@@ -27,6 +31,11 @@ import { Users } from 'lucide-react';
  * side by `models::tests::the_download_size_the_ui_promises`, so bumping a
  * model pin fails the build rather than quietly making this button lie.
  */
+function displaySpeaker(label: string) {
+  const match = /^Speaker (\d+)$/.exec(label);
+  return match ? translateUI("Speaker {{number}}", { number: match[1] }) : label;
+}
+
 const MODEL_DOWNLOAD_MB = 35;
 
 import {
@@ -42,9 +51,9 @@ import {
  * they do not rank. No red/green, nothing that reads as good or bad.
  */
 const SWATCHES = [
-  { dot: 'bg-sky-500', bar: 'bg-sky-500/70', text: 'text-sky-700 dark:text-sky-300' },
-  { dot: 'bg-violet-500', bar: 'bg-violet-500/70', text: 'text-violet-700 dark:text-violet-300' },
-  { dot: 'bg-amber-500', bar: 'bg-amber-500/70', text: 'text-amber-700 dark:text-amber-300' },
+  { dot: 'bg-primary', bar: 'bg-primary/70', text: 'text-primary dark:text-primary' },
+  { dot: 'bg-primary', bar: 'bg-primary/70', text: 'text-primary dark:text-primary' },
+  { dot: 'bg-warning', bar: 'bg-warning/70', text: 'text-warning dark:text-warning' },
   { dot: 'bg-teal-500', bar: 'bg-teal-500/70', text: 'text-teal-700 dark:text-teal-300' },
   { dot: 'bg-pink-500', bar: 'bg-pink-500/70', text: 'text-pink-700 dark:text-pink-300' },
   { dot: 'bg-lime-600', bar: 'bg-lime-600/70', text: 'text-lime-700 dark:text-lime-300' },
@@ -86,6 +95,7 @@ export function SpeakerChips({
    */
   crosstalk?: boolean;
 }) {
+  useUiTranslation();
   if (speakers.length === 0) return null;
   return (
     <span className="inline-flex flex-wrap items-center gap-1 align-middle">
@@ -93,8 +103,8 @@ export function SpeakerChips({
         const s = swatchFor(label, order);
         return (
           <span
-            key={label}
-            className={`inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium ${s.text}`}
+            key={displaySpeaker(label)}
+            className={`inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-1.5 py-0.5 text-xs font-medium ${s.text}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} aria-hidden />
             {label}
@@ -103,23 +113,22 @@ export function SpeakerChips({
       })}
       {crosstalk && speakers.length > 1 && (
         <span
-          className="text-[10px] text-muted-foreground"
-          title="Two speakers were talking at the same time here"
-        >
-          at the same time
-        </span>
+          className="text-xs text-muted-foreground"
+          title={translateUI("Two speakers were talking at the same time here")}
+        > {translateUI("at the same time")} </span>
       )}
     </span>
   );
 }
 
 function TalkTimeRow({ row, order }: { row: SpeakerTalkTime; order: string[] }) {
+  useUiTranslation();
   const s = swatchFor(row.label, order);
   const percent = Math.round(row.shareOfSpeech * 100);
   return (
     <li className="flex items-center gap-3">
       <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot}`} aria-hidden />
-      <span className="w-24 shrink-0 truncate text-sm font-medium">{row.label}</span>
+      <span className="w-24 shrink-0 truncate text-sm font-medium">{displaySpeaker(row.label)}</span>
       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <span
           className={`block h-full rounded-full ${s.bar}`}
@@ -148,13 +157,12 @@ export type TalkTimeState =
   | { kind: 'done'; diarizedAt: string; turns: SpeakerTurn[] };
 
 function Frame({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
+  useUiTranslation();
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="inline-flex items-center gap-2 text-sm font-semibold">
-          <Users className="h-4 w-4 text-muted-foreground" aria-hidden />
-          Speakers
-        </h3>
+          <Users className="h-4 w-4 text-muted-foreground" aria-hidden /> {translateUI("Speakers")} </h3>
         {actions}
       </div>
       {children}
@@ -181,13 +189,11 @@ export function TalkTimePanel({
   onGetModels?: () => void;
   busy?: boolean;
 }) {
+  useUiTranslation();
   if (state.kind === 'noAudio') {
     return (
       <Frame>
-        <p className="text-sm text-muted-foreground">
-          This meeting kept no audio, so speakers cannot be separated. Recordings saved as
-          transcripts only have nothing left to analyse.
-        </p>
+        <p className="text-sm text-muted-foreground"> {translateUI("This meeting kept no audio, so speakers cannot be separated. Recordings saved as transcripts only have nothing left to analyse.")} </p>
       </Frame>
     );
   }
@@ -203,15 +209,12 @@ export function TalkTimePanel({
               disabled={busy}
               className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-60"
             >
-              {busy ? 'Downloading…' : `Download models (${MODEL_DOWNLOAD_MB} MB)`}
+              {busy ? translateUI("Downloading…") : `Download models (${MODEL_DOWNLOAD_MB} MB)`}
             </button>
           )
         }
       >
-        <p className="text-sm text-muted-foreground">
-          Separating speakers needs two small models that are not on this machine yet. They are
-          downloaded once and then run entirely on-device.
-        </p>
+        <p className="text-sm text-muted-foreground"> {translateUI("Separating speakers needs two small models that are not on this machine yet. They are downloaded once and then run entirely on-device.")} </p>
       </Frame>
     );
   }
@@ -227,15 +230,12 @@ export function TalkTimePanel({
               disabled={busy}
               className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-60"
             >
-              {busy ? 'Analysing…' : 'Identify speakers'}
+              {busy ? translateUI("Analysing…") : translateUI("Identify speakers")}
             </button>
           )
         }
       >
-        <p className="text-sm text-muted-foreground">
-          Speakers have not been separated for this meeting yet. The pass runs on-device over the
-          saved recording and does not change the transcript.
-        </p>
+        <p className="text-sm text-muted-foreground"> {translateUI("Speakers have not been separated for this meeting yet. The pass runs on-device over the saved recording and does not change the transcript.")} </p>
       </Frame>
     );
   }
@@ -246,16 +246,15 @@ export function TalkTimePanel({
   if (rows.length === 0) {
     return (
       <Frame>
-        <p className="text-sm text-muted-foreground">
-          Analysed on {state.diarizedAt.slice(0, 10)} and no distinct speakers were separated. That
-          is the expected result for a single-voice recording, and can also happen when voices are
-          too similar or the audio is too noisy to tell apart.
-        </p>
+        <p className="text-sm text-muted-foreground"> {translateUI("Analysed on")} {state.diarizedAt.slice(0, 10)} {translateUI("and no distinct speakers were separated. That is the expected result for a single-voice recording, and can also happen when voices are too similar or the audio is too noisy to tell apart.")} </p>
       </Frame>
     );
   }
 
   const order = rows.map((r) => r.label);
+  const speakerLabel = translateUI(count === 1 ? 'voice' : 'voices');
+  const speakerCountLabel = `${count} ${speakerLabel}`;
+  const interword = uiI18n.language === 'zh-CN' ? '' : ' ';
   return (
     <Frame>
       <ul className="space-y-2">
@@ -264,14 +263,12 @@ export function TalkTimePanel({
         ))}
       </ul>
       <p className="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">
-        {count} {count === 1 ? 'voice' : 'voices'} separated on-device, listed in the order they
-        first spoke. This is a <strong className="font-medium">best-effort estimate</strong>: how
-        often it gets the speakers right has not been measured on recordings like yours, so check it
-        before relying on it. Percentages are each speaker&apos;s share of the <em>speech</em>, not of the
-        meeting — people talk over each other, so shares of the meeting would add up to more than
-        100%. Speaking time describes the recording; it is not a measure of contribution. Labels are
-        anonymous: matching a voice to a person is yours to do.
-      </p>
+        {speakerCountLabel}{interword}
+        {translateUI("separated on-device, listed in the order they first spoke. This is a")}{interword}
+        <strong className="font-medium">{translateUI("best-effort estimate")}</strong>
+        {translateUI(": how often it gets the speakers right has not been measured on recordings like yours, so check it before relying on it. Percentages are each speaker's share of the")}{interword}
+        <em>{translateUI("speech")}</em>
+        {translateUI(", not of the meeting — people talk over each other, so shares of the meeting would add up to more than 100%. Speaking time describes the recording; it is not a measure of contribution. Labels are anonymous: matching a voice to a person is yours to do.")} </p>
     </Frame>
   );
 }

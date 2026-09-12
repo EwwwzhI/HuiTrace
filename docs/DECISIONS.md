@@ -298,6 +298,8 @@ The automated `secure_local_deletion.rs` integration test plants a unique sentin
 
 **Status:** Accepted and implemented (2026-07-14; C6a closed, release remains A5/C8-gated).
 
+**Amendment (2026-09-11):** A durable maintenance marker that could not complete (for example because a WAL reader remained active) previously blocked every later meeting deletion before the target meeting was even inspected. Recording-folder trust validation was also coupled to logical deletion, so a legacy or differently normalized path could make a meeting permanently undeletable even though refusing to touch that folder was sufficient for safety. Deletion now treats tenant-scoped database/search deletion as the primary operation and recording cleanup as a separately reported phase. Shared, outside-root, linked, or ownership-unverifiable folders remain untouched but return `recording_cleanup_status` and no longer block meeting deletion; operational erasure failures still fail rather than claiming partial cleanup succeeded. Pending database maintenance similarly remains marked for automatic retry and is reported through `maintenance_pending`. The confirmation UI now presents the direct consequence first and moves storage-level limitations behind progressive disclosure. Regression tests cover pending WAL maintenance, untrusted recording paths, and shared recording folders.
+
 ---
 
 ## ADR-0027 — v1.0.4 defers A5/C8 evidence without claiming that either gate passed

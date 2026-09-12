@@ -8,6 +8,11 @@ members = [
     "tools/updater-signature-verifier"
 ]
 
+# Model discovery hashes gigabyte-sized files. Keep SHA-256 optimized in dev
+# builds too; integrity checks must not make the settings page appear frozen.
+[profile.dev.package.sha2]
+opt-level = 3
+
 # Shared workspace settings
 [workspace.package]
 edition = "2021"

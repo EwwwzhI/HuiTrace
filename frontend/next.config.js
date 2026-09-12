@@ -7,8 +7,15 @@ const resolveFromTiptapPm = (pkg) =>
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Static export always uses .next internally in Next 15; isolate DEV's cache.
+  // NEXT_DIST_DIR overrides the dev cache or the production export destination.
+  distDir: process.env.NEXT_DIST_DIR || (process.env.NODE_ENV === 'development' ? '.next-dev' : '.next'),
   reactStrictMode: false, // Disabled for BlockNote compatibility
   output: 'export',
+  // Retain the warmed home route while the first CUDA/Rust build is running.
+  ...(process.env.TAURI_DEV_WARMUP === '1' ? {
+    onDemandEntries: { maxInactiveAge: 60 * 60 * 1000 },
+  } : {}),
   compiler: {
     // Release WebViews must not retain console calls that can accidentally
     // expose meeting content, local paths, device names, or credentials.

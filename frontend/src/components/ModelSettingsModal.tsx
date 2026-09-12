@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { useSidebar } from './Sidebar/SidebarProvider';
 import { openExternalUrl } from '@/services/systemService';
 import { configService } from '@/services/configService';
@@ -12,12 +12,8 @@ import {
   getAnthropicModels,
   getGroqModels,
   hasApiKey,
-  getAutoGenerateSetting,
   type OllamaModel,
-  type OpenRouterModel,
-  type OpenAIModel,
-  type AnthropicModel,
-  type GroqModel,
+  type OpenRouterModel
 } from '@/services/providerModelsService';
 import { BuiltInAIAPI } from '@/lib/builtin-ai';
 import { Button } from '@/components/ui/button';
@@ -35,7 +31,6 @@ import {
 } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Switch } from '@/components/ui/switch';
 import { Lock, Unlock, Eye, EyeOff, RefreshCw, CheckCircle2, XCircle, ChevronDown, ChevronUp, Download, ExternalLink, Check, ChevronsUpDown } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -48,6 +43,10 @@ import {
 } from '@/components/ui/command';
 import { cn, isOllamaNotInstalledError } from '@/lib/utils';
 import { toast } from 'sonner';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export interface ModelConfig {
   provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai' | 'custom-openai';
@@ -111,6 +110,7 @@ export function ModelSettingsModal({
   skipInitialFetch = false,
   layout = 'inline',
 }: ModelSettingsModalProps) {
+  useUiTranslation();
   // Use ConfigContext if available, fallback to props for backward compatibility
   const configContext = useConfig();
   const modelConfig = configContext?.modelConfig || propsModelConfig;
@@ -136,7 +136,6 @@ export function ModelSettingsModal({
   const [hasAutoFetched, setHasAutoFetched] = useState<boolean>(false);
   const hasSyncedFromParent = useRef<boolean>(false);
   const hasLoadedInitialConfig = useRef<boolean>(false);
-  const [autoGenerateEnabled, setAutoGenerateEnabled] = useState<boolean>(true); // Default to true
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isEndpointSectionCollapsed, setIsEndpointSectionCollapsed] = useState<boolean>(true); // Collapsed by default
   const [ollamaNotInstalled, setOllamaNotInstalled] = useState<boolean>(false); // Track if Ollama is not installed
@@ -150,6 +149,7 @@ export function ModelSettingsModal({
   const [customTemperature, setCustomTemperature] = useState<string>(modelConfig.temperature?.toString() || '');
   const [customTopP, setCustomTopP] = useState<string>(modelConfig.topP?.toString() || '');
   const [isCustomOpenAIAdvancedOpen, setIsCustomOpenAIAdvancedOpen] = useState<boolean>(false);
+  const advancedOptionsId = useId();
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
 
   // Combobox state
@@ -296,22 +296,6 @@ export function ModelSettingsModal({
 
     fetchModelConfig();
   }, [skipInitialFetch]);
-
-  // Fetch auto-generate setting on mount
-  useEffect(() => {
-    const fetchAutoGenerateSetting = async () => {
-      try {
-        const enabled = await getAutoGenerateSetting();
-        setAutoGenerateEnabled(enabled);
-        console.log('Auto-generate setting loaded:', enabled);
-      } catch (err) {
-        console.error('Failed to fetch auto-generate setting:', err);
-        // Keep default value (true) on error
-      }
-    };
-
-    fetchAutoGenerateSetting();
-  }, []);
 
   // Sync ollamaEndpoint state when modelConfig.ollamaEndpoint changes from parent
   useEffect(() => {
@@ -507,7 +491,7 @@ export function ModelSettingsModal({
       }
     } catch (err) {
       console.error('Error loading Built-in AI models:', err);
-      toast.error('Failed to load Built-in AI models');
+      toast.error(translateUI("Failed to load Built-in AI models"));
     }
   };
 
@@ -609,7 +593,7 @@ export function ModelSettingsModal({
         console.log('Custom OpenAI config saved successfully');
       } catch (err) {
         console.error('Failed to save custom OpenAI config:', err);
-        toast.error('Failed to save custom OpenAI configuration');
+        toast.error(translateUI("Failed to save custom OpenAI configuration"));
         return;
       }
     }
@@ -653,7 +637,7 @@ export function ModelSettingsModal({
   // Test custom OpenAI connection
   const testCustomOpenAIConnection = async () => {
     if (!customOpenAIEndpoint.trim() || !customOpenAIModel.trim()) {
-      toast.error('Please enter endpoint URL and model name first');
+      toast.error(translateUI("Please enter endpoint URL and model name first"));
       return;
     }
 
@@ -664,7 +648,7 @@ export function ModelSettingsModal({
         customOpenAIApiKey.trim() || null,
         customOpenAIModel.trim(),
       );
-      toast.success(result.message || 'Connection successful!');
+      toast.success(result.message || translateUI("Connection successful!"));
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       toast.error(errorMsg);
@@ -710,11 +694,11 @@ export function ModelSettingsModal({
 
       // Check if Ollama is not installed and show appropriate error
       if (isOllamaNotInstalledError(errorMsg)) {
-        toast.error('Ollama is not installed', {
-          description: 'Please download and install Ollama before downloading models.',
+        toast.error(translateUI("Ollama is not installed"), {
+          get description() { return translateUI("Please download and install Ollama before downloading models."); },
           duration: 7000,
           action: {
-            label: 'Download',
+            get label() { return translateUI("Download"); },
             onClick: () => openExternalUrl('https://ollama.com/download')
           }
         });
@@ -780,12 +764,12 @@ export function ModelSettingsModal({
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">Model Settings</h3>
+        <h3 className="text-lg font-semibold">{translateUI("Model Settings")}</h3>
       </div>
 
       <div className="space-y-4">
         <div>
-          <Label>Summarization Model</Label>
+          <Label>{translateUI("Summarization Model")}</Label>
           <div className="flex space-x-2 mt-1">
             <Select
               value={modelConfig.provider}
@@ -850,12 +834,12 @@ export function ModelSettingsModal({
               }}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select provider" />
+                <SelectValue placeholder={translateUI("Select provider")} />
               </SelectTrigger>
               <SelectContent className="max-h-64 overflow-y-auto">
-                <SelectItem value="builtin-ai">Built-in AI (Offline, No API needed)</SelectItem>
+                <SelectItem value="builtin-ai">{translateUI("Built-in AI (Offline, No API needed)")}</SelectItem>
                 <SelectItem value="claude">Claude</SelectItem>
-                <SelectItem value="custom-openai">Custom Server (OpenAI)</SelectItem>
+                <SelectItem value="custom-openai">{translateUI("Custom Server (OpenAI)")}</SelectItem>
                 <SelectItem value="groq">Groq</SelectItem>
                 <SelectItem value="ollama">Ollama</SelectItem>
                 <SelectItem value="openai">OpenAI</SelectItem>
@@ -873,26 +857,24 @@ export function ModelSettingsModal({
                     className="flex-1 max-w-[200px] justify-between font-normal"
                   >
                     <span className="truncate">
-                      {modelConfig.model || "Select model..."}
+                      {modelConfig.model || translateUI("Select model...")}
                     </span>
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[250px] p-0" align="start">
                   <Command>
-                    <CommandInput placeholder="Search models..." />
+                    <CommandInput placeholder={translateUI("Search models...")} />
                     <CommandList className="max-h-[300px]">
                       {(modelConfig.provider === 'openrouter' && isLoadingOpenRouter) ||
                        (modelConfig.provider === 'openai' && isLoadingOpenAI) ||
                        (modelConfig.provider === 'claude' && isLoadingClaude) ||
                        (modelConfig.provider === 'groq' && isLoadingGroq) ? (
                         <div className="py-6 text-center text-sm text-muted-foreground">
-                          <RefreshCw className="mx-auto h-4 w-4 animate-spin mb-2" />
-                          Loading models...
-                        </div>
+                          <RefreshCw className="mx-auto h-4 w-4 animate-spin mb-2" /> {translateUI("Loading models...")} </div>
                       ) : (
                         <>
-                          <CommandEmpty>No models found.</CommandEmpty>
+                          <CommandEmpty>{translateUI("No models found.")}</CommandEmpty>
                           <CommandGroup>
                             {modelOptions[modelConfig.provider]?.map((model) => (
                               <CommandItem
@@ -927,7 +909,7 @@ export function ModelSettingsModal({
         {modelConfig.provider === 'custom-openai' && (
           <div className="space-y-4 border-t pt-4">
             <div>
-              <Label htmlFor="custom-endpoint">Endpoint URL *</Label>
+              <Label htmlFor="custom-endpoint">{translateUI("Endpoint URL *")}</Label>
               <Input
                 id="custom-endpoint"
                 value={customOpenAIEndpoint}
@@ -935,55 +917,50 @@ export function ModelSettingsModal({
                 placeholder="http://localhost:8000/v1"
                 className="mt-1"
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Base URL of the OpenAI-compatible API
-              </p>
+              <p className="text-xs text-muted-foreground mt-1"> {translateUI("Base URL of the OpenAI-compatible API")} </p>
             </div>
 
             <div>
-              <Label htmlFor="custom-model">Model Name *</Label>
+              <Label htmlFor="custom-model">{translateUI("Model Name *")}</Label>
               <Input
                 id="custom-model"
                 value={customOpenAIModel}
                 onChange={(e) => setCustomOpenAIModel(e.target.value)}
-                placeholder="gpt-4, llama-3-70b, etc."
+                placeholder={translateUI("gpt-4, llama-3-70b, etc.")}
                 className="mt-1"
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Model identifier to use for requests
-              </p>
+              <p className="text-xs text-muted-foreground mt-1"> {translateUI("Model identifier to use for requests")} </p>
             </div>
 
             <div>
-              <Label htmlFor="custom-api-key">API Key (optional)</Label>
+              <Label htmlFor="custom-api-key">{translateUI("API Key (optional)")}</Label>
               <Input
                 id="custom-api-key"
                 type="password"
                 value={customOpenAIApiKey}
                 onChange={(e) => setCustomOpenAIApiKey(e.target.value)}
-                placeholder={hasCustomStoredApiKey ? 'Stored securely — enter to replace' : 'Leave empty if not required'}
+                placeholder={hasCustomStoredApiKey ? translateUI("Stored securely — enter to replace") : translateUI("Leave empty if not required")}
                 className="mt-1"
               />
             </div>
 
             {/* Advanced Options (Collapsible) */}
             <div>
-              <div
-                className="flex items-center justify-between cursor-pointer py-2"
+              <button
+                type="button"
+                aria-expanded={isCustomOpenAIAdvancedOpen}
+                aria-controls={advancedOptionsId}
+                className="v2-advanced-trigger"
                 onClick={() => setIsCustomOpenAIAdvancedOpen(!isCustomOpenAIAdvancedOpen)}
               >
-                <Label className="cursor-pointer">Advanced Options</Label>
-                {isCustomOpenAIAdvancedOpen ? (
-                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                )}
-              </div>
+                <span>{translateUI("Advanced Options")}</span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden />
+              </button>
 
               {isCustomOpenAIAdvancedOpen && (
-                <div className="space-y-3 pl-2 border-l-2 border-muted mt-2">
+                <div id={advancedOptionsId} className="v2-advanced-content space-y-4 rounded-xl border border-border bg-card p-4 mt-3">
                   <div>
-                    <Label htmlFor="custom-max-tokens">Max Tokens</Label>
+                    <Label htmlFor="custom-max-tokens">{translateUI("Max Tokens")}</Label>
                     <Input
                       id="custom-max-tokens"
                       type="number"
@@ -994,7 +971,7 @@ export function ModelSettingsModal({
                     />
                   </div>
                   <div>
-                    <Label htmlFor="custom-temperature">Temperature (0.0-2.0)</Label>
+                    <Label htmlFor="custom-temperature">{translateUI("Temperature (0.0-2.0)")}</Label>
                     <Input
                       id="custom-temperature"
                       type="number"
@@ -1008,7 +985,7 @@ export function ModelSettingsModal({
                     />
                   </div>
                   <div>
-                    <Label htmlFor="custom-top-p">Top P (0.0-1.0)</Label>
+                    <Label htmlFor="custom-top-p">{translateUI("Top P (0.0-1.0)")}</Label>
                     <Input
                       id="custom-top-p"
                       type="number"
@@ -1036,14 +1013,10 @@ export function ModelSettingsModal({
             >
               {isTestingConnection ? (
                 <>
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  Testing Connection...
-                </>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> {translateUI("Testing Connection...")} </>
               ) : (
                 <>
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Test Connection
-                </>
+                  <CheckCircle2 className="mr-2 h-4 w-4" /> {translateUI("Test Connection")} </>
               )}
             </Button>
           </div>
@@ -1051,14 +1024,14 @@ export function ModelSettingsModal({
 
         {requiresApiKey && (
           <div>
-            <Label>API Key</Label>
+            <Label>{translateUI("API Key")}</Label>
             <div className="relative mt-1">
               <Input
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey || ''}
                 onChange={(e) => setApiKey(e.target.value)}
                 disabled={isApiKeyLocked}
-                placeholder={hasStoredApiKey ? 'Stored securely — enter to replace' : 'Enter your API key'}
+                placeholder={hasStoredApiKey ? translateUI("Stored securely — enter to replace") : translateUI("Enter your API key")}
                 className="pr-24"
               />
               {isApiKeyLocked && apiKey?.trim() && (
@@ -1074,8 +1047,8 @@ export function ModelSettingsModal({
                     variant="ghost"
                     size="icon"
                     onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
-                    className={isLockButtonVibrating ? 'animate-vibrate text-red-500' : ''}
-                    title={isApiKeyLocked ? 'Unlock to edit' : 'Lock to prevent editing'}
+                    className={isLockButtonVibrating ? 'animate-vibrate text-destructive' : ''}
+                    title={isApiKeyLocked ? translateUI("Unlock to edit") : translateUI("Lock to prevent editing")}
                   >
                     {isApiKeyLocked ? <Lock /> : <Unlock />}
                   </Button>
@@ -1099,7 +1072,7 @@ export function ModelSettingsModal({
               className="flex items-center justify-between cursor-pointer py-2"
               onClick={() => setIsEndpointSectionCollapsed(!isEndpointSectionCollapsed)}
             >
-              <Label className="cursor-pointer">Custom Endpoint (optional)</Label>
+              <Label className="cursor-pointer">{translateUI("Custom Endpoint (optional)")}</Label>
               {isEndpointSectionCollapsed ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -1128,14 +1101,14 @@ export function ModelSettingsModal({
                       placeholder="http://localhost:11434"
                       className={cn(
                         "pr-10",
-                        endpointValidationState === 'invalid' && "border-red-500"
+                        endpointValidationState === 'invalid' && "border-destructive"
                       )}
                     />
                     {endpointValidationState === 'valid' && (
-                      <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-green-500" />
+                      <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-success" />
                     )}
                     {endpointValidationState === 'invalid' && (
-                      <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-red-500" />
+                      <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-destructive" />
                     )}
                   </div>
                   <Button
@@ -1148,22 +1121,16 @@ export function ModelSettingsModal({
                   >
                     {isLoadingOllama ? (
                       <>
-                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                        Fetching...
-                      </>
+                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> {translateUI("Fetching...")} </>
                     ) : (
                       <>
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Fetch Models
-                      </>
+                        <RefreshCw className="mr-2 h-4 w-4" /> {translateUI("Fetch Models")} </>
                     )}
                   </Button>
                 </div>
                 {ollamaEndpointChanged && !error && (
-                  <Alert className="mt-3 border-yellow-500 bg-yellow-50">
-                    <AlertDescription className="text-yellow-800">
-                      Endpoint changed. Please click "Fetch Models" to load models from the new endpoint before saving.
-                    </AlertDescription>
+                  <Alert className="mt-3 border-warning bg-warning/10">
+                    <AlertDescription className="text-warning"> {translateUI("Endpoint changed. Please click \"Fetch Models\" to load models from the new endpoint before saving.")} </AlertDescription>
                   </Alert>
                 )}
               </>
@@ -1174,10 +1141,10 @@ export function ModelSettingsModal({
         {modelConfig.provider === 'ollama' && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h4 className="text-sm font-bold">Available Ollama Models</h4>
+              <h4 className="text-sm font-bold">{translateUI("Available Ollama Models")}</h4>
               {lastFetchedEndpoint && models.length > 0 && (
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">Using:</span>
+                  <span className="text-muted-foreground">{translateUI("Using:")}</span>
                   <code className="px-2 py-1 bg-muted rounded text-xs">
                     {lastFetchedEndpoint || 'http://localhost:11434'}
                   </code>
@@ -1187,7 +1154,7 @@ export function ModelSettingsModal({
             {models.length > 0 && (
               <div className="mb-4">
                 <Input
-                  placeholder="Search models..."
+                  placeholder={translateUI("Search models...")}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full"
@@ -1196,18 +1163,14 @@ export function ModelSettingsModal({
             )}
             {isLoadingOllama ? (
               <div className="text-center py-8 text-muted-foreground">
-                <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" />
-                Loading models...
-              </div>
+                <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" /> {translateUI("Loading models...")} </div>
             ) : models.length === 0 ? (
               <div className="space-y-3">
                 {ollamaNotInstalled ? (
                   /* Show Ollama download link when not installed */
                   <div className="space-y-4">
-                    <Alert className="border-orange-500 bg-orange-50 dark:bg-orange-500/10">
-                      <AlertDescription className="text-orange-800 dark:text-orange-200">
-                        Ollama is not installed or not running. Please download and install Ollama to use local models.
-                      </AlertDescription>
+                    <Alert className="border-warning bg-warning/10 dark:bg-warning/10">
+                      <AlertDescription className="text-warning dark:text-warning"> {translateUI("Ollama is not installed or not running. Please download and install Ollama to use local models.")} </AlertDescription>
                     </Alert>
                     <Button
                       variant="default"
@@ -1215,12 +1178,8 @@ export function ModelSettingsModal({
                       onClick={() => openExternalUrl('https://ollama.com/download')}
                       className="w-full bg-primary hover:bg-primary/90"
                     >
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                      Download Ollama
-                    </Button>
-                    <div className="text-sm text-muted-foreground text-center">
-                      After installing Ollama, restart this application and click "Fetch Models" to continue.
-                    </div>
+                      <ExternalLink className="mr-2 h-4 w-4" /> {translateUI("Download Ollama")} </Button>
+                    <div className="text-sm text-muted-foreground text-center"> {translateUI("After installing Ollama, restart this application and click \"Fetch Models\" to continue.")} </div>
                   </div>
                 ) : (
                   /* Show model download option when Ollama is installed but no models */
@@ -1228,8 +1187,8 @@ export function ModelSettingsModal({
                     <Alert className="mb-4">
                       <AlertDescription>
                         {ollamaEndpointChanged
-                          ? 'Endpoint changed. Click "Fetch Models" to load models from the new endpoint.'
-                          : 'No models found. Download a recommended model or click "Fetch Models" to load available Ollama models.'}
+                          ? translateUI("Endpoint changed. Click \"Fetch Models\" to load models from the new endpoint.")
+                          : translateUI("No models found. Download a recommended model or click \"Fetch Models\" to load available Ollama models.")}
                       </AlertDescription>
                     </Alert>
                     {!ollamaEndpointChanged && (
@@ -1243,14 +1202,10 @@ export function ModelSettingsModal({
                         >
                           {isDownloading('gemma3:1b') ? (
                             <>
-                              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                              Downloading gemma3:1b...
-                            </>
+                              <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> {translateUI("Downloading gemma3:1b...")} </>
                           ) : (
                             <>
-                              <Download className="mr-2 h-4 w-4" />
-                              Download gemma3:1b (Recommended, ~800MB)
-                            </>
+                              <Download className="mr-2 h-4 w-4" /> {translateUI("Download gemma3:1b (Recommended, ~800MB)")} </>
                           )}
                         </Button>
 
@@ -1258,14 +1213,14 @@ export function ModelSettingsModal({
                         {isDownloading('gemma3:1b') && getProgress('gemma3:1b') !== undefined && (
                           <div className="bg-card rounded-md border p-3">
                             <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-medium text-primary">Downloading gemma3:1b</span>
+                              <span className="text-sm font-medium text-primary">{translateUI("Downloading gemma3:1b")}</span>
                               <span className="text-sm font-semibold text-primary">
                                 {Math.round(getProgress('gemma3:1b')!)}%
                               </span>
                             </div>
                             <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                               <div
-                                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                className="h-full bg-primary rounded-full transition-all duration-300"
                                 style={{ width: `${getProgress('gemma3:1b')}%` }}
                               />
                             </div>
@@ -1280,9 +1235,7 @@ export function ModelSettingsModal({
               <ScrollArea className="max-h-[calc(100vh-450px)] overflow-y-auto pr-4">
                 {filteredModels.length === 0 ? (
                   <Alert>
-                    <AlertDescription>
-                      No models found matching "{searchQuery}". Try a different search term.
-                    </AlertDescription>
+                    <AlertDescription> {translateUI("No models found matching \"")}{searchQuery}{translateUI("\". Try a different search term.")} </AlertDescription>
                   </Alert>
                 ) : (
                   <div className="grid gap-4">
@@ -1296,7 +1249,7 @@ export function ModelSettingsModal({
                           className={cn(
                             'bg-card p-2 m-0 rounded-md border transition-colors',
                             modelConfig.model === model.name
-                              ? 'ring-1 ring-blue-500 border-blue-500 background-blue-100'
+                              ? 'ring-1 ring-primary border-primary bg-accent'
                               : 'hover:bg-muted/50',
                             !modelIsDownloading && 'cursor-pointer'
                           )}
@@ -1308,7 +1261,7 @@ export function ModelSettingsModal({
                         >
                           <div>
                             <b className="font-bold">{model.name}&nbsp;</b>
-                            <span className="text-muted-foreground">with a size of </span>
+                            <span className="text-muted-foreground">{translateUI("with a size of")} </span>
                             <span className="font-mono font-bold text-sm">{model.size}</span>
                           </div>
 
@@ -1316,12 +1269,12 @@ export function ModelSettingsModal({
                           {modelIsDownloading && progress !== undefined && (
                             <div className="mt-3 pt-3 border-t border-border">
                               <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm font-medium text-primary">Downloading...</span>
+                                <span className="text-sm font-medium text-primary">{translateUI("Downloading...")}</span>
                                 <span className="text-sm font-semibold text-primary">{Math.round(progress)}%</span>
                               </div>
                               <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                                 <div
-                                  className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                  className="h-full bg-primary rounded-full transition-all duration-300"
                                   style={{ width: `${progress}%` }}
                                 />
                               </div>
@@ -1351,36 +1304,15 @@ export function ModelSettingsModal({
         )}
       </div>
 
-      {/* Auto-generate summaries toggle */}
-      {/* <div className="mt-6 pt-6 border-t border-border">
-        <div className="flex items-center justify-between">
-          <div className="flex-1">
-            <Label htmlFor="auto-generate" className="text-base font-medium">
-              Auto-generate summaries
-            </Label>
-            <p className="text-sm text-muted-foreground mt-1">
-              Automatically generate summary when opening meetings without one
-            </p>
-          </div>
-          <Switch
-            id="auto-generate"
-            checked={autoGenerateEnabled}
-            onCheckedChange={setAutoGenerateEnabled}
-          />
-        </div>
-      </div> */}
-
       <div className="mt-6 flex justify-end">
         <Button
           className={cn(
-            'px-4 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500',
+            'px-4 text-sm font-medium text-primary-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary',
             isDoneDisabled ? 'bg-muted cursor-not-allowed' : 'bg-primary hover:bg-primary/90'
           )}
           onClick={handleSave}
           disabled={isDoneDisabled}
-        >
-          Save
-        </Button>
+        > {translateUI("Save")} </Button>
       </div>
     </div>
   );

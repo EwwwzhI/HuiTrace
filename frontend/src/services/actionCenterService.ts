@@ -1,5 +1,5 @@
 /**
- * Typed local bridge for the read-only Approved Action Center.
+ * Typed local bridge for the read-only approved action items list.
  *
  * The backend is the authority for tenant scoping, review-state filtering,
  * ordering, pagination, and source resolvability. Callers preserve its order.

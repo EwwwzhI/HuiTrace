@@ -8,6 +8,9 @@ import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
 import { isTauri } from '@/lib/isTauri';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -21,11 +24,13 @@ interface TranscriptContextType {
   clearTranscripts: () => void;
   currentMeetingId: string | null;
   markMeetingAsSaved: () => Promise<void>;
+  discardCurrentTranscript: () => Promise<void>;
 }
 
 const TranscriptContext = createContext<TranscriptContextType | undefined>(undefined);
 
 export function TranscriptProvider({ children }: { children: ReactNode }) {
+  useUiTranslation();
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
@@ -38,6 +43,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const isUserAtBottomRef = useRef<boolean>(true);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const finalFlushRef = useRef<(() => void) | null>(null);
+  const discardBufferRef = useRef<(() => void) | null>(null);
+  const discardingRef = useRef(false);
+  const recoveryWrites = useRef(new Set<Promise<unknown>>());
 
   // Keep ref updated with current transcripts
   useEffect(() => {
@@ -102,6 +110,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
         // Listen for recording-started event
         unlistenRecordingStarted = await recordingService.onRecordingStarted(async () => {
+          discardingRef.current = false;
           try {
             // Generate unique meeting ID
             const meetingId = `meeting-${Date.now()}`;
@@ -193,8 +202,13 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     let transcriptBuffer = new Map<number, Transcript>();
     let lastProcessedSequence = 0;
     let processingTimer: NodeJS.Timeout | undefined;
+    discardBufferRef.current = () => {
+      transcriptBuffer.clear();
+      if (processingTimer) clearTimeout(processingTimer);
+    };
 
     const processBufferedTranscripts = (forceFlush = false) => {
+      if (discardingRef.current) return;
       const sortedTranscripts: Transcript[] = [];
 
       // Process all available sequential transcripts
@@ -299,6 +313,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       try {
         console.log('🔥 Setting up MAIN transcript listener during component initialization...');
         unlistenFn = await transcriptService.onTranscriptUpdate((update) => {
+          if (discardingRef.current) return;
           console.log('MAIN LISTENER: Received transcript update');
 
           // Check for duplicate sequence_id before processing
@@ -327,9 +342,11 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
           console.log(`✅ MAIN LISTENER: Buffered transcript with sequence_id ${update.sequence_id}. Buffer size: ${transcriptBuffer.size}, Last processed: ${lastProcessedSequence}`);
 
           // Save to IndexedDB (non-blocking)
-          if (currentMeetingId) {
-            indexedDBService.saveTranscript(currentMeetingId, update)
+          if (currentMeetingId && !discardingRef.current) {
+            const write = indexedDBService.saveTranscript(currentMeetingId, update)
               .catch(() => console.warn('IndexedDB save failed'));
+            recoveryWrites.current.add(write);
+            void write.finally(() => recoveryWrites.current.delete(write));
           }
 
           // Clear any existing timer and set a new one
@@ -343,7 +360,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('✅ MAIN transcript listener setup complete');
       } catch {
         console.error('Failed to set up MAIN transcript listener');
-        alert('Failed to setup transcript listener. Check console for details.');
+        alert(translateUI("Failed to setup transcript listener. Check console for details."));
       }
     };
 
@@ -463,7 +480,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       .join('\n');
     navigator.clipboard.writeText(fullTranscript);
 
-    toast.success("Transcript copied to clipboard");
+    toast.success(translateUI("Transcript copied to clipboard"));
   }, [transcripts]);
 
   // Force flush buffer (for final transcript processing)
@@ -475,6 +492,19 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Clear transcripts (used when starting new recording)
+  const discardCurrentTranscript = useCallback(async () => {
+    discardingRef.current = true;
+    discardBufferRef.current?.();
+    await Promise.all([...recoveryWrites.current]);
+    const id = currentMeetingId || sessionStorage.getItem('indexeddb_current_meeting_id');
+    if (id) await indexedDBService.deleteMeeting(id);
+    transcriptsRef.current = [];
+    setTranscripts([]);
+    setMeetingTitle('+ New Call');
+    setCurrentMeetingId(null);
+    sessionStorage.removeItem('indexeddb_current_meeting_id');
+  }, [currentMeetingId]);
+
   const clearTranscripts = useCallback(() => {
     setTranscripts([]);
     // Don't clear currentMeetingId here - it will be set by recording-started event
@@ -503,6 +533,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   }, [currentMeetingId]);
 
   const value: TranscriptContextType = {
+    discardCurrentTranscript,
     transcripts,
     transcriptsRef,
     addTranscript,

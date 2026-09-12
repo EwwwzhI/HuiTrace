@@ -3,12 +3,16 @@ import { Info as InfoIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface InfoProps {
     isCollapsed: boolean;
 }
 
 const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed }, ref) => {
+  useUiTranslation();
   return (
     <Dialog aria-describedby={undefined}>
       <DialogTrigger asChild>
@@ -19,17 +23,17 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed }, re
               ? "bg-transparent p-2 hover:bg-muted rounded-lg" 
               : "w-full px-3 py-1.5 mt-1 text-sm font-medium text-foreground bg-secondary hover:bg-muted rounded-lg shadow-sm"
           }`}
-          title="About Mityu"
+          title={translateUI("About HuiTrace")}
         >
           <InfoIcon className={`text-muted-foreground ${isCollapsed ? "w-5 h-5" : "w-4 h-4"}`} />
           {!isCollapsed && (
-            <span className="ml-2 text-sm text-foreground">About</span>
+            <span className="ml-2 text-sm text-foreground">{translateUI("About")}</span>
           )}
         </button>
       </DialogTrigger>
       <DialogContent>
         <VisuallyHidden>
-          <DialogTitle>About Mityu</DialogTitle>
+          <DialogTitle>{translateUI("About HuiTrace")}</DialogTitle>
         </VisuallyHidden>
         <About />
       </DialogContent>

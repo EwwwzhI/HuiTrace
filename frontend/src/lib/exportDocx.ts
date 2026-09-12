@@ -175,8 +175,8 @@ export async function renderExportDocx(doc: ExportDoc): Promise<Blob> {
   const document = new Document({
     title: meta.title.trim() || 'Meeting Summary',
     subject: 'AI-assisted meeting export with human review and source links',
-    creator: 'Mityu',
-    keywords: 'Mityu; AI-generated; human-reviewed; source-linked',
+    creator: 'HuiTrace',
+    keywords: 'HuiTrace; AI-generated; human-reviewed; source-linked',
     description: machineProvenanceJson,
     sections: [{ children }],
   });

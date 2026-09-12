@@ -554,7 +554,7 @@ fn scrub_checkpoint_tree(path: &Path, report: &mut ArtifactEraseReport) -> Resul
     Ok(())
 }
 
-/// Scrub only Mityu-managed artifacts in a meeting folder. Unknown top-level
+/// Scrub only HuiTrace-managed artifacts in a meeting folder. Unknown top-level
 /// entries are retained so deleting a meeting cannot destroy unrelated files a
 /// user placed in that directory. Symlinks are unlinked and never followed.
 pub fn erase_recording_folder(
@@ -613,7 +613,7 @@ pub fn erase_recording_folder(
 
 /// Validate an existing meeting folder before any native filesystem operation.
 /// The lexical and canonical checks are both required: canonical containment
-/// blocks traversal outside the Mityu root, while walking every lexical path
+/// blocks traversal outside the HuiTrace root, while walking every lexical path
 /// component rejects symlinks and Windows junctions even when they resolve back
 /// inside that root.
 pub fn validate_managed_recording_folder(
@@ -644,35 +644,45 @@ pub fn validate_managed_recording_folder(
             return false;
         }
 
-        let Ok(relative) = target.strip_prefix(root) else {
+        let Ok(canonical_root) = fs::canonicalize(root) else {
             return false;
         };
-        if relative.as_os_str().is_empty() {
+        if canonical_target == canonical_root || !canonical_target.starts_with(&canonical_root) {
             return false;
         }
 
-        let mut cursor = root.clone();
-        for component in relative.components() {
-            let std::path::Component::Normal(part) = component else {
-                return false;
-            };
-            cursor.push(part);
+        // Walk the original spelling back to the root instead of comparing it
+        // lexically. On Windows, imported meetings are stored with the `\\?\`
+        // canonical prefix while the platform default root uses `C:\...`;
+        // they refer to the same directory but `strip_prefix` rejects them.
+        // Inspecting every original ancestor still catches a symlink/junction
+        // even when it ultimately resolves back inside the trusted root.
+        let mut cursor = target.to_path_buf();
+        loop {
             let Ok(metadata) = fs::symlink_metadata(&cursor) else {
                 return false;
             };
             if is_link_or_reparse_point(&metadata) {
                 return false;
             }
+
+            let Ok(canonical_cursor) = fs::canonicalize(&cursor) else {
+                return false;
+            };
+            if canonical_cursor == canonical_root {
+                break;
+            }
+
+            let Some(parent) = cursor.parent() else {
+                return false;
+            };
+            cursor = parent.to_path_buf();
         }
 
-        fs::canonicalize(root)
-            .map(|canonical_root| {
-                canonical_target != canonical_root && canonical_target.starts_with(canonical_root)
-            })
-            .unwrap_or(false)
+        true
     });
     if !allowed {
-        bail!("recording folder is outside the managed Mityu recording root or contains a link");
+        bail!("recording folder is outside the managed HuiTrace recording root or contains a link");
     }
 
     Ok(canonical_target)
@@ -693,6 +703,27 @@ mod tests {
         let ctx = AuthContext::local();
         assert!(erase_recording_folder(&root, std::slice::from_ref(&root), &ctx).is_err());
         assert!(erase_recording_folder(&outside, &[root], &ctx).is_err());
+    }
+
+    #[test]
+    fn accepts_a_canonical_target_with_a_platform_default_style_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("recordings");
+        let meeting = root.join("import-meeting");
+        fs::create_dir_all(&meeting).expect("meeting folder");
+        fs::write(
+            meeting.join("metadata.json"),
+            br#"{"workspace_id":"local"}"#,
+        )
+        .expect("ownership marker");
+        fs::write(meeting.join("audio.wav"), b"managed audio").expect("audio");
+
+        let canonical_meeting = fs::canonicalize(&meeting).expect("canonical meeting path");
+        let report = erase_recording_folder(&canonical_meeting, &[root], &AuthContext::local())
+            .expect("canonical target should remain inside the trusted root");
+
+        assert_eq!(report.managed_files_removed, 2);
+        assert!(!meeting.exists());
     }
 
     #[test]

@@ -178,6 +178,12 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           stopPolling();
         });
         unsubscribers.push(unlistenStopped);
+        const unlistenDiscarded = await recordingService.onRecordingDiscarded(() => {
+          setState({ status: RecordingStatus.IDLE, isRecording: false, isPaused: false,
+            isActive: false, recordingDuration: null, activeDuration: null });
+          stopPolling();
+        });
+        unsubscribers.push(unlistenDiscarded);
 
         // Recording paused
         const unlistenPaused = await recordingService.onRecordingPaused(() => {

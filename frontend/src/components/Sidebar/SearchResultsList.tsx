@@ -2,6 +2,9 @@
 
 import { AlertCircle, ChevronRight, FileText, Loader2, SearchX } from 'lucide-react';
 import type { TranscriptSearchResult } from '@/services/search';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface SearchResultsListProps {
   results: TranscriptSearchResult[];
@@ -39,34 +42,31 @@ export function SearchResultsList({
   error,
   onSelect,
 }: SearchResultsListProps) {
+  useUiTranslation();
   if (isQueryTooShort) {
     return (
       <div
-        className="mx-3 rounded-md border border-gray-100 px-3 py-4 text-center text-sm text-gray-500"
+        className="mx-3 rounded-md border border-border px-3 py-4 text-center text-sm text-muted-foreground"
         role="status"
-      >
-        Type at least 2 letters or numbers to search.
-      </div>
+      > {translateUI("Type at least 2 letters or numbers to search.")} </div>
     );
   }
 
   if (isSearching) {
     return (
       <div
-        className="mx-3 flex items-center justify-center gap-2 rounded-md border border-gray-100 px-3 py-6 text-sm text-gray-500"
+        className="mx-3 flex items-center justify-center gap-2 rounded-md border border-border px-3 py-6 text-sm text-muted-foreground"
         role="status"
         aria-live="polite"
       >
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-        Searching local meeting evidence...
-      </div>
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> {translateUI("Searching local meeting evidence...")} </div>
     );
   }
 
   if (error) {
     return (
       <div
-        className="mx-3 flex gap-2 rounded-md border border-red-100 bg-red-50 px-3 py-3 text-sm text-red-700"
+        className="mx-3 flex gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-sm text-destructive"
         role="alert"
       >
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -78,17 +78,15 @@ export function SearchResultsList({
   if (results.length === 0) {
     return (
       <div
-        className="mx-3 flex flex-col items-center gap-2 rounded-md border border-gray-100 px-3 py-6 text-center text-sm text-gray-500"
+        className="mx-3 flex flex-col items-center gap-2 rounded-md border border-border px-3 py-6 text-center text-sm text-muted-foreground"
         role="status"
       >
-        <SearchX className="h-5 w-5" aria-hidden="true" />
-        No matching meeting evidence found.
-      </div>
+        <SearchX className="h-5 w-5" aria-hidden="true" /> {translateUI("No matching meeting evidence found.")} </div>
     );
   }
 
   return (
-    <div className="mx-3 space-y-2 pb-3" role="list" aria-label="Meeting search results">
+    <div className="mx-3 space-y-2 pb-3" role="list" aria-label={translateUI("Meeting search results")}>
       {results.map((result) => {
         const displayTime = formatRecordingTime(result.audioStartTime) || result.timestamp || null;
 
@@ -97,36 +95,34 @@ export function SearchResultsList({
             <button
               type="button"
               onClick={() => onSelect(result)}
-              className="group w-full rounded-md border border-gray-200 bg-white p-3 text-left transition-colors hover:border-blue-200 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="group w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               aria-label={`Open source in ${result.title}${displayTime ? ` at ${displayTime}` : ''}`}
             >
               <div className="flex items-start gap-2">
-                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50">
-                  <FileText className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
+                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent">
+                  <FileText className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
                 </div>
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                       {result.title}
                     </span>
                     {displayTime && (
-                      <span className="shrink-0 text-[11px] tabular-nums text-gray-400">
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                         {displayTime}
                       </span>
                     )}
                   </div>
 
-                  <div className="mt-1 line-clamp-3 text-xs leading-relaxed text-gray-600">
+                  <div className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted-foreground">
                     {result.matchContext}
                   </div>
 
                   <div className="mt-2 flex items-center justify-between">
-                    <span className="rounded-full border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                      Transcript
-                    </span>
+                    <span className="rounded-full border border-primary/30 bg-accent px-1.5 py-0.5 text-xs font-medium text-primary"> {translateUI("Transcript")} </span>
                     <ChevronRight
-                      className="h-3.5 w-3.5 text-gray-400 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600"
+                      className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary"
                       aria-hidden="true"
                     />
                   </div>

@@ -2,12 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
+import { translateUI } from '@/i18n';
+
 
 export function useTemplates() {
   const [availableTemplates, setAvailableTemplates] = useState<Array<{
     id: string;
     name: string;
     description: string;
+    source?: 'builtin' | 'bundled' | 'custom';
   }>>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('standard_meeting');
 
@@ -19,6 +22,7 @@ export function useTemplates() {
           id: string;
           name: string;
           description: string;
+          source?: 'builtin' | 'bundled' | 'custom';
         }>;
         console.log('Available templates:', templates);
         setAvailableTemplates(templates);
@@ -32,8 +36,8 @@ export function useTemplates() {
   // Handle template selection
   const handleTemplateSelection = useCallback((templateId: string, templateName: string) => {
     setSelectedTemplate(templateId);
-    toast.success('Template selected', {
-      description: `Using "${templateName}" template for summary generation`,
+    toast.success(translateUI("Template selected"), {
+      description: translateUI('Using "{{name}}" template for summary generation', { name: translateUI(templateName) }),
     });
     Analytics.trackFeatureUsed('template_selected');
   }, []);

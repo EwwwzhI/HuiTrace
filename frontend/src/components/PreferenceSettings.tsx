@@ -1,4 +1,5 @@
 "use client"
+import { UiLanguageSetting } from '@/i18n/UiLanguageProvider';
 
 import { useEffect, useState, useRef } from "react"
 import { Switch } from "./ui/switch"
@@ -7,13 +8,17 @@ import { openDatabaseFolder, openModelsFolder, openRecordingsFolder } from "@/se
 import Analytics from "@/lib/analytics"
 import { useTour } from "@/components/tour"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
-import RecordingConsentSettings from "./RecordingConsentSettings"
+
 import RedactionSettings from "./RedactionSettings"
 import LearningSettings from "./LearningSettings"
 import { ThemeToggle } from "./ThemeToggle"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 export function PreferenceSettings() {
+  useUiTranslation();
   const {
     notificationSettings,
     storageLocations,
@@ -142,25 +147,25 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{translateUI("Loading Preferences...")}</div>
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{translateUI("Loading Preferences...")}</div>
   }
 
   // Ensure we have a boolean value for the Switch component
   const notificationsEnabledValue = notificationsEnabled ?? false;
 
   return (
-    <div className="space-y-6">
+    <div className="v2-preferences"><UiLanguageSetting />
       {/* Appearance Section */}
-      <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
-        <div className="flex items-center justify-between gap-4">
+      <div className="v2-appearance bg-card rounded-lg border border-border p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-5">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">Appearance</h3>
-            <p className="text-sm text-muted-foreground">Follow your system theme, or force light or dark.</p>
+            <h3 className="text-lg font-semibold text-foreground mb-2">{translateUI("Appearance")}</h3>
+            <p className="text-sm text-muted-foreground">{translateUI("Follow your system theme, or force light or dark.")}</p>
           </div>
           <ThemeToggle />
         </div>
@@ -170,8 +175,8 @@ export function PreferenceSettings() {
       <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">Notifications</h3>
-            <p className="text-sm text-muted-foreground">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-foreground mb-2">{translateUI("Notifications")}</h3>
+            <p className="text-sm text-muted-foreground">{translateUI("Enable or disable notifications of start and end of meeting")}</p>
           </div>
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
@@ -181,10 +186,8 @@ export function PreferenceSettings() {
       <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">Product tour</h3>
-            <p className="text-sm text-muted-foreground">
-              Replay the guided walkthrough on the sample meeting — transcript, source-linked summary, and your first recording.
-            </p>
+            <h3 className="text-lg font-semibold text-foreground mb-2">{translateUI("Product tour")}</h3>
+            <p className="text-sm text-muted-foreground"> {translateUI("Replay the guided walkthrough on the sample meeting — transcript, source-linked summary, and your first recording.")} </p>
           </div>
           <button
             onClick={() => {
@@ -193,18 +196,14 @@ export function PreferenceSettings() {
             }}
             className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
           >
-            <Compass className="w-4 h-4" />
-            Replay product tour
-          </button>
+            <Compass className="w-4 h-4" /> {translateUI("Replay product tour")} </button>
         </div>
       </div>
 
       {/* Data Storage Locations Section */}
-      <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-foreground mb-4">Data Storage Locations</h3>
-        <p className="text-sm text-muted-foreground mb-6">
-          View and access where Mityu stores your data
-        </p>
+      <div className="v2-storage bg-card rounded-lg border border-border p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-foreground mb-4">{translateUI("Data Storage Locations")}</h3>
+        <p className="text-sm text-muted-foreground mb-6"> {translateUI("View and access where HuiTrace stores your data")} </p>
 
         <div className="space-y-4">
           {/* Database Location */}
@@ -239,33 +238,23 @@ export function PreferenceSettings() {
 
           {/* Recordings Location */}
           <div className="p-4 border border-border rounded-lg bg-muted">
-            <div className="font-medium mb-2 text-foreground">Meeting Recordings</div>
+            <div className="font-medium mb-2 text-foreground">{translateUI("Meeting Recordings")}</div>
             <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations?.recordings || translateUI("Loading...")}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
             >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
+              <FolderOpen className="w-4 h-4" /> {translateUI("Open Folder")} </button>
           </div>
         </div>
 
         <div className="mt-4 p-3 bg-accent rounded-md">
           <p className="text-xs text-accent-foreground">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
-          </p>
-          <p className="mt-2 text-xs text-accent-foreground">
-            Meeting deletion covers Mityu-managed database/search, recording, and recovery-cache data. Physical traces or separate copies may remain on SSD wear-leveling, copy-on-write filesystems, snapshots, backups, exports, or WebView/browser storage; Mityu cannot erase those external layers.
-          </p>
+            <strong>{translateUI("Note:")}</strong> {translateUI("Database and models are stored together in your application data directory for unified management.")} </p>
+          <p className="mt-2 text-xs text-accent-foreground"> {translateUI("Meeting deletion covers HuiTrace-managed database/search, recording, and recovery-cache data. Physical traces or separate copies may remain on SSD wear-leveling, copy-on-write filesystems, snapshots, backups, exports, or WebView/browser storage; HuiTrace cannot erase those external layers.")} </p>
         </div>
-      </div>
-
-      {/* Recording Consent Section */}
-      <div className="bg-card rounded-lg border border-border p-6 shadow-sm">
-        <RecordingConsentSettings />
       </div>
 
       {/* Redaction Section */}

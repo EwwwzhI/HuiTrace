@@ -1,6 +1,9 @@
 'use client';
 
 import { useRef, useEffect } from 'react';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface EditableTitleProps {
   title: string;
@@ -19,13 +22,8 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
   onChange,
   onDelete,
 }) => {
+  useUiTranslation();
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      onFinishEditing();
-    }
-  };
 
   // Auto-resize textarea height based on content
   useEffect(() => {
@@ -49,7 +47,7 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
             onFinishEditing();
           }
         }}
-        className="text-2xl font-bold bg-gray-50 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-3 py-1 w-full resize-none overflow-hidden"
+        className="text-2xl font-bold bg-muted border border-border focus:outline-none focus:ring-2 focus:ring-primary rounded px-3 py-1 w-full resize-none overflow-hidden"
         style={{ minWidth: '300px', minHeight: '40px' }}
         autoFocus
         rows={1}
@@ -58,7 +56,7 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
   ) : (
     <div className="group flex items-center space-x-2 flex-1">
       <h1
-        className="text-2xl font-bold cursor-pointer hover:bg-gray-50 rounded px-1 flex-1 whitespace-pre-wrap"
+        className="text-2xl font-bold cursor-pointer hover:bg-muted rounded px-1 flex-1 whitespace-pre-wrap"
         onClick={onStartEditing}
       >
         {title}
@@ -66,8 +64,8 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
       <div className="flex space-x-1">
         <button 
           onClick={onStartEditing}
-          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-gray-100 rounded"
-          title="Edit section title"
+          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-muted rounded"
+          title={translateUI("Edit section title")}
         >
           <svg 
             xmlns="http://www.w3.org/2000/svg" 
@@ -86,8 +84,8 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
         {onDelete && (
           <button 
             onClick={onDelete}
-            className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-gray-100 rounded text-red-600"
-            title="Delete section"
+            className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-muted rounded text-destructive"
+            title={translateUI("Delete section")}
           >
             <svg 
               xmlns="http://www.w3.org/2000/svg" 

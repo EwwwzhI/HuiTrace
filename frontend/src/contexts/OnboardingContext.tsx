@@ -174,7 +174,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   };
 
   const performAutoDetection = async () => {
-    // v1.0.4 initializes only Mityu's managed database. Legacy Meetily import
+    // v1.0.4 initializes only HuiTrace's managed database. Legacy Meetily import
     // stays disabled until Rust issues opaque picker grants instead of accepting
     // renderer-controlled filesystem paths.
     console.log('[OnboardingContext] Initializing managed local database');

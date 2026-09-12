@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
@@ -8,6 +8,9 @@ import { getOllamaModels, type OllamaModel } from '@/services/providerModelsServ
 import { invoke } from '@tauri-apps/api/core';
 import Analytics from '@/lib/analytics';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 // OllamaModel now has a single definition, in providerModelsService. Re-exported here
 // so existing `import { OllamaModel } from '@/contexts/ConfigContext'` keeps working.
@@ -95,6 +98,7 @@ const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
+  useUiTranslation();
   // Model configuration state
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
@@ -127,6 +131,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   // Ollama models list and error state
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [error, setError] = useState<string>('');
+  const [modelConfigLoaded, setModelConfigLoaded] = useState(false);
 
   // Device configuration state
   const [selectedDevices, setSelectedDevices] = useState<SelectedDevices>({
@@ -173,21 +178,33 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
 
-  // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
+  // Wait for the saved provider/endpoint before contacting the optional Ollama service.
   useEffect(() => {
+    if (!modelConfigLoaded || modelConfig.provider !== 'ollama') {
+      setModels([]);
+      setError('');
+      return;
+    }
+    let cancelled = false;
+    setModels([]);
+    setError('');
     const loadModels = async () => {
       try {
         const endpoint = modelConfig.ollamaEndpoint || null;
         const modelList = await getOllamaModels(endpoint);
+        if (cancelled) return;
         setModels(modelList);
         setError('');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load Ollama models');
-        console.error('Error loading models:', err);
+        if (cancelled) return;
+        // Tauri rejects with strings. Service unavailability belongs in the UI,
+        // rather than console.error, which opens the Next.js development overlay.
+        setError(err instanceof Error ? err.message : typeof err === 'string' ? err : translateUI("Failed to load Ollama models"));
       }
     };
     loadModels();
-  }, [modelConfig.ollamaEndpoint]);
+    return () => { cancelled = true; };
+  }, [modelConfigLoaded, modelConfig.provider, modelConfig.ollamaEndpoint]);
 
   // Load transcript configuration on mount
   useEffect(() => {
@@ -282,6 +299,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.error('Failed to fetch saved model config in ConfigContext:', error);
+      } finally {
+        setModelConfigLoaded(true);
       }
     };
     fetchModelConfig();

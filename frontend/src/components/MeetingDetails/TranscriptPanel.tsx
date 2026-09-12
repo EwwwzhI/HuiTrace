@@ -1,14 +1,17 @@
 "use client";
 
 import { Transcript, TranscriptSegmentData } from '@/types';
-import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { FileText } from 'lucide-react';
-import { useMemo } from 'react';
+import { FileText, ChevronDown, Users } from 'lucide-react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { TOUR_ANCHORS } from '@/lib/tour';
 import { TalkTimePanel } from '@/components/report/SpeakerTurns';
 import { useDiarization } from '@/hooks/useDiarization';
+import { speakerCount } from '@/lib/speakerTurns';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -65,6 +68,7 @@ export function TranscriptPanel({
   onRequestSegment,
   onSeekToTime,
 }: TranscriptPanelProps) {
+  useUiTranslation();
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -84,21 +88,27 @@ export function TranscriptPanel({
   // so it is offered only once recording has stopped. Showing it mid-recording
   // would advertise an action that cannot run yet.
   const diarization = useDiarization(isRecording ? undefined : meetingId);
+  const [isSpeakersOpen, setIsSpeakersOpen] = useState(false);
+  const speakerPanelId = `speaker-panel-${useId().replace(/:/g, '')}`;
+
+  useEffect(() => {
+    setIsSpeakersOpen(false);
+  }, [meetingId]);
 
   return (
     // Layout-neutral root: width, borders, and responsive show/hide are owned by
     // the wrapper in page-content.tsx so the split can be rebalanced and made
     // responsive/collapsible without threading layout state through every prop.
     // data-tour: anchor for the first-run product tour (step 1).
-    <div data-tour={TOUR_ANCHORS.transcriptPanel} className="flex w-full h-full min-w-0 bg-background flex-col relative">
+    <div data-tour={TOUR_ANCHORS.transcriptPanel} className="flex w-full h-full min-h-0 min-w-0 overflow-hidden bg-background flex-col relative">
       {/* Panel toolbar: identity (icon + title + segment count) on the left,
           transcript actions on the right — replaces the floating centered row. */}
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
             <FileText className="h-3.5 w-3.5" aria-hidden />
           </span>
-          <h2 className="truncate text-sm font-semibold text-foreground">Transcript</h2>
+          <h2 className="truncate text-sm font-semibold text-foreground">{translateUI("Transcript")}</h2>
           <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
             {usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           </span>
@@ -117,7 +127,22 @@ export function TranscriptPanel({
           we have not yet been able to ask -- an empty space says nothing, which
           is the honest thing to say when we do not know. */}
       {(diarization.state || diarization.error) && (
-        <div className="border-b border-border px-4 py-3">
+        <div className="v2-speaker-disclosure min-h-0 max-h-[35%] shrink-0 overflow-y-auto border-b border-border">
+          <button
+            id={`${speakerPanelId}-trigger`}
+            type="button"
+            aria-expanded={isSpeakersOpen}
+            aria-controls={speakerPanelId}
+            onClick={() => setIsSpeakersOpen((open) => !open)}
+            className="v2-speaker-trigger sticky top-0 z-10 flex w-full items-center gap-2 bg-background px-4 py-3 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            <Users className="h-4 w-4 text-muted-foreground" aria-hidden /> {translateUI("Speakers")} {diarization.turns.length > 0 && <span className="text-xs text-muted-foreground">{speakerCount(diarization.turns)} {translateUI("· best-effort estimate")}</span>}
+            {diarization.busy && <span role="status" className="text-xs text-muted-foreground">{translateUI("Processing…")}</span>}
+            {diarization.error && <span className="text-xs text-destructive">{translateUI("Needs attention")}</span>}
+            <ChevronDown className="v2-speaker-chevron ml-auto h-4 w-4 shrink-0" aria-hidden />
+          </button>
+          <div id={speakerPanelId} role="region" aria-labelledby={`${speakerPanelId}-trigger`} className={`v2-speaker-content ${isSpeakersOpen ? 'is-open' : ''}`}>
+          <div className="min-h-0 overflow-hidden px-4 pb-3">
           {diarization.state && (
             <TalkTimePanel
               state={diarization.state}
@@ -132,22 +157,21 @@ export function TranscriptPanel({
               explanation, which reads as "this meeting has no speakers" rather
               than "we could not find out". */}
           {diarization.error && (
-            <p className="text-xs text-destructive" role="status">
-              Speakers could not be checked: {diarization.error}{' '}
+            <p className="text-xs text-destructive" role="status"> {translateUI("Speakers could not be checked:")} {diarization.error}{' '}
               <button
                 type="button"
                 onClick={diarization.refresh}
                 className="underline underline-offset-2 hover:no-underline"
-              >
-                Try again
-              </button>
+              > {translateUI("Try again")} </button>
             </p>
           )}
+          </div>
+          </div>
         </div>
       )}
 
       {/* Transcript content - use virtualized view for better performance */}
-      <div className="flex-1 overflow-hidden pb-4">
+      <div className="flex-1 min-h-0 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
           speakerTurns={diarization.turns}
@@ -172,10 +196,10 @@ export function TranscriptPanel({
 
       {/* Custom prompt input at bottom of transcript section */}
       {!isRecording && convertedSegments.length > 0 && (
-        <div className="border-t border-border p-3">
+        <div className="shrink-0 border-t border-border p-3">
           <textarea
-            placeholder="Add context for the AI summary — people involved, meeting overview, objective…"
-            className="min-h-[72px] w-full resize-y rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-ring"
+            placeholder={translateUI("Add context for the AI summary — people involved, meeting overview, objective…")}
+            className="h-[72px] w-full resize-none rounded-lg border border-input bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-ring"
             value={customPrompt}
             onChange={(e) => onPromptChange(e.target.value)}
           />

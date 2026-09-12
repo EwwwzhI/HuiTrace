@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import { translateUI } from '@/i18n';
+
 
 export type ModalType =
   | 'modelSettings'
@@ -175,7 +177,7 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
 
         // Auto-close modal if the downloaded model matches the selected one
         if (transcriptModelConfig?.provider === 'localWhisper' && transcriptModelConfig?.model === modelName) {
-          toast.success('Model ready! Closing window...', { duration: 1500 });
+          toast.success(translateUI("Model ready! Closing window..."), { duration: 1500 });
           setTimeout(() => hideModal('modelSelector'), 1500);
         }
       });

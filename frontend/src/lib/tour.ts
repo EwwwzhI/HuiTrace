@@ -60,9 +60,9 @@ export interface TourStepContent {
 
 /** Copy for the one-time welcome overlay (verbatim product copy). */
 export const WELCOME_COPY = {
-  title: 'This is what Mityu does.',
+  title: 'This is what HuiTrace does.',
   body:
-    "Here's a sample meeting we prepared. Mityu turned a recording into a searchable transcript and a source-linked, human-approved summary — all on your device. Take a quick tour, or jump straight into your first recording.",
+    "Here's a sample meeting we prepared. HuiTrace turned a recording into a searchable transcript and a source-linked, human-approved summary — all on your device. Take a quick tour, or jump straight into your first recording.",
   primary: 'Take a 30-second tour',
   secondary: 'Skip — start my own recording',
   footer: 'You can replay this anytime from Settings.',
@@ -85,7 +85,7 @@ export const TOUR_STEPS: TourStepContent[] = [
   {
     id: 'summary',
     anchor: TOUR_ANCHORS.summaryApproveBlock,
-    title: 'Mityu drafts a summary, but you stay in control.',
+    title: 'HuiTrace drafts a summary, but you stay in control.',
     body: 'Nothing is final until you approve it — and every point links back to the exact moment it came from.',
     preferredPlacement: 'left',
   },

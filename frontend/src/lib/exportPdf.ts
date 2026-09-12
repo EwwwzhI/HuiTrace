@@ -84,9 +84,9 @@ export async function renderExportPdf(doc: ExportDoc): Promise<Blob> {
   pdf.setProperties({
     title: meta.title.trim() || 'Meeting Summary',
     subject: 'AI-assisted meeting export with human review and source links',
-    author: 'Mityu',
-    creator: 'Mityu',
-    keywords: 'Mityu; AI-generated; human-reviewed; source-linked',
+    author: 'HuiTrace',
+    creator: 'HuiTrace',
+    keywords: 'HuiTrace; AI-generated; human-reviewed; source-linked',
   });
   // The namespace form XML-escapes the JSON payload inside the XMP packet.
   pdf.addMetadata(

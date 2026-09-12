@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LANGUAGE_OPTIONS } from "@/lib/summary-languages";
 import { useRecentLanguages } from "@/hooks/useRecentLanguages";
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface LanguagePickerPopoverProps {
   value: string | null;
@@ -19,6 +23,7 @@ export function LanguagePickerPopover({
   mode = "meeting",
   autoSubtitle,
 }: LanguagePickerPopoverProps) {
+  useUiTranslation();
   const { recents } = useRecentLanguages();
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +88,7 @@ export function LanguagePickerPopover({
       ref={containerRef}
       className="w-72 rounded-lg bg-card border border-border shadow-lg overflow-hidden"
       role="dialog"
-      aria-label="Pick summary language"
+      aria-label={translateUI("Pick summary language")}
     >
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border">
         <span className="text-muted-foreground text-sm">🔍</span>
@@ -92,17 +97,15 @@ export function LanguagePickerPopover({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search language..."
-          className="flex-1 text-sm text-foreground bg-transparent border-none outline-none placeholder-gray-400"
+          placeholder={translateUI("Search language...")}
+          className="flex-1 text-sm text-foreground bg-transparent border-none outline-none placeholder:text-muted-foreground"
         />
       </div>
 
       <div className="max-h-80 overflow-y-auto py-1">
         {showRecents && (
           <>
-            <div className="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Recently Used
-            </div>
+            <div className="px-3 pt-1 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"> {translateUI("Recently Used")} </div>
             {recentsResolved.map((opt) => (
               <button
                 key={`recent-${opt.code}`}
@@ -134,7 +137,7 @@ export function LanguagePickerPopover({
             }`}
           >
             <span className="flex flex-col">
-              <span>Auto</span>
+              <span>{translateUI("Auto")}</span>
               {autoSubtitle && (
                 <span className="text-xs font-normal text-muted-foreground">{autoSubtitle}</span>
               )}
@@ -144,8 +147,8 @@ export function LanguagePickerPopover({
         )}
 
         {filteredAll.length > 0 && (
-          <div className="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            {mode === "meeting" ? "Other Languages" : "All Languages"}
+          <div className="px-3 pt-1 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {mode === "meeting" ? translateUI("Other Languages") : translateUI("All Languages")}
           </div>
         )}
 
@@ -168,7 +171,7 @@ export function LanguagePickerPopover({
         ))}
 
         {hasNoResults && (
-          <div className="px-3 py-2 text-sm text-muted-foreground">No matches</div>
+          <div className="px-3 py-2 text-sm text-muted-foreground">{translateUI("No matches")}</div>
         )}
       </div>
     </div>

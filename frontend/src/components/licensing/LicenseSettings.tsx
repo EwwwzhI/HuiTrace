@@ -14,7 +14,7 @@
  * semantic theme tokens only.
  */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { KeyRound, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';

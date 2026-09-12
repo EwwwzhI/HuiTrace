@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export interface Language {
   code: string;
@@ -127,6 +131,7 @@ export function LanguageSelection({
   disabled = false,
   provider = 'localWhisper'
 }: LanguageSelectionProps) {
+  useUiTranslation();
   const [saving, setSaving] = useState(false);
   const { setSelectedLanguage } = useConfig();
 
@@ -155,12 +160,12 @@ export function LanguageSelection({
 
       // Show success toast
       const languageName = selectedLang?.name || languageCode;
-      toast.success("Language preference saved", {
+      toast.success(translateUI("Language preference saved"), {
         description: `Transcription language set to ${languageName}`
       });
     } catch (error) {
       console.error('Failed to save language preference:', error);
-      toast.error("Failed to save language preference", {
+      toast.error(translateUI("Failed to save language preference"), {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
@@ -178,7 +183,7 @@ export function LanguageSelection({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Globe className="h-4 w-4 text-muted-foreground" />
-          <h4 className="text-sm font-medium text-foreground">Transcription Language</h4>
+          <h4 className="text-sm font-medium text-foreground">{translateUI("Transcription Language")}</h4>
         </div>
       </div>
 
@@ -187,7 +192,7 @@ export function LanguageSelection({
           value={selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={disabled || saving}
-          className="w-full px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-muted disabled:text-muted-foreground"
+          className="w-full px-3 py-2 text-sm bg-card border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary disabled:bg-muted disabled:text-muted-foreground"
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
@@ -199,32 +204,31 @@ export function LanguageSelection({
 
         {/* Parakeet language limitation warning */}
         {isParakeet && (
-          <div className="p-2 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/25 rounded text-amber-800 dark:text-amber-200">
-            <p className="font-medium">ℹ️ Parakeet Language Support</p>
-            <p className="mt-1 text-xs">Parakeet currently only supports automatic language detection. Manual language selection is not available. Use Whisper if you need to specify a particular language.</p>
+          <div className="p-2 bg-warning/10 dark:bg-warning/10 border border-warning/30 dark:border-warning/25 rounded text-warning dark:text-warning">
+            <p className="font-medium">{translateUI("ℹ️ Parakeet Language Support")}</p>
+            <p className="mt-1 text-xs">{translateUI("Parakeet currently only supports automatic language detection. Manual language selection is not available. Use Whisper if you need to specify a particular language.")}</p>
           </div>
         )}
 
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
           <p className="text-muted-foreground">
-            <strong>Current:</strong> {selectedLanguageName}
+            <strong>{translateUI("Current:")}</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === 'auto' && (
-            <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
-              <p className="font-medium">⚠️ Auto Detect may produce incorrect results</p>
-              <p className="mt-1">For best accuracy, select your specific language (e.g., English, Spanish, etc.)</p>
+            <div className="p-2 bg-warning/10 border border-warning/30 rounded text-warning">
+              <p className="font-medium">{translateUI("⚠️ Auto Detect may produce incorrect results")}</p>
+              <p className="mt-1">{translateUI("For best accuracy, select your specific language (e.g., English, Spanish, etc.)")}</p>
             </div>
           )}
           {selectedLanguage === 'auto-translate' && (
             <div className="p-2 bg-accent border border-primary/20 rounded text-primary">
-              <p className="font-medium">🌐 Translation Mode Active</p>
-              <p className="mt-1">All audio will be automatically translated to English. Best for multilingual meetings where you need English output.</p>
+              <p className="font-medium">{translateUI("🌐 Translation Mode Active")}</p>
+              <p className="mt-1">{translateUI("All audio will be automatically translated to English. Best for multilingual meetings where you need English output.")}</p>
             </div>
           )}
           {selectedLanguage !== 'auto' && selectedLanguage !== 'auto-translate' && (
-            <p className="text-muted-foreground">
-              Transcription will be optimized for <strong>{selectedLanguageName}</strong>
+            <p className="text-muted-foreground"> {translateUI("Transcription will be optimized for")} <strong>{selectedLanguageName}</strong>
             </p>
           )}
         </div>

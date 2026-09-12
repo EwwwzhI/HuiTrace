@@ -1,11 +1,12 @@
 {
-    "name": "mityu",
+    "name": "huitrace",
     "version": "1.1.0",
     "private": true,
     "packageManager": "pnpm@10.33.0",
     "main": "electron/main.js",
     "scripts": {
         "dev": "next dev -p 3118",
+        "dev:tauri": "node scripts/tauri-dev-server.js",
         "build": "next build",
         "export": "next export",
         "start": "next start -p 3118",
@@ -64,6 +65,7 @@
         "date-fns": "^4.1.0",
         "docx": "^9.5.1",
         "framer-motion": "^11.15.0",
+        "i18next": "^26.4.2",
         "jspdf": "^4.2.1",
         "lodash": "^4.17.21",
         "lucide-react": "^0.469.0",

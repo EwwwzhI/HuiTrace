@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -22,11 +21,15 @@ import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 export default function Home() {
+  useUiTranslation();
   // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
-  const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
 
   // Use contexts for state management
@@ -42,7 +45,7 @@ export default function Home() {
   const { setIsMeetingActive, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
   const { modals, messages, showModal, hideModal } = useModalState(transcriptModelConfig);
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(isRecording, setIsRecordingState, setIsMeetingActive);
-  const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal);
+  const { handleRecordingStart, isAutoStarting } = useRecordingStart(isRecording, setIsRecordingState, showModal);
 
   // Get handleRecordingStop function and setIsStopping (state comes from global context)
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
@@ -126,12 +129,12 @@ export default function Home() {
       const result = await recoverMeeting(meetingId);
 
       if (result.success) {
-        toast.success('Meeting recovered successfully!', {
+        toast.success(translateUI("Meeting recovered successfully!"), {
           description: result.audioRecoveryStatus?.status === 'success'
-            ? 'Transcripts and audio recovered'
-            : 'Transcripts recovered (no audio available)',
+            ? translateUI("Transcripts and audio recovered")
+            : translateUI("Transcripts recovered (no audio available)"),
           action: result.meetingId ? {
-            label: 'View Meeting',
+            get label() { return translateUI("View Meeting"); },
             onClick: () => {
               router.push(`/meeting-details?id=${result.meetingId}`);
             }
@@ -155,8 +158,8 @@ export default function Home() {
         }
       }
     } catch (error) {
-      toast.error('Failed to recover meeting', {
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
+      toast.error(translateUI("Failed to recover meeting"), {
+        description: error instanceof Error ? error.message : translateUI("Unknown error occurred"),
       });
       throw error;
     }
@@ -172,31 +175,13 @@ export default function Home() {
     }
   };
 
-  useEffect(() => {
-    if (recordingState.isRecording) {
-      const interval = setInterval(() => {
-        setBarHeights(prev => {
-          const newHeights = [...prev];
-          newHeights[0] = Math.random() * 20 + 10 + 'px';
-          newHeights[1] = Math.random() * 20 + 10 + 'px';
-          newHeights[2] = Math.random() * 20 + 10 + 'px';
-          return newHeights;
-        });
-      }, 300);
-
-      return () => clearInterval(interval);
-    }
-  }, [recordingState.isRecording]);
 
   // Computed values using global status
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col h-screen bg-muted"
+    <div
+      className="flex h-full flex-col bg-background"
     >
       {/* All Modals supported*/}
       <SettingsModals
@@ -214,14 +199,14 @@ export default function Home() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
         {/* Phase C: while idle (nothing recorded yet this session), the home route
             is a dashboard of recent meeting reports; the live transcript panel
             takes over the moment a recording starts. */}
         {(status === RecordingStatus.IDLE || status === RecordingStatus.COMPLETED) &&
         !recordingState.isRecording &&
         transcripts.length === 0 ? (
-          <HomeDashboard />
+          <HomeDashboard recordingDisabled={isRecordingDisabled || isAutoStarting} />
         ) : (
           <TranscriptPanel
             isProcessingStop={isProcessingStop}
@@ -234,22 +219,18 @@ export default function Home() {
         {(hasMicrophone || isRecording) &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
           status !== RecordingStatus.SAVING && (
-            <div className="fixed bottom-12 left-0 right-0 z-10">
+            <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-5 pb-5 pt-7">
               <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
-                style={{
-                  marginLeft: sidebarCollapsed ? '4rem' : '16rem'
-                }}
+                className="flex justify-center"
               >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-card rounded-full shadow-lg flex items-center">
+                <div className="flex w-full max-w-[720px] justify-center">
+                  <div className="flex max-w-full items-center rounded-[18px] border border-border/90 bg-card/95 px-3 py-2 shadow-[0_10px_35px_hsl(var(--foreground)/0.08)] backdrop-blur-xl">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
                       onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
                       onRecordingStart={handleRecordingStart}
                       onTranscriptReceived={() => { }} // Not actually used by RecordingControls
                       onStopInitiated={() => setIsStopping(true)}
-                      barHeights={barHeights}
                       onTranscriptionError={(message) => {
                         showModal('errorAlert', message);
                       }}
@@ -271,6 +252,6 @@ export default function Home() {
           sidebarCollapsed={sidebarCollapsed}
         />
       </div>
-    </motion.div>
+    </div>
   );
 }

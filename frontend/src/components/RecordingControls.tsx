@@ -3,17 +3,27 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { Play, Pause, Square, Mic, AlertCircle, X } from 'lucide-react';
-import { ProcessRequest, SummaryResponse } from '@/types/summary';
+import { Play, Pause, Square, Mic, AlertCircle, X, Trash2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { recordingService } from '@/services/recordingService';
+import { useTranscripts } from '@/contexts/TranscriptContext';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { toast } from 'sonner';
+import { SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+import { RecordingWaveform } from './RecordingWaveform';
+
+
 
 interface RecordingControlsProps {
   isRecording: boolean;
-  barHeights: string[];
   onRecordingStop: (callApi?: boolean) => void;
   onRecordingStart: () => void;
   onTranscriptReceived: (summary: SummaryResponse) => void;
@@ -30,7 +40,6 @@ interface RecordingControlsProps {
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
   isRecording,
-  barHeights,
   onRecordingStop,
   onRecordingStart,
   onTranscriptReceived,
@@ -41,9 +50,45 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   selectedDevices,
   meetingName,
 }) => {
+  useUiTranslation();
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
+  const { discardCurrentTranscript } = useTranscripts();
+  const { setIsMeetingActive, setCurrentMeeting } = useSidebar();
+  const [showDiscard, setShowDiscard] = useState(false);
+  const [isDiscarding, setIsDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const discardBusy = useRef(false);
+  const nativeDiscarded = useRef(false);
+  const handleDiscard = async () => {
+    if (discardBusy.current) return;
+    discardBusy.current = true;
+    setIsDiscarding(true);
+    setDiscardError(null);
+    try {
+      if (!nativeDiscarded.current) {
+        const discarded = await recordingService.discardRecording();
+        if (!discarded) {
+          setShowDiscard(false);
+          toast.info(translateUI("Another recording operation is in progress."));
+          return;
+        }
+        nativeDiscarded.current = true;
+      }
+      await discardCurrentTranscript();
+      setIsMeetingActive(false);
+      setCurrentMeeting({ id: 'intro-call', get title() { return translateUI("+ New Call"); } });
+      setShowDiscard(false);
+      nativeDiscarded.current = false;
+      toast.success(translateUI("Recording discarded"));
+    } catch (error) {
+      setDiscardError(`Could not finish cleanup. Retry to discard this recording. ${String(error)}`);
+    } finally {
+      discardBusy.current = false;
+      setIsDiscarding(false);
+    }
+  };
 
   const [showPlayback, setShowPlayback] = useState(false);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
@@ -77,7 +122,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         console.log('Tauri recording state check completed');
       } catch {
         console.error('Tauri initialization error');
-        alert('Failed to initialize recording. Please check the console for details.');
+        alert(translateUI("Failed to initialize recording. Please check the console for details."));
       }
     };
     checkTauri();
@@ -108,22 +153,22 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Check for device-related errors
       if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
         setDeviceError({
-          title: 'Microphone Not Available',
+          get title() { return translateUI("Microphone Not Available"); },
           message: 'Unable to access your microphone. Please check that:\n• Your microphone is connected\n• The app has microphone permissions\n• No other app is using the microphone'
         });
       } else if (errorMsg.includes('system audio') || errorMsg.includes('speaker') || errorMsg.includes('output')) {
         setDeviceError({
-          title: 'System Audio Not Available',
+          get title() { return translateUI("System Audio Not Available"); },
           message: 'Unable to capture system audio. Please check that:\n• A virtual audio device (like BlackHole) is installed\n• The app has screen recording permissions (macOS)\n• System audio is properly configured'
         });
       } else if (errorMsg.includes('permission')) {
         setDeviceError({
-          title: 'Permission Required',
+          get title() { return translateUI("Permission Required"); },
           message: 'Recording permissions are required. Please:\n• Grant microphone access in System Settings\n• Grant screen recording access for system audio (macOS)\n• Restart the app after granting permissions'
         });
       } else {
         setDeviceError({
-          title: 'Recording Failed',
+          get title() { return translateUI("Recording Failed"); },
           message: 'Unable to start recording. Please check your audio device settings and try again.'
         });
       }
@@ -206,7 +251,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording paused successfully');
     } catch {
       console.error('Failed to pause recording');
-      alert('Failed to pause recording. Please check the console for details.');
+      alert(translateUI("Failed to pause recording. Please check the console for details."));
     } finally {
       setIsPausing(false);
     }
@@ -224,7 +269,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording resumed successfully');
     } catch {
       console.error('Failed to resume recording');
-      alert('Failed to resume recording. Please check the console for details.');
+      alert(translateUI("Failed to resume recording. Please check the console for details."));
     } finally {
       setIsResuming(false);
     }
@@ -333,11 +378,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   return (
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
-        <div className="flex items-center space-x-2 bg-card rounded-full shadow-lg px-4 py-2">
+        <div className="flex flex-wrap items-center justify-center gap-2 rounded-xl bg-transparent px-1 py-0.5">
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-foreground"></div>
-              <span className="text-sm text-muted-foreground">Processing recording...</span>
+              <span className="text-sm text-muted-foreground">{translateUI("Processing recording...")}</span>
             </div>
           ) : (
             <>
@@ -345,7 +390,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                 <>
                   <button
                     onClick={handleStartRecording}
-                    className="w-10 h-10 flex items-center justify-center bg-red-500 rounded-full text-white hover:bg-red-600 transition-colors"
+                    className="w-10 h-10 flex items-center justify-center bg-primary rounded-full text-primary-foreground hover:bg-primary/90 transition-colors"
                   >
                     <Mic size={16} />
                   </button>
@@ -353,7 +398,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                   <div className="w-px h-6 bg-secondary mx-1" />
 
                   <div className="flex items-center space-x-1 mx-2">
-                    <div className="text-sm text-muted-foreground min-w-[40px]">
+                    <div className="tabular-nums text-sm text-muted-foreground min-w-[40px]">
                       {formatTime(currentTime)}
                     </div>
                     <div
@@ -364,13 +409,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         style={{ width: `${progress}%` }}
                       />
                     </div>
-                    <div className="text-sm text-muted-foreground min-w-[40px]">
+                    <div className="tabular-nums text-sm text-muted-foreground min-w-[40px]">
                       {formatTime(duration)}
                     </div>
                   </div>
 
                   <button
-                    className="w-10 h-10 flex items-center justify-center bg-muted rounded-full text-white cursor-not-allowed"
+                    className="w-10 h-10 flex items-center justify-center bg-muted rounded-full text-primary-foreground cursor-not-allowed"
                     disabled
                   >
                     <Play size={16} />
@@ -388,18 +433,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             handleStartRecording();
                           }}
                           disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel}
-                          className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel ? 'bg-muted' : 'bg-red-500 hover:bg-red-600'
-                            } rounded-full text-white transition-colors relative`}
+                          className={`relative flex h-11 min-w-[168px] items-center justify-center gap-2.5 rounded-full px-5 text-sm font-medium shadow-sm transition-all duration-200 ${isStarting || isProcessing || isValidatingModel ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground hover:-translate-y-0.5 hover:bg-primary/90 hover:shadow-md'
+                            }`}
                         >
                           {isValidatingModel ? (
                             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-border"></div>
                           ) : (
-                            <Mic size={20} />
+                            <><Mic size={18} /><span>{translateUI("Start recording")}</span></>
                           )}
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Start recording</p>
+                        <p>{translateUI("Start recording")}</p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
@@ -417,7 +462,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                                 handlePauseRecording();
                               }
                             }}
-                            disabled={isPausing || isResuming || isStopping}
+                            disabled={isPausing || isResuming || isStopping || isDiscarding || showDiscard}
                             className={`w-10 h-10 flex items-center justify-center ${isPausing || isResuming || isStopping
                               ? 'bg-secondary border-2 border-border text-muted-foreground'
                               : 'bg-card border-2 border-border text-muted-foreground hover:border-border hover:bg-muted'
@@ -426,13 +471,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             {isPaused ? <Play size={16} /> : <Pause size={16} />}
                             {(isPausing || isResuming) && (
                               <div className="absolute -top-8 text-muted-foreground font-medium text-xs">
-                                {isPausing ? 'Pausing...' : 'Resuming...'}
+                                {isPausing ? translateUI("Pausing...") : translateUI("Resuming...")}
                               </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{isPaused ? 'Resume recording' : 'Pause recording'}</p>
+                          <p>{isPaused ? translateUI("Resume recording") : translateUI("Pause recording")}</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -443,38 +488,34 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               Analytics.trackButtonClick('stop_recording', 'recording_controls');
                               handleStopRecording();
                             }}
-                            disabled={isStopping || isPausing || isResuming}
-                            className={`w-10 h-10 flex items-center justify-center ${isStopping || isPausing || isResuming ? 'bg-muted' : 'bg-red-500 hover:bg-red-600'
-                              } rounded-full text-white transition-colors relative`}
+                            disabled={isStopping || isPausing || isResuming || isDiscarding || showDiscard}
+                            className={`w-10 h-10 flex items-center justify-center ${isStopping || isPausing || isResuming ? 'bg-muted' : 'bg-seal text-seal-foreground hover:bg-seal/90'
+                              } rounded-full text-primary-foreground transition-colors relative`}
                           >
                             <Square size={16} />
                             {isStopping && (
-                              <div className="absolute -top-8 text-muted-foreground font-medium text-xs">
-                                Stopping...
-                              </div>
+                              <div className="absolute -top-8 text-muted-foreground font-medium text-xs"> {translateUI("Stopping...")} </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Stop recording</p>
+                          <p>{translateUI("End & save recording")}</p>
                         </TooltipContent>
                       </Tooltip>
+                      {isPaused && <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" aria-label={translateUI("Discard recording")} disabled={isDiscarding || isStopping || isResuming}
+                            onClick={() => { setDiscardError(null); setShowDiscard(true); }}
+                            className="flex h-10 w-10 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            <Trash2 size={16} aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{translateUI("Discard recording")}</TooltipContent>
+                      </Tooltip>}
                     </>
                   )}
 
-                  <div className="flex items-center space-x-1 mx-4">
-                    {barHeights.map((height, index) => (
-                      <div
-                        key={index}
-                        className={`w-1 rounded-full transition-all duration-200 ${isPaused ? 'bg-orange-500' : 'bg-red-500'
-                          }`}
-                        style={{
-                          height: isRecording && !isPaused ? height : '4px',
-                          opacity: isPaused ? 0.6 : 1,
-                        }}
-                      />
-                    ))}
-                  </div>
+                  <RecordingWaveform isRecording={isRecording} isPaused={isPaused} />
                 </>
               )}
             </>
@@ -483,26 +524,24 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
         {/* Show validation status only */}
         {isValidatingModel && (
-          <div className="text-xs text-muted-foreground text-center mt-2">
-            Validating speech recognition...
-          </div>
+          <div className="text-xs text-muted-foreground text-center mt-2"> {translateUI("Validating speech recognition...")} </div>
         )}
 
         {/* Device error alert */}
         {deviceError && (
-          <Alert variant="destructive" className="mt-4 border-red-300 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10">
-            <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+          <Alert variant="destructive" className="mt-4 border-destructive/30 bg-destructive/10">
+            <AlertCircle className="h-5 w-5 text-destructive dark:text-destructive" />
             <button
               onClick={() => setDeviceError(null)}
-              className="absolute right-3 top-3 text-red-600 dark:text-red-400 hover:text-red-800 dark:text-red-200 transition-colors"
-              aria-label="Close alert"
+              className="absolute right-3 top-3 text-destructive dark:text-destructive hover:text-destructive dark:text-destructive transition-colors"
+              aria-label={translateUI("Close alert")}
             >
               <X className="h-4 w-4" />
             </button>
-            <AlertTitle className="text-red-800 dark:text-red-200 font-semibold mb-2">
+            <AlertTitle className="text-destructive dark:text-destructive font-semibold mb-2">
               {deviceError.title}
             </AlertTitle>
-            <AlertDescription className="text-red-700 dark:text-red-300">
+            <AlertDescription className="text-destructive dark:text-destructive">
               {deviceError.message.split('\n').map((line, i) => (
                 <div key={i} className={i > 0 ? 'ml-2' : ''}>
                   {line}
@@ -518,6 +557,19 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         </div>
       )} */}
       </div>
+      <Dialog open={showDiscard} onOpenChange={open => { if (!discardBusy.current && !discardError) setShowDiscard(open); }}>
+        <DialogContent className="max-w-md rounded-2xl border-border bg-card">
+          <DialogHeader>
+            <DialogTitle>{translateUI("Discard this recording?")}</DialogTitle>
+            <DialogDescription className="pt-2 leading-6">{translateUI("This deletes this recording’s audio and transcript. No note or summary will be created. This cannot be undone.")}</DialogDescription>
+          </DialogHeader>
+          {discardError && <p role="alert" className="text-sm text-destructive">{discardError}</p>}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" disabled={isDiscarding || !!discardError} onClick={() => setShowDiscard(false)}>{translateUI("Keep recording")}</Button>
+            <Button variant="destructive" disabled={isDiscarding} onClick={handleDiscard}>{isDiscarding ? translateUI("Discarding…") : discardError ? translateUI("Retry cleanup") : translateUI("Discard recording")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 };

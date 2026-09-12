@@ -1,18 +1,27 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
+import dynamic from 'next/dynamic';
 import { Summary, SummaryResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
-import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
+import { NotePanelSkeleton } from './meeting-details-skeleton';
+import paneStyles from '@/components/MeetingDetails/CollapsibleSummaryPane.module.css';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { FileText, Sparkles, PanelRightOpen } from 'lucide-react';
 import { ReportHeader } from '@/components/report/ReportHeader';
 import { TopicsTimeline } from '@/components/report/TopicsTimeline';
 import { PlaybackBar, PlaybackBarHandle } from '@/components/report/PlaybackBar';
+
+
+const SummaryPanel = dynamic(() => import('@/components/MeetingDetails/SummaryPanel').then(module => module.SummaryPanel), {
+  loading: () => <NotePanelSkeleton />,
+  ssr: false,
+});
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -27,6 +36,7 @@ import { TOUR_ANCHORS } from '@/lib/tour';
 export default function PageContent({
   meeting,
   summaryData,
+  isSummaryLoading = false,
   initialSegmentId,
   initialJumpId,
   shouldAutoGenerate = false,
@@ -43,6 +53,7 @@ export default function PageContent({
 }: {
   meeting: any;
   summaryData: Summary | null;
+  isSummaryLoading?: boolean;
   initialSegmentId?: string | null;
   initialJumpId?: string | null;
   shouldAutoGenerate?: boolean;
@@ -57,6 +68,7 @@ export default function PageContent({
   loadedCount?: number;
   onLoadMore?: () => void;
 }) {
+  useUiTranslation();
   console.log('📄 PAGE CONTENT: Initializing with data:', {
     meetingId: meeting.id,
     summaryDataKeys: summaryData ? Object.keys(summaryData) : null,
@@ -85,6 +97,15 @@ export default function PageContent({
   // survive collapsing and tab switches.
   const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
   const [mobileTab, setMobileTab] = useState<'transcript' | 'summary'>('transcript');
+  const [summaryReady, setSummaryReady] = useState(false);
+  useEffect(() => {
+    // Give the transcript a paint before mounting the editor and its toolbars.
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => setSummaryReady(true));
+    });
+    return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); };
+  }, []);
 
   // Product-tour step 2 points at a source-linked summary block. Reveal the
   // summary before the coach-mark looks for it: expand it if collapsed and, on
@@ -187,10 +208,10 @@ export default function PageContent({
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', config);
 
-      toast.success('Model settings saved successfully');
+      toast.success(translateUI("Model settings saved successfully"));
     } catch (error) {
       console.error('Failed to save model config:', error);
-      toast.error('Failed to save model settings');
+      toast.error(translateUI("Failed to save model settings"));
     }
   };
 
@@ -249,11 +270,8 @@ export default function PageContent({
   }, [shouldAutoGenerate, meeting.id]); // Re-run if meeting changes
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col h-screen bg-background"
+    <div
+      className={`ink-meeting flex flex-col h-screen bg-background ${paneStyles.root}`}
     >
       {/* read.ai-style report header: title, date/duration meta, and an on-device
           overview-metrics strip computed from the local transcript. */}
@@ -274,13 +292,13 @@ export default function PageContent({
         }}
       />
 
-      {/* Local audio playback (asset protocol); transcript timestamps + chapters seek into it. */}
-      <PlaybackBar ref={playbackRef} folderPath={meeting.folder_path} />
+      {/* Local/imported audio playback; transcript timestamps + chapters seek into it. */}
+      <PlaybackBar ref={playbackRef} meetingId={meeting.id} />
 
       {/* Narrow-screen (< md) tab bar: switches which panel is visible so the
           transcript (primary content) is reachable on mobile/tablet. Hidden on
           md+ where both panels sit side by side. */}
-      <div className="md:hidden flex items-center gap-2 px-3 py-2 border-b border-border bg-card">
+      <div className={`${paneStyles.tabs} items-center gap-2 px-3 py-2 border-b border-border bg-card`}>
         <button
           type="button"
           onClick={() => setMobileTab('transcript')}
@@ -291,9 +309,7 @@ export default function PageContent({
               : 'text-muted-foreground hover:bg-muted border border-transparent'
           }`}
         >
-          <FileText size={16} />
-          Transcript
-        </button>
+          <FileText size={16} /> {translateUI("Transcript")} </button>
         <button
           type="button"
           onClick={() => setMobileTab('summary')}
@@ -304,23 +320,18 @@ export default function PageContent({
               : 'text-muted-foreground hover:bg-muted border border-transparent'
           }`}
         >
-          <Sparkles size={16} />
-          Summary
-        </button>
+          <Sparkles size={16} /> {translateUI("Summary")} </button>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className={`v2-report-panels flex flex-1 min-h-0 overflow-hidden ${paneStyles.layout}`}>
         {/* Transcript wrapper — PRIMARY content.
             - Mobile: full width, visible only when its tab is active.
             - md+: always visible and grows to fill (flex-1), so it is never the
               cramped panel and it reclaims space when the summary collapses.
             The right border only shows on md+ when the summary is visible. */}
         <div
-          className={`${
-            mobileTab === 'transcript' ? 'flex' : 'hidden'
-          } w-full min-w-0 md:flex md:flex-1 md:min-w-0 ${
-            isSummaryCollapsed ? '' : 'md:border-r md:border-border'
-          }`}
+          data-active={mobileTab === 'transcript'}
+          className={paneStyles.transcript}
         >
           <TranscriptPanel
           transcripts={meetingData.transcripts}
@@ -350,22 +361,16 @@ export default function PageContent({
           />
         </div>
 
-        {/* Summary wrapper — the CAPPED / SHRINKING panel (no longer dominant).
-            - Mobile: full width, visible only when its tab is active.
-            - md+: capped to ~half the width (max 640px) and does not grow, so
-              the transcript keeps comfortable room. Hidden when collapsed.
-            - min-w-[340px]: the floor at which the panel toolbar still fits
-              fully icon-only (~338px measured) without scrolling; below md the
-              tab switcher takes over, so the transcript (min-w-0) absorbs the
-              remaining squeeze. */}
+        {/* Desktop: animate the viewport to a 44px rail while keeping the editor mounted and at its expanded width. Mobile keeps the existing full-width tabs. */}
         <div
-          className={`${
-            mobileTab === 'summary' ? 'flex' : 'hidden'
-          } w-full min-w-0 md:w-1/2 md:min-w-[340px] md:max-w-[640px] md:shrink-0 ${
-            isSummaryCollapsed ? 'md:hidden' : 'md:flex'
-          }`}
+          data-collapsed={isSummaryCollapsed}
+          data-active={mobileTab === 'summary'}
+          className={paneStyles.pane}
         >
-          <SummaryPanel
+          <div id="meeting-summary-content" className={paneStyles.content}>
+          {isSummaryLoading || !summaryReady ? (
+            <NotePanelSkeleton />
+          ) : <SummaryPanel
           meeting={meeting}
           meetingTitle={meetingData.meetingTitle}
           onTitleChange={meetingData.handleTitleChange}
@@ -404,25 +409,25 @@ export default function PageContent({
           // Desktop collapse control (chevron lives in the summary header).
           showCollapseButton
           onCollapse={() => setIsSummaryCollapsed(true)}
-          />
-        </div>
-
-        {/* Collapsed-state expand rail (md+ only): a slim edge affordance to bring
-            the summary panel back after it has been collapsed. */}
-        {isSummaryCollapsed && (
-          <div className="hidden md:flex flex-col items-center border-l border-border bg-card shrink-0">
+          />}
+          </div>
+          {/* Keep the rail mounted so rapid reversals continue the transition. */}
+          <div className={`${paneStyles.rail} bg-card`}>
             <button
               type="button"
               onClick={() => setIsSummaryCollapsed(false)}
-              title="Show summary panel"
-              aria-label="Show summary panel"
-              className="p-2 m-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+              title={translateUI("Show summary panel")}
+              aria-label={translateUI("Show summary panel")}
+              aria-expanded={!isSummaryCollapsed}
+              aria-controls="meeting-summary-content"
+              tabIndex={isSummaryCollapsed ? 0 : -1}
+              className="p-2 m-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <PanelRightOpen size={18} />
             </button>
           </div>
-        )}
+        </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

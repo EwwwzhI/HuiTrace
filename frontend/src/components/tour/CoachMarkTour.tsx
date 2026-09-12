@@ -9,6 +9,9 @@ import {
   type TourStepContent,
 } from '@/lib/tour';
 import { useTourTarget, type TargetRect } from './useTourTarget';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
 
 interface CoachMarkTourProps {
   steps: TourStepContent[];
@@ -104,6 +107,7 @@ export function CoachMarkTour({
   onFinish,
   getRoot,
 }: CoachMarkTourProps) {
+  useUiTranslation();
   const step = steps[stepIndex];
   const active = !!step;
 
@@ -198,14 +202,13 @@ export function CoachMarkTour({
         style={popStyle}
       >
         <div className="flex items-start justify-between gap-2">
-          <span className="text-xs font-medium tabular-nums text-muted-foreground">
-            Step {stepIndex + 1} of {total}
+          <span className="text-xs font-medium tabular-nums text-muted-foreground"> {translateUI("Step")} {stepIndex + 1} {translateUI("of")} {total}
           </span>
           <button
             type="button"
             onClick={onSkip}
             className="-mr-1 -mt-1 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="Skip tour"
+            aria-label={translateUI("Skip tour")}
           >
             <X className="h-4 w-4" />
           </button>
@@ -223,25 +226,17 @@ export function CoachMarkTour({
             type="button"
             onClick={onSkip}
             className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Skip tour
-          </button>
+          > {translateUI("Skip tour")} </button>
           <div className="flex items-center gap-2">
             {stepIndex > 0 && (
               <Button variant="outline" size="sm" onClick={onBack}>
-                <ChevronLeft className="h-4 w-4" />
-                Back
-              </Button>
+                <ChevronLeft className="h-4 w-4" /> {translateUI("Back")} </Button>
             )}
             {isLast ? (
               <Button size="sm" onClick={onFinish}>
-                <Mic className="h-4 w-4" />
-                Start recording
-              </Button>
+                <Mic className="h-4 w-4" /> {translateUI("Start recording")} </Button>
             ) : (
-              <Button size="sm" onClick={onNext}>
-                Next
-                <ChevronRight className="h-4 w-4" />
+              <Button size="sm" onClick={onNext}> {translateUI("Next")} <ChevronRight className="h-4 w-4" />
               </Button>
             )}
           </div>

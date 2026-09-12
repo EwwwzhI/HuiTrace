@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">会迹 HuiTrace</title>
+  <desc id="desc">A minimal circular ink emblem with two conversation trails and a vermilion seal dot.</desc>
+
+  <!-- A warm paper disc keeps the silhouette clear against light and dark taskbars. -->
+  <circle cx="256" cy="256" r="232" fill="#F7F1E5"/>
+
+  <!-- Broken ink ring: circular rather than boxed, with a quiet hand-brushed edge. -->
+  <path d="M145 77C193 49 254 35 315 48C383 62 438 104 466 161"
+        fill="none" stroke="#26342F" stroke-width="11" stroke-linecap="round"/>
+  <path d="M466 161C493 218 489 284 461 341C431 403 375 448 309 463"
+        fill="none" stroke="#26342F" stroke-width="11" stroke-linecap="round"/>
+  <path d="M309 463C240 478 170 459 119 419C70 381 40 323 45 261"
+        fill="none" stroke="#26342F" stroke-width="11" stroke-linecap="round"/>
+  <path d="M45 261C48 192 82 126 145 77"
+        fill="none" stroke="#26342F" stroke-width="11" stroke-linecap="round"/>
+
+  <!-- Two simple opposing ink trails suggest a conversation becoming a trace. -->
+  <path d="M128 211C165 158 224 159 251 211C272 252 250 299 205 309C169 317 138 296 123 267"
+        fill="none" stroke="#26342F" stroke-width="39" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M384 301C347 354 288 353 261 301C240 260 262 213 307 203C343 195 374 216 389 245"
+        fill="none" stroke="#26342F" stroke-width="39" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- One restrained vermilion seal point gives the mark a memorable focal accent. -->
+  <circle cx="374" cy="371" r="23" fill="#A83D32"/>
+  <circle cx="374" cy="371" r="10" fill="#F7F1E5" opacity=".9"/>
+</svg>

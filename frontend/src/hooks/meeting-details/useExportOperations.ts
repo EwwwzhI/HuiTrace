@@ -46,6 +46,8 @@ import { renderExportMarkdown } from '@/lib/exportMarkdown';
 import { renderExportDocx } from '@/lib/exportDocx';
 import { renderExportPdf } from '@/lib/exportPdf';
 import type { SummaryDraftResponse } from '@/services/summaryDraftService';
+import { translateUI } from '@/i18n';
+
 
 /** Everything the export needs from the host component. */
 interface UseExportOperationsProps {
@@ -182,7 +184,7 @@ export function useExportOperations({
         // Guard: nothing approved to emit (should be unreachable because the
         // control is gated on an approved summary, but keep it friendly).
         if (doc.sections.length === 0 && doc.actionItems.length === 0) {
-          toast.error('Nothing approved to export yet');
+          toast.error(translateUI("Nothing approved to export yet"));
           return;
         }
 
@@ -199,20 +201,20 @@ export function useExportOperations({
       } catch (err) {
         if (err instanceof ExportApprovalError) {
           console.error('[useExportOperations] Export blocked by approval validation');
-          toast.error('Export blocked: approve the whole summary first', {
+          toast.error(translateUI("Export blocked: approve the whole summary first"), {
             description:
-              'Approved blocks or action items alone are not enough. Approve the summary, then try again.',
+              translateUI("Approved blocks or action items alone are not enough. Approve the summary, then try again."),
           });
         } else if (err instanceof ExportSourceLinkError) {
           console.error('[useExportOperations] Export blocked by source-link validation');
-          toast.error('Export blocked: source link missing', {
+          toast.error(translateUI("Export blocked: source link missing"), {
             description:
-              'Every approved AI item must resolve to a transcript timestamp. Refresh the meeting and try again.',
+              translateUI("Every approved AI item must resolve to a transcript timestamp. Refresh the meeting and try again."),
           });
         } else {
           console.error(`[useExportOperations] ${format} export failed`);
-          toast.error("Couldn't export the summary", {
-            description: 'Please try again in a moment.',
+          toast.error(translateUI("Couldn't export the summary"), {
+            description: translateUI("Please try again in a moment."),
           });
         }
       } finally {

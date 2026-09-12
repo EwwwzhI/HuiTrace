@@ -1,8 +1,11 @@
-import React from 'react';
 import { AlertTriangle, Mic, Speaker, RefreshCw } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { openSystemSettings } from '@/services/systemService';
 import { useIsLinux } from '@/hooks/usePlatform';
+import { translateUI } from '@/i18n';
+import { useUiTranslation } from '@/i18n/client';
+
+
 
 interface PermissionWarningProps {
   hasMicrophone: boolean;
@@ -17,6 +20,7 @@ export function PermissionWarning({
   onRecheck,
   isRechecking = false
 }: PermissionWarningProps) {
+  useUiTranslation();
   const isLinux = useIsLinux();
 
   // Don't show on Linux - permission handling is not needed
@@ -55,13 +59,13 @@ export function PermissionWarning({
     <div className="max-w-md mb-4 space-y-3">
       {/* Combined Permission Warning - Show when either permission is missing */}
       {(!hasMicrophone || !hasSystemAudio) && (
-        <Alert variant="destructive" className="border-amber-400 bg-amber-50">
-          <AlertTriangle className="h-5 w-5 text-amber-600" />
-          <AlertTitle className="text-amber-900 font-semibold">
+        <Alert variant="destructive" className="border-warning bg-warning/10">
+          <AlertTriangle className="h-5 w-5 text-warning" />
+          <AlertTitle className="text-warning font-semibold">
             <div className="flex items-center gap-2">
               {!hasMicrophone && <Mic className="h-4 w-4" />}
               {!hasSystemAudio && <Speaker className="h-4 w-4" />}
-              {!hasMicrophone && !hasSystemAudio ? 'Permissions Required' : !hasMicrophone ? 'Microphone Permission Required' : 'System Audio Permission Required'}
+              {!hasMicrophone && !hasSystemAudio ? translateUI("Permissions Required") : !hasMicrophone ? translateUI("Microphone Permission Required") : translateUI("System Audio Permission Required")}
             </div>
           </AlertTitle>
           {/* Action Buttons */}
@@ -69,43 +73,35 @@ export function PermissionWarning({
             {isMacOS && !hasMicrophone && (
               <button
                 onClick={openMicrophoneSettings}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-md transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-warning-foreground bg-warning hover:bg-warning rounded-md transition-colors"
               >
-                <Mic className="h-4 w-4" />
-                Open Microphone Settings
-              </button>
+                <Mic className="h-4 w-4" /> {translateUI("Open Microphone Settings")} </button>
             )}
             {isMacOS && !hasSystemAudio && (
               <button
                 onClick={openScreenRecordingSettings}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary rounded-md transition-colors"
               >
-                <Speaker className="h-4 w-4" />
-                Open Screen Recording Settings
-              </button>
+                <Speaker className="h-4 w-4" /> {translateUI("Open Screen Recording Settings")} </button>
             )}
             <button
               onClick={onRecheck}
               disabled={isRechecking}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-warning bg-warning/10 hover:bg-warning/10 rounded-md transition-colors disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${isRechecking ? 'animate-spin' : ''}`} />
-              Recheck
-            </button>
+              <RefreshCw className={`h-4 w-4 ${isRechecking ? 'animate-spin' : ''}`} /> {translateUI("Recheck")} </button>
           </div>
-          <AlertDescription className="text-amber-800 mt-2">
+          <AlertDescription className="text-warning mt-2">
             {/* Microphone Warning */}
             {!hasMicrophone && (
               <>
-                <p className="mb-3">
-                  Mityu needs access to your microphone to record meetings. No microphone devices were detected.
-                </p>
+                <p className="mb-3"> {translateUI("HuiTrace needs access to your microphone to record meetings. No microphone devices were detected.")} </p>
                 <div className="space-y-2 text-sm mb-4">
-                  <p className="font-medium">Please check:</p>
+                  <p className="font-medium">{translateUI("Please check:")}</p>
                   <ul className="list-disc list-inside ml-2 space-y-1">
-                    <li>Your microphone is connected and powered on</li>
-                    <li>Microphone permission is granted in System Settings</li>
-                    <li>No other app is exclusively using the microphone</li>
+                    <li>{translateUI("Your microphone is connected and powered on")}</li>
+                    <li>{translateUI("Microphone permission is granted in System Settings")}</li>
+                    <li>{translateUI("No other app is exclusively using the microphone")}</li>
                   </ul>
                 </div>
               </>
@@ -116,16 +112,16 @@ export function PermissionWarning({
               <>
                 <p className="mb-3">
                   {hasMicrophone
-                    ? 'System audio capture is not available. You can still record with your microphone, but computer audio won\'t be captured.'
-                    : 'System audio capture is also not available.'}
+                    ? translateUI("System audio capture is not available. You can still record with your microphone, but computer audio won't be captured.")
+                    : translateUI("System audio capture is also not available.")}
                 </p>
                 {isMacOS && (
                   <div className="space-y-2 text-sm mb-4">
-                    <p className="font-medium">To enable system audio on macOS:</p>
+                    <p className="font-medium">{translateUI("To enable system audio on macOS:")}</p>
                     <ul className="list-disc list-inside ml-2 space-y-1">
-                      <li>Install a virtual audio device (e.g., BlackHole 2ch)</li>
-                      <li>Grant Screen Recording permission to Mityu</li>
-                      <li>Configure your audio routing in Audio MIDI Setup</li>
+                      <li>{translateUI("Install a virtual audio device (e.g., BlackHole 2ch)")}</li>
+                      <li>{translateUI("Grant Screen Recording permission to HuiTrace")}</li>
+                      <li>{translateUI("Configure your audio routing in Audio MIDI Setup")}</li>
                     </ul>
                   </div>
                 )}
