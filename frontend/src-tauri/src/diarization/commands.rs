@@ -98,15 +98,8 @@ pub async fn api_diarize_meeting<R: Runtime>(
 
     let pool = state.db_manager.pool();
     let ctx = crate::context::current();
-    let folder = folder_path_for(pool, &ctx, &meeting_id).await?;
-    let dir = models_dir(&app)?;
-
-    service::diarize_meeting(pool, &ctx, &meeting_id, folder.as_deref(), &dir)
-        .await
-        .map_err(|e| {
-            log_error!("diarization failed: {e:#}");
-            format!("{e:#}")
-        })
+    service::schedule_offline_diarization(app, pool.clone(), ctx, meeting_id);
+    Ok(0)
 }
 
 /// This meeting's stored speaker turns.
@@ -159,4 +152,22 @@ pub async fn api_rename_meeting_speaker(
     )
     .await
     .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn api_assign_transcript_speaker(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    transcript_id: String,
+    speaker_key: Option<String>,
+) -> Result<(), String> {
+    let ctx = crate::context::current();
+    let result = if let Some(key) = speaker_key {
+        sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_assignment_method = 'manual', speaker_provisional = 0 WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+            .bind(key).bind(transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(state.db_manager.pool()).await
+    } else {
+        sqlx::query("UPDATE transcripts SET speaker_id = NULL, speaker_assignment_method = 'diarization', speaker_confidence = NULL, speaker_overlap = 0 WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+            .bind(transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(state.db_manager.pool()).await
+    };
+    result.map(|_| ()).map_err(|e| format!("{e:#}"))
 }

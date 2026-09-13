@@ -54,6 +54,17 @@ impl SpeakerTurnsRepository {
         meeting_id: &str,
         turns: &[SpeakerTurn],
     ) -> Result<usize> {
+        Self::replace_for_meeting_with_source(pool, ctx, meeting_id, turns, AudioSource::Mixed)
+            .await
+    }
+
+    pub async fn replace_for_meeting_with_source(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+        turns: &[SpeakerTurn],
+        source: AudioSource,
+    ) -> Result<usize> {
         if meeting_id.trim().is_empty() {
             bail!("meeting_id cannot be empty");
         }
@@ -86,10 +97,13 @@ impl SpeakerTurnsRepository {
             bail!("meeting {meeting_id} is not in this workspace");
         }
 
+        let old_turns = Self::list_for_meeting_tx(&mut tx, ctx, meeting_id).await?;
+        let turns = remap_turn_keys(&old_turns, turns);
+
         // Profiles are upserted without touching display_name. A person may
         // rename "Speaker 1" to a real-world name; re-running automatic
         // analysis must never undo that explicit edit.
-        for t in turns {
+        for t in &turns {
             let key = if t.speaker_key.is_empty() {
                 speaker_key_from_label(&t.speaker_label)
             } else {
@@ -106,11 +120,11 @@ impl SpeakerTurnsRepository {
             .execute(&mut *tx)
             .await?;
 
-        for t in turns {
+        for t in &turns {
             sqlx::query(
                 "INSERT INTO speaker_turns \
                  (id, meeting_id, workspace_id, speaker_label, speaker_key, start_ms, end_ms, confidence, audio_source, provisional, revision, segment_kind, assignment_method, overlap, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'mixed', 0, 1, 'speech', 'diarization', 0, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 'speech', 'diarization', 0, ?, ?)",
             )
             .bind(uuid::Uuid::new_v4().to_string())
             .bind(meeting_id)
@@ -120,6 +134,7 @@ impl SpeakerTurnsRepository {
             .bind(t.start_ms)
             .bind(t.end_ms)
             .bind(t.confidence)
+            .bind(source.as_str())
             .bind(&now)
             .bind(&now)
             .execute(&mut *tx)
@@ -157,7 +172,7 @@ impl SpeakerTurnsRepository {
                     turn.speaker_key.clone()
                 },
                 speaker_confidence: turn.confidence,
-                audio_source: AudioSource::Mixed,
+                audio_source: source.clone(),
                 provisional: false,
                 revision: 1,
                 segment_kind: SegmentKind::Speech,
@@ -169,6 +184,11 @@ impl SpeakerTurnsRepository {
             sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = ?, speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
                 .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(assignment.transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
         }
+
+        // A profile that is neither active nor manually referenced must not
+        // survive a smaller rerun and appear in the picker as a phantom.
+        sqlx::query("DELETE FROM speakers WHERE meeting_id = ? AND workspace_id = ? AND speaker_key NOT IN (SELECT speaker_key FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ?) AND speaker_key NOT IN (SELECT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL)")
+            .bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
 
         // No `rev` bump: `meetings` is synced, and marking every diarized
         // meeting as freshly modified would make a sync peer re-pull it for a
@@ -208,6 +228,25 @@ impl SpeakerTurnsRepository {
                 end_ms: r.get("end_ms"),
                 confidence: r.get("confidence"),
                 speaker_key: r.get("speaker_key"),
+            })
+            .collect())
+    }
+
+    async fn list_for_meeting_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        ctx: &AuthContext,
+        meeting_id: &str,
+    ) -> Result<Vec<SpeakerTurn>> {
+        let rows = sqlx::query("SELECT COALESCE(s.display_name, st.speaker_label) AS speaker_label, COALESCE(st.speaker_key, '') AS speaker_key, st.start_ms, st.end_ms, st.confidence FROM speaker_turns st LEFT JOIN speakers s ON s.meeting_id = st.meeting_id AND s.workspace_id = st.workspace_id AND s.speaker_key = st.speaker_key WHERE st.meeting_id = ? AND st.workspace_id = ?")
+            .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(&mut **tx).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SpeakerTurn {
+                speaker_label: r.get("speaker_label"),
+                speaker_key: r.get("speaker_key"),
+                start_ms: r.get("start_ms"),
+                end_ms: r.get("end_ms"),
+                confidence: r.get("confidence"),
             })
             .collect())
     }
@@ -265,6 +304,67 @@ impl SpeakerTurnsRepository {
     }
 }
 
+/// Preserve meeting-local identity across backend cluster renumbering. Each new
+/// cluster greedily claims the old key with which it has the most timeline
+/// overlap; ties are deterministic and one old key can only be claimed once.
+fn remap_turn_keys(old: &[SpeakerTurn], new: &[SpeakerTurn]) -> Vec<SpeakerTurn> {
+    let mut old_keys: Vec<String> = old
+        .iter()
+        .map(|t| t.speaker_key.clone())
+        .filter(|k| !k.is_empty())
+        .collect();
+    old_keys.sort();
+    old_keys.dedup();
+    let mut labels: Vec<String> = new.iter().map(|t| t.speaker_label.clone()).collect();
+    labels.sort();
+    labels.dedup();
+    let mut claims: Vec<(i64, String, String)> = Vec::new();
+    for label in &labels {
+        for key in &old_keys {
+            let score: i64 = new
+                .iter()
+                .filter(|n| &n.speaker_label == label)
+                .flat_map(|n| {
+                    old.iter()
+                        .filter(move |o| &o.speaker_key == key)
+                        .map(move |o| (n.end_ms.min(o.end_ms) - n.start_ms.max(o.start_ms)).max(0))
+                })
+                .sum();
+            claims.push((score, label.clone(), key.clone()));
+        }
+    }
+    claims.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    let mut assigned = std::collections::HashMap::new();
+    let mut used = std::collections::HashSet::new();
+    for (score, label, key) in claims {
+        if score > 0 && !assigned.contains_key(&label) && used.insert(key.clone()) {
+            assigned.insert(label, key);
+        }
+    }
+    let mut next = 1usize;
+    new.iter()
+        .cloned()
+        .map(|mut turn| {
+            turn.speaker_key = assigned
+                .get(&turn.speaker_label)
+                .cloned()
+                .unwrap_or_else(|| {
+                    while used.contains(&format!("speaker_{next:02}")) {
+                        next += 1;
+                    }
+                    let key = format!("speaker_{next:02}");
+                    used.insert(key.clone());
+                    key
+                });
+            turn
+        })
+        .collect()
+}
+
 fn speaker_key_from_label(label: &str) -> String {
     if let Some(number) = label
         .split_whitespace()
@@ -288,5 +388,34 @@ fn audio_source_from_db(value: &str) -> AudioSource {
         "system" => AudioSource::System,
         "imported" => AudioSource::Imported,
         _ => AudioSource::Mixed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn turn(start_ms: i64, end_ms: i64, label: &str, key: &str) -> SpeakerTurn {
+        SpeakerTurn {
+            start_ms,
+            end_ms,
+            speaker_label: label.into(),
+            confidence: None,
+            speaker_key: key.into(),
+        }
+    }
+
+    #[test]
+    fn remaps_swapped_backend_cluster_numbers_to_existing_voice_keys() {
+        let old = vec![
+            turn(0, 1_000, "Alice", "speaker_01"),
+            turn(1_000, 2_000, "Bob", "speaker_02"),
+        ];
+        let new = vec![
+            turn(0, 1_000, "Speaker 2", "speaker_02"),
+            turn(1_000, 2_000, "Speaker 1", "speaker_01"),
+        ];
+        let remapped = remap_turn_keys(&old, &new);
+        assert_eq!(remapped[0].speaker_key, "speaker_01");
+        assert_eq!(remapped[1].speaker_key, "speaker_02");
     }
 }

@@ -50,7 +50,7 @@ pub fn reconcile_transcript(
                     segment_kind: dominant.segment_kind.clone(),
                     audio_source: transcript.audio_source.clone(),
                     assignment_method: dominant.assignment_method.clone(),
-                    overlap: candidates.len() > 1,
+                    overlap: has_true_speaker_overlap(transcript, speakers),
                 }
             } else {
                 TranscriptSpeakerAssignment {
@@ -67,6 +67,23 @@ pub fn reconcile_transcript(
             }
         })
         .collect()
+}
+
+/// A transcript spanning a clean hand-off is not crosstalk.  `speaker_overlap`
+/// is set only when two distinct diarizer turns themselves overlap within the
+/// transcript window.
+pub fn has_true_speaker_overlap(
+    transcript: &TranscriptTiming,
+    speakers: &[SpeakerSegment],
+) -> bool {
+    speakers.iter().enumerate().any(|(index, left)| {
+        speakers.iter().skip(index + 1).any(|right| {
+            left.speaker_key != right.speaker_key
+                && left.end_ms.min(right.end_ms) > left.start_ms.max(right.start_ms)
+                && left.end_ms.min(right.end_ms) > transcript.start_ms
+                && left.start_ms.max(right.start_ms) < transcript.end_ms
+        })
+    })
 }
 
 #[cfg(test)]
@@ -105,6 +122,24 @@ mod tests {
             ],
         );
         assert_eq!(result[0].speaker_key.as_deref(), Some("speaker_02"));
+        assert!(!result[0].overlap);
+    }
+
+    #[test]
+    fn marks_only_true_simultaneous_speech_as_overlap() {
+        let transcript = TranscriptTiming {
+            id: "t".into(),
+            start_ms: 10_000,
+            end_ms: 13_000,
+            audio_source: AudioSource::Mixed,
+        };
+        let result = reconcile_transcript(
+            &[transcript],
+            &[
+                speaker(10_000, 12_000, "speaker_01"),
+                speaker(11_500, 13_000, "speaker_02"),
+            ],
+        );
         assert!(result[0].overlap);
     }
 

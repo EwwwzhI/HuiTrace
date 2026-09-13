@@ -24,7 +24,12 @@ impl<B: DiarizationBackend> OfflineDiarizationService<B> {
         Self { backend }
     }
 
-    pub async fn analyze(&self, audio: &Path, models_dir: &Path) -> Result<Vec<SpeakerSegment>> {
+    pub async fn analyze(
+        &self,
+        audio: &Path,
+        models_dir: &Path,
+        source: AudioSource,
+    ) -> Result<Vec<SpeakerSegment>> {
         let paths = match models::status(models_dir).await {
             models::ModelStatus::Available(paths) => paths,
             models::ModelStatus::Missing => bail!("diarization models are not downloaded yet"),
@@ -42,7 +47,11 @@ impl<B: DiarizationBackend> OfflineDiarizationService<B> {
         tokio::task::spawn_blocking(move || super::service::prepare_wav(&input, &wav))
             .await
             .context("audio preparation task panicked")??;
-        self.backend.diarize(temp.path(), &paths).await
+        let mut segments = self.backend.diarize(temp.path(), &paths).await?;
+        for segment in &mut segments {
+            segment.audio_source = source.clone();
+        }
+        Ok(segments)
     }
 }
 

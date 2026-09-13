@@ -167,6 +167,10 @@ export type TalkTimeState =
   | { kind: 'ready' }
   /** Models are not on disk yet. */
   | { kind: 'modelsMissing' }
+  | { kind: 'queued' }
+  | { kind: 'running' }
+  | { kind: 'failed'; error?: string | null }
+  | { kind: 'unavailable'; error?: string | null }
   /** A pass finished. `turns` may be empty -- that is an answer, not a failure. */
   | { kind: 'done'; diarizedAt: string; turns: SpeakerTurn[] };
 
@@ -233,6 +237,12 @@ export function TalkTimePanel({
         <p className="text-sm text-muted-foreground"> {translateUI("Separating speakers needs two small models that are not on this machine yet. They are downloaded once and then run entirely on-device.")} </p>
       </Frame>
     );
+  }
+  if (state.kind === 'queued' || state.kind === 'running') {
+    return <p className="text-sm text-muted-foreground" role="status">Processing speakers…</p>;
+  }
+  if (state.kind === 'failed' || state.kind === 'unavailable') {
+    return <div className="text-sm text-destructive"><p>{state.error || 'Speaker analysis needs attention.'}</p><button type="button" onClick={onRun} disabled={busy} className="mt-2 underline">Retry</button></div>;
   }
 
   if (state.kind === 'ready') {

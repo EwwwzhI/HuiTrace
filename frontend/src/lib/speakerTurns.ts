@@ -45,7 +45,9 @@ export type DiarizationAvailability =
   | { status: 'noAudio' }
   | { status: 'ready' }
   | { status: 'modelsMissing' }
-  | { status: 'done'; diarized_at: string; turns: number };
+  | { status: 'done'; diarized_at: string; turns: number }
+  | { status: 'queued' } | { status: 'running' }
+  | { status: 'failed'; error?: string | null } | { status: 'unavailable'; error?: string | null };
 
 /**
  * A transcript row's extent, in seconds from the recording start.

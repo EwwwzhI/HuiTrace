@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 import type { DiarizationAvailability, SpeakerTurn } from '@/lib/speakerTurns';
 import type { TalkTimeState } from '@/components/report/SpeakerTurns';
@@ -39,7 +40,9 @@ export function useDiarization(meetingId: string | undefined) {
         meetingId,
       });
       if (availability.status !== 'done') {
-        setState({ kind: availability.status });
+        setState('error' in availability
+          ? { kind: availability.status, error: availability.error }
+          : { kind: availability.status });
         return;
       }
       // Only now are the rows worth fetching.
@@ -57,6 +60,17 @@ export function useDiarization(meetingId: string | undefined) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!meetingId) return;
+    let unlisten: (() => void) | undefined;
+    void listen<{ meeting_id: string; status: string; error?: string }>('diarization-status-changed', (event) => {
+      if (event.payload.meeting_id !== meetingId) return;
+      if (event.payload.status === 'failed' && event.payload.error) setError(event.payload.error);
+      void refresh();
+    }).then((dispose) => { unlisten = dispose; });
+    return () => unlisten?.();
+  }, [meetingId, refresh]);
 
   const downloadModels = useCallback(async () => {
     setBusy(true);

@@ -4,15 +4,20 @@
 //! finished recording, so it can fail without touching a recording in progress
 //! (`CLAUDE.md` §4).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use sqlx::{Row, SqlitePool};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::context::AuthContext;
 use crate::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
 use crate::diarization::models;
+use crate::diarization::types::AudioSource;
+
+static ACTIVE_JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// Whether this meeting can be diarized, and what has already happened.
 ///
@@ -30,7 +35,18 @@ pub enum Availability {
     /// Models are not on disk yet.
     ModelsMissing,
     /// A pass completed. `turns` may be zero, which means it separated nothing.
-    Done { diarized_at: String, turns: usize },
+    Done {
+        diarized_at: String,
+        turns: usize,
+    },
+    Queued,
+    Running,
+    Failed {
+        error: Option<String>,
+    },
+    Unavailable {
+        error: Option<String>,
+    },
 }
 
 /// Where a meeting's recording lives, if it kept one.
@@ -47,6 +63,17 @@ pub fn meeting_audio(folder_path: Option<&str>) -> Option<PathBuf> {
     crate::audio::retranscription::find_audio_file(&folder).ok()
 }
 
+async fn source_for_meeting(pool: &SqlitePool, ctx: &AuthContext, meeting_id: &str) -> AudioSource {
+    let value: Option<String> = sqlx::query_scalar("SELECT audio_source FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND audio_source IS NOT NULL LIMIT 1")
+        .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_optional(pool).await.ok().flatten();
+    match value.as_deref() {
+        Some("imported") => AudioSource::Imported,
+        Some("microphone") => AudioSource::Microphone,
+        Some("system") => AudioSource::System,
+        _ => AudioSource::Mixed,
+    }
+}
+
 /// Report the four states for one meeting.
 pub async fn availability(
     pool: &SqlitePool,
@@ -55,6 +82,45 @@ pub async fn availability(
     folder_path: Option<&str>,
     models_dir: &Path,
 ) -> Result<Availability> {
+    let persisted: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT diarization_status, diarization_error FROM meetings WHERE id = ? AND workspace_id = ?",
+    )
+    .bind(meeting_id)
+    .bind(ctx.tenant_id.as_str())
+    .fetch_optional(pool)
+    .await?;
+    if let Some((status, error)) = persisted {
+        if status == "running" || status == "queued" {
+            let key = format!("{}:{meeting_id}", ctx.tenant_id);
+            if !ACTIVE_JOBS
+                .get_or_init(|| Mutex::new(HashSet::new()))
+                .lock()
+                .expect("diarization registry poisoned")
+                .contains(&key)
+            {
+                // An app restart cannot retain a sidecar job. Make the stale
+                // durable marker retryable instead of showing Processing forever.
+                set_status(
+                    pool,
+                    ctx,
+                    meeting_id,
+                    "failed",
+                    Some("Speaker analysis interrupted by application restart"),
+                )
+                .await?;
+                return Ok(Availability::Failed {
+                    error: Some("Speaker analysis interrupted by application restart".into()),
+                });
+            }
+        }
+        match status.as_str() {
+            "queued" => return Ok(Availability::Queued),
+            "running" => return Ok(Availability::Running),
+            "failed" => return Ok(Availability::Failed { error }),
+            "unavailable" => return Ok(Availability::Unavailable { error }),
+            _ => {}
+        }
+    }
     if let Some(at) = SpeakerTurnsRepository::diarized_at(pool, ctx, meeting_id).await? {
         let turns = SpeakerTurnsRepository::list_for_meeting(pool, ctx, meeting_id)
             .await?
@@ -121,7 +187,7 @@ pub async fn diarize_meeting(
         anyhow!("this meeting has no saved audio, so speakers cannot be identified")
     })?;
     let segments = crate::diarization::offline::OfflineDiarizationService::default()
-        .analyze(&audio, models_dir)
+        .analyze(&audio, models_dir, AudioSource::Mixed)
         .await?;
     let turns: Vec<SpeakerTurn> = segments
         .into_iter()
@@ -133,7 +199,14 @@ pub async fn diarize_meeting(
             speaker_key: segment.speaker_key,
         })
         .collect();
-    SpeakerTurnsRepository::replace_for_meeting(pool, ctx, meeting_id, &turns).await?;
+    SpeakerTurnsRepository::replace_for_meeting_with_source(
+        pool,
+        ctx,
+        meeting_id,
+        &turns,
+        AudioSource::Mixed,
+    )
+    .await?;
     if let Some(folder) = folder_path {
         if let Err(error) = sync_transcripts_json(pool, ctx, meeting_id, Path::new(folder)).await {
             log::warn!(
@@ -163,7 +236,26 @@ pub fn schedule_offline_diarization<R: Runtime>(
     ctx: AuthContext,
     meeting_id: String,
 ) {
+    let registry = ACTIVE_JOBS.get_or_init(|| Mutex::new(HashSet::new()));
+    let job_key = format!("{}:{meeting_id}", ctx.tenant_id);
+    if !registry
+        .lock()
+        .expect("diarization registry poisoned")
+        .insert(job_key.clone())
+    {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
+        let registry = ACTIVE_JOBS.get_or_init(|| Mutex::new(HashSet::new()));
+        let _guard = ActiveJobGuard {
+            key: job_key,
+            registry,
+        };
+        let emit = |status: &str, error: Option<String>, turns: Option<usize>| {
+            let _ = app.emit("diarization-status-changed", serde_json::json!({"meeting_id": meeting_id, "status": status, "error": error, "turns": turns}));
+        };
+        let _ = set_status(&pool, &ctx, &meeting_id, "queued", None).await;
+        emit("queued", None, None);
         let folder: Option<String> = match sqlx::query_scalar(
             "SELECT folder_path FROM meetings WHERE id = ? AND workspace_id = ?",
         )
@@ -179,6 +271,7 @@ pub fn schedule_offline_diarization<R: Runtime>(
                     meeting_id,
                     error
                 );
+                emit("failed", Some(error.to_string()), None);
                 return;
             }
         };
@@ -191,6 +284,11 @@ pub fn schedule_offline_diarization<R: Runtime>(
                 Some("No saved audio available for speaker analysis"),
             )
             .await;
+            emit(
+                "unavailable",
+                Some("No saved audio available for speaker analysis".into()),
+                None,
+            );
             return;
         };
         let models_dir = match app.path().app_data_dir() {
@@ -204,6 +302,7 @@ pub fn schedule_offline_diarization<R: Runtime>(
                     Some(&format!("Resolve diarization model directory: {error}")),
                 )
                 .await;
+                emit("failed", Some(error.to_string()), None);
                 return;
             }
         };
@@ -219,11 +318,18 @@ pub fn schedule_offline_diarization<R: Runtime>(
                 Some("Diarization models are not installed"),
             )
             .await;
+            emit(
+                "unavailable",
+                Some("Diarization models are not installed".into()),
+                None,
+            );
             return;
         }
+        let source = source_for_meeting(&pool, &ctx, &meeting_id).await;
         let _ = set_status(&pool, &ctx, &meeting_id, "running", None).await;
+        emit("running", None, None);
         match crate::diarization::offline::OfflineDiarizationService::default()
-            .analyze(&audio, &models_dir)
+            .analyze(&audio, &models_dir, source.clone())
             .await
         {
             Ok(segments) => {
@@ -237,9 +343,14 @@ pub fn schedule_offline_diarization<R: Runtime>(
                         speaker_key: segment.speaker_key,
                     })
                     .collect();
-                if let Err(error) =
-                    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, &meeting_id, &turns)
-                        .await
+                if let Err(error) = SpeakerTurnsRepository::replace_for_meeting_with_source(
+                    &pool,
+                    &ctx,
+                    &meeting_id,
+                    &turns,
+                    source,
+                )
+                .await
                 {
                     let _ =
                         set_status(&pool, &ctx, &meeting_id, "failed", Some(&error.to_string()))
@@ -249,6 +360,7 @@ pub fn schedule_offline_diarization<R: Runtime>(
                         meeting_id,
                         error
                     );
+                    emit("failed", Some(error.to_string()), None);
                 } else if let Some(folder) = folder.as_deref() {
                     if let Err(error) =
                         sync_transcripts_json(&pool, &ctx, &meeting_id, Path::new(folder)).await
@@ -259,15 +371,32 @@ pub fn schedule_offline_diarization<R: Runtime>(
                             error
                         );
                     }
+                    emit("completed", None, Some(turns.len()));
+                } else {
+                    emit("completed", None, Some(turns.len()));
                 }
             }
             Err(error) => {
                 let _ =
                     set_status(&pool, &ctx, &meeting_id, "failed", Some(&error.to_string())).await;
                 log::warn!("speaker analysis failed for {}: {:#}", meeting_id, error);
+                emit("failed", Some(error.to_string()), None);
             }
         }
     });
+}
+
+struct ActiveJobGuard {
+    key: String,
+    registry: &'static Mutex<HashSet<String>>,
+}
+impl Drop for ActiveJobGuard {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .expect("diarization registry poisoned")
+            .remove(&self.key);
+    }
 }
 
 async fn sync_transcripts_json(
