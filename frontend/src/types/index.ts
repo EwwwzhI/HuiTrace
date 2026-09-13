@@ -22,7 +22,7 @@ export interface Transcript {
   speaker_revision?: number;
   segment_kind?: string;
   audio_source?: 'microphone' | 'system' | 'imported' | 'mixed';
-  speaker_assignment_method?: 'diarization' | 'manual';
+  speaker_assignment_method?: 'diarization' | 'short_turn_refinement' | 'manual';
   speaker_overlap?: boolean;
 }
 

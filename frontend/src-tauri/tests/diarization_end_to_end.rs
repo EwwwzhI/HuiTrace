@@ -68,7 +68,13 @@ async fn a_transcripts_only_meeting_reports_no_audio() {
     let state = service::availability(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
         .await
         .expect("availability");
-    assert_eq!(state, service::Availability::NoAudio);
+    assert_eq!(
+        state,
+        service::Availability {
+            result: None,
+            job: service::DiarizationJobState::NoAudio,
+        }
+    );
 
     // And running anyway must refuse with a reason, not panic or write nothing
     // while reporting success.
@@ -115,7 +121,10 @@ async fn a_real_recording_is_diarized_and_stored() {
         service::availability(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
             .await
             .expect("availability"),
-        service::Availability::ModelsMissing,
+        service::Availability {
+            result: None,
+            job: service::DiarizationJobState::ModelsMissing,
+        },
         "audio is there but the models are not, and those are different problems"
     );
 
@@ -131,7 +140,10 @@ async fn a_real_recording_is_diarized_and_stored() {
         service::availability(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
             .await
             .expect("availability"),
-        service::Availability::Ready
+        service::Availability {
+            result: None,
+            job: service::DiarizationJobState::Idle,
+        }
     );
 
     let stored = service::diarize_meeting(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
@@ -157,11 +169,9 @@ async fn a_real_recording_is_diarized_and_stored() {
     assert!(speakers.len() >= 2, "expected at least two speakers");
 
     // And the state has moved on, so the UI stops offering a pass.
-    match service::availability(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
+    let state = service::availability(&pool, &ctx, "m-1", folder.to_str(), &models_dir)
         .await
-        .expect("availability")
-    {
-        service::Availability::Done { turns, .. } => assert_eq!(turns, stored),
-        other => panic!("expected Done, got {other:?}"),
-    }
+        .expect("availability");
+    assert_eq!(state.job, service::DiarizationJobState::Idle);
+    assert_eq!(state.result.expect("completed result").turns, stored);
 }

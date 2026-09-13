@@ -30,6 +30,17 @@ pub struct ContinuousVadProcessor {
 
 impl ContinuousVadProcessor {
     pub fn new(input_sample_rate: u32, redemption_time_ms: u32) -> Result<Self> {
+        Self::new_with_min_speech(input_sample_rate, redemption_time_ms, 250)
+    }
+
+    /// Offline transcription may lower this to the ShortTurnConfig candidate
+    /// floor. The live pipeline keeps using `new`, and therefore its existing
+    /// 250 ms noise guard remains unchanged.
+    pub fn new_with_min_speech(
+        input_sample_rate: u32,
+        redemption_time_ms: u32,
+        min_speech_time_ms: u64,
+    ) -> Result<Self> {
         // Silero VAD MUST use 16kHz - this is hardcoded requirement
         const VAD_SAMPLE_RATE: u32 = 16000;
 
@@ -53,10 +64,10 @@ impl ContinuousVadProcessor {
         // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
         // Previous: 100ms allowed too-short segments that Whisper rejects
         // New: 250ms ensures segments are substantial enough for Whisper (>100ms requirement)
-        config.min_speech_time = Duration::from_millis(250); // Prevent tiny fragments
+        config.min_speech_time = Duration::from_millis(min_speech_time_ms);
 
         debug!("Creating VAD session with: sample_rate={}Hz, redemption={}ms, min_speech={}ms, input_rate={}Hz",
-               VAD_SAMPLE_RATE, redemption_time_ms, 250, input_sample_rate);
+               VAD_SAMPLE_RATE, redemption_time_ms, min_speech_time_ms, input_sample_rate);
 
         let session = VadSession::new(config)
             .map_err(|e| anyhow!("Failed to create VAD session: {:?}", e))?;
@@ -380,12 +391,30 @@ pub fn get_speech_chunks(
 pub fn get_speech_chunks_with_progress<F>(
     samples_mono_16k: &[f32],
     redemption_time_ms: u32,
+    progress_callback: F,
+) -> Result<Vec<SpeechSegment>>
+where
+    F: FnMut(u32, usize) -> bool,
+{
+    get_speech_chunks_with_progress_and_min_speech(
+        samples_mono_16k,
+        redemption_time_ms,
+        250,
+        progress_callback,
+    )
+}
+
+pub fn get_speech_chunks_with_progress_and_min_speech<F>(
+    samples_mono_16k: &[f32],
+    redemption_time_ms: u32,
+    min_speech_time_ms: u64,
     mut progress_callback: F,
 ) -> Result<Vec<SpeechSegment>>
 where
     F: FnMut(u32, usize) -> bool,
 {
-    let mut processor = ContinuousVadProcessor::new(16000, redemption_time_ms)?;
+    let mut processor =
+        ContinuousVadProcessor::new_with_min_speech(16000, redemption_time_ms, min_speech_time_ms)?;
 
     let total_samples = samples_mono_16k.len();
 

@@ -14,6 +14,7 @@ pub mod commands;
 pub mod models;
 pub mod offline;
 pub mod service;
+pub mod short_turn;
 pub mod sidecar;
 pub mod timeline;
 pub mod types;

@@ -80,19 +80,6 @@ function formatRecordingTime(seconds: number | undefined): string {
     return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
 }
 
-// Helper function to remove filler words and repetitions
-function cleanStopWords(text: string): string {
-    const stopWords = ['uh', 'um', 'er', 'ah', 'hmm', 'hm', 'eh', 'oh'];
-
-    let cleanedText = text;
-    stopWords.forEach(word => {
-        const pattern = new RegExp(`\\b${word}\\b[,\\s]*`, 'gi');
-        cleanedText = cleanedText.replace(pattern, ' ');
-    });
-
-    return cleanedText.replace(/\s+/g, ' ').trim();
-}
-
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
@@ -137,7 +124,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
 }) {
   useUiTranslation();
-    const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    // The primary transcript is the evidence-bearing raw ASR output. Cleanup,
+    // if offered later, belongs to an explicit presentation/summary option.
+    const displayText = text.trim() === '' ? '[Silence]' : text;
 
     return (
         <div

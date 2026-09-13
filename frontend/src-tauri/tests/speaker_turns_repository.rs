@@ -3,6 +3,13 @@
 
 use app_lib::context::{AuthContext, RequestId, Role, TenantId, UserId};
 use app_lib::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
+use app_lib::diarization::short_turn::{
+    refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnRefiner,
+};
+use app_lib::diarization::timeline::reconcile_transcript;
+use app_lib::diarization::types::{
+    AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
+};
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -41,6 +48,26 @@ async fn seed_meeting(pool: &SqlitePool, id: &str, workspace: &str) {
     .execute(pool)
     .await
     .expect("seed meeting");
+}
+
+async fn seed_transcript(
+    pool: &SqlitePool,
+    id: &str,
+    meeting_id: &str,
+    text: &str,
+    start: f64,
+    end: f64,
+) {
+    sqlx::query("INSERT INTO transcripts (id, meeting_id, workspace_id, transcript, timestamp, audio_start_time, audio_end_time, duration) VALUES (?, ?, 'local', ?, '2026-09-13T00:00:00Z', ?, ?, ?)")
+        .bind(id)
+        .bind(meeting_id)
+        .bind(text)
+        .bind(start)
+        .bind(end)
+        .bind(end - start)
+        .execute(pool)
+        .await
+        .expect("seed transcript");
 }
 
 fn turn(start_ms: i64, end_ms: i64, label: &str) -> SpeakerTurn {
@@ -262,5 +289,116 @@ async fn impossible_turns_are_refused_before_anything_is_written() {
             .expect("read turns")
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn manual_assignment_survives_rerun() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("manual.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-1", "m-1", "hmm", 0.0, 0.3).await;
+    sqlx::query("UPDATE transcripts SET speaker_id = 'speaker_manual', speaker_assignment_method = 'manual' WHERE id = 't-1'")
+        .execute(&pool)
+        .await
+        .expect("manual assignment");
+
+    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, "m-1", &[turn(0, 2_000, "Speaker 1")])
+        .await
+        .expect("rerun");
+
+    let row: (Option<String>, String) = sqlx::query_as(
+        "SELECT speaker_id, speaker_assignment_method FROM transcripts WHERE id = 't-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read assignment");
+    assert_eq!(row, (Some("speaker_manual".into()), "manual".into()));
+}
+
+#[tokio::test]
+async fn swapped_backend_cluster_numbering_preserves_speaker_identity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("swap.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[turn(0, 2_000, "Speaker 1"), turn(2_000, 4_000, "Speaker 2")],
+    )
+    .await
+    .expect("first pass");
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[turn(0, 2_000, "Speaker 2"), turn(2_000, 4_000, "Speaker 1")],
+    )
+    .await
+    .expect("swapped pass");
+
+    let turns = SpeakerTurnsRepository::list_for_meeting(&pool, &ctx, "m-1")
+        .await
+        .expect("read turns");
+    assert_eq!(turns[0].speaker_key, "speaker_01");
+    assert_eq!(turns[1].speaker_key, "speaker_02");
+}
+
+#[tokio::test]
+async fn restore_automatic_uses_the_current_timeline_immediately() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("restore.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, "m-1", &[turn(0, 2_000, "Speaker 2")])
+        .await
+        .expect("current timeline");
+    let stored = SpeakerTurnsRepository::list_for_meeting(&pool, &ctx, "m-1")
+        .await
+        .expect("turns");
+    let speakers: Vec<SpeakerSegment> = stored
+        .iter()
+        .map(|turn| SpeakerSegment {
+            start_ms: turn.start_ms,
+            end_ms: turn.end_ms,
+            speaker_key: turn.speaker_key.clone(),
+            speaker_confidence: Some(0.9),
+            audio_source: AudioSource::Mixed,
+            provisional: false,
+            revision: 1,
+            segment_kind: SegmentKind::Speech,
+            assignment_method: AssignmentMethod::Diarization,
+            overlap: false,
+        })
+        .collect();
+    let timing = TranscriptTiming {
+        id: "t-1".into(),
+        start_ms: 100,
+        end_ms: 400,
+        audio_source: AudioSource::Mixed,
+    };
+    let assignment = reconcile_transcript(std::slice::from_ref(&timing), &speakers)
+        .pop()
+        .expect("assignment");
+    let restored = refine_timeline_assignment(
+        &ShortTurnRefiner::default(),
+        &MeetingSpeakerPrototypeStore::new(stored.iter().map(|turn| turn.speaker_key.clone())),
+        &timing,
+        "hmm",
+        Some(0.9),
+        assignment,
+        &speakers,
+    );
+    assert_eq!(
+        restored.speaker_key.as_deref(),
+        Some(stored[0].speaker_key.as_str())
+    );
+    assert_eq!(stored[0].speaker_label, "Speaker 2");
+    assert_eq!(
+        restored.assignment_method,
+        AssignmentMethod::ShortTurnRefinement
     );
 }

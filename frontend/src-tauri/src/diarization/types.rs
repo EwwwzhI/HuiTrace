@@ -29,7 +29,15 @@ impl AudioSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SegmentKind {
+    /// Ordinary lexical speech.
     Speech,
+    /// A short acknowledgement or conversational feedback turn.
+    Backchannel,
+    /// Evidence indicates a non-speech transient or background event.
+    Noise,
+    /// Human vocal audio such as laughter, cough, or breathing without words.
+    NonSpeechVocalization,
+    /// Available evidence is insufficient for a safer classification.
     Unknown,
 }
 
@@ -37,6 +45,9 @@ impl SegmentKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Speech => "speech",
+            Self::Backchannel => "backchannel",
+            Self::Noise => "noise",
+            Self::NonSpeechVocalization => "non_speech_vocalization",
             Self::Unknown => "unknown",
         }
     }
@@ -46,6 +57,7 @@ impl SegmentKind {
 #[serde(rename_all = "snake_case")]
 pub enum AssignmentMethod {
     Diarization,
+    ShortTurnRefinement,
     Manual,
 }
 
@@ -53,6 +65,7 @@ impl AssignmentMethod {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Diarization => "diarization",
+            Self::ShortTurnRefinement => "short_turn_refinement",
             Self::Manual => "manual",
         }
     }

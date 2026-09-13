@@ -1,0 +1,67 @@
+[
+  {
+    "name": "200ms Chinese acknowledgement with strong speaker 2 evidence",
+    "candidate": {"start_ms":0,"end_ms":200,"duration_ms":200,"text":"嗯","asr_confidence":0.95,"diarization_speaker":"speaker_02","diarization_confidence":0.92,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":true,"previous_speaker":"speaker_01","next_speaker":"speaker_01","previous_gap_ms":0,"next_gap_ms":0},
+    "known_speakers": ["speaker_01", "speaker_02"],
+    "expected_kind": "backchannel",
+    "expected_speaker": "speaker_02"
+  },
+  {
+    "name": "180ms empty weak event",
+    "candidate": {"start_ms":0,"end_ms":180,"duration_ms":180,"text":"","asr_confidence":0.05,"diarization_speaker":null,"diarization_confidence":0.05,"audio_source":"mixed","overlaps_existing_turn":false,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "noise",
+    "expected_speaker": null
+  },
+  {
+    "name": "400ms direct speaker 2 beats speaker 1 neighbour",
+    "candidate": {"start_ms":0,"end_ms":400,"duration_ms":400,"text":"对","asr_confidence":0.90,"diarization_speaker":"speaker_02","diarization_confidence":0.88,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":"speaker_01","next_speaker":null,"previous_gap_ms":20,"next_gap_ms":null},
+    "known_speakers": ["speaker_01", "speaker_02"],
+    "expected_kind": "backchannel",
+    "expected_speaker": "speaker_02"
+  },
+  {
+    "name": "300ms English acknowledgement with conflicting neighbours",
+    "candidate": {"start_ms":0,"end_ms":300,"duration_ms":300,"text":"hmm","asr_confidence":0.90,"diarization_speaker":"speaker_02","diarization_confidence":0.90,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":"speaker_01","next_speaker":"speaker_01","previous_gap_ms":0,"next_gap_ms":0},
+    "known_speakers": ["speaker_01", "speaker_02"],
+    "expected_kind": "backchannel",
+    "expected_speaker": "speaker_02"
+  },
+  {
+    "name": "250ms transient noise",
+    "candidate": {"start_ms":0,"end_ms":250,"duration_ms":250,"text":"","asr_confidence":0.0,"diarization_speaker":null,"diarization_confidence":0.0,"audio_source":"mixed","overlaps_existing_turn":false,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "noise",
+    "expected_speaker": null
+  },
+  {
+    "name": "900ms compound acknowledgement stays meaningful",
+    "candidate": {"start_ms":0,"end_ms":900,"duration_ms":900,"text":"好的，可以。","asr_confidence":0.92,"diarization_speaker":"speaker_01","diarization_confidence":0.82,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01"
+  },
+  {
+    "name": "650ms English acknowledgement covers the middle duration bucket",
+    "candidate": {"start_ms":0,"end_ms":650,"duration_ms":650,"text":"yes","asr_confidence":0.92,"diarization_speaker":"speaker_01","diarization_confidence":0.86,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "backchannel",
+    "expected_speaker": "speaker_01"
+  },
+  {
+    "name": "1300ms control group bypasses short-turn refinement",
+    "candidate": {"start_ms":0,"end_ms":1300,"duration_ms":1300,"text":"This is a normal sentence.","asr_confidence":0.95,"diarization_speaker":"speaker_01","diarization_confidence":0.90,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01",
+    "bypass": true
+  },
+  {
+    "name": "2500ms normal sentence bypasses refinement",
+    "candidate": {"start_ms":0,"end_ms":2500,"duration_ms":2500,"text":"This is a normal sentence with stable evidence.","asr_confidence":0.95,"diarization_speaker":"speaker_01","diarization_confidence":0.90,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01",
+    "bypass": true
+  }
+]

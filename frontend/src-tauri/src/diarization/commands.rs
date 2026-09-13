@@ -204,8 +204,9 @@ pub async fn api_restore_transcript_speaker_assignment(
     use sqlx::Row;
     let ctx = crate::context::current();
     let pool = state.db_manager.pool();
-    let row = sqlx::query("SELECT audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+    let row = sqlx::query("SELECT transcript, audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
         .bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).fetch_optional(pool).await.map_err(|e| format!("read transcript: {e}"))?.ok_or("transcript does not belong to this meeting")?;
+    let text: String = row.get("transcript");
     let start: Option<f64> = row.get("audio_start_time");
     let end: Option<f64> = row.get("audio_end_time");
     let source = match row.get::<String, _>("audio_source").as_str() {
@@ -240,19 +241,40 @@ pub async fn api_restore_transcript_speaker_assignment(
             overlap: false,
         })
         .collect::<Vec<_>>();
+    let timing = TranscriptTiming {
+        id: transcript_id.clone(),
+        start_ms: (start * 1000.0).round() as i64,
+        end_ms: (end * 1000.0).round() as i64,
+        audio_source: source,
+    };
     let assignment = crate::diarization::timeline::reconcile_transcript(
-        &[TranscriptTiming {
-            id: transcript_id.clone(),
-            start_ms: (start * 1000.0).round() as i64,
-            end_ms: (end * 1000.0).round() as i64,
-            audio_source: source,
-        }],
+        std::slice::from_ref(&timing),
         &speakers,
     )
     .pop()
     .expect("one assignment");
-    let result = sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = 'diarization', speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
-        .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.overlap as i64).bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await.map_err(|e| format!("restore assignment: {e}"))?;
+    let profiles =
+        crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_speakers(
+            pool,
+            &ctx,
+            &meeting_id,
+        )
+        .await
+        .map_err(|e| format!("read speaker profiles: {e:#}"))?;
+    let prototypes = crate::diarization::short_turn::MeetingSpeakerPrototypeStore::new(
+        profiles.into_iter().map(|profile| profile.speaker_key),
+    );
+    let assignment = crate::diarization::short_turn::refine_timeline_assignment(
+        &crate::diarization::short_turn::ShortTurnRefiner::default(),
+        &prototypes,
+        &timing,
+        &text,
+        None,
+        assignment,
+        &speakers,
+    );
+    let result = sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = ?, speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+        .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await.map_err(|e| format!("restore assignment: {e}"))?;
     if result.rows_affected() != 1 {
         return Err("transcript does not belong to this meeting".into());
     }

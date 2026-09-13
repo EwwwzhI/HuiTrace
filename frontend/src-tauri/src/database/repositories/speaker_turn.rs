@@ -12,6 +12,9 @@ use chrono::Utc;
 use sqlx::{Row, SqlitePool};
 
 use crate::context::AuthContext;
+use crate::diarization::short_turn::{
+    refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnConfig, ShortTurnRefiner,
+};
 use crate::diarization::timeline::reconcile_transcript;
 use crate::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
@@ -100,6 +103,33 @@ impl SpeakerTurnsRepository {
         let old_turns = Self::list_for_meeting_tx(&mut tx, ctx, meeting_id).await?;
         let turns = remap_turn_keys(&old_turns, turns);
 
+        // A short-only backend cluster is evidence, not permission to create a
+        // meeting speaker. Existing keys remain known across reruns; a new key
+        // becomes eligible only after a long, confident, non-overlap speech
+        // turn can seed the Phase 2A meeting-local prototype abstraction.
+        let short_turn_config = ShortTurnConfig::default();
+        let mut known_speaker_keys: std::collections::HashSet<String> = old_turns
+            .iter()
+            .map(|turn| turn.speaker_key.clone())
+            .filter(|key| !key.is_empty())
+            .collect();
+        for turn in &turns {
+            let duration_ms = turn.end_ms.saturating_sub(turn.start_ms) as u64;
+            if duration_ms >= short_turn_config.prototype_min_duration_ms
+                && turn.confidence.unwrap_or(1.0) >= short_turn_config.high_confidence_threshold
+            {
+                known_speaker_keys.insert(turn.speaker_key.clone());
+            }
+        }
+        let manual_speakers: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_all(&mut *tx)
+        .await?;
+        known_speaker_keys.extend(manual_speakers);
+
         // Profiles are upserted without touching display_name. A person may
         // rename "Speaker 1" to a real-world name; re-running automatic
         // analysis must never undo that explicit edit.
@@ -109,6 +139,9 @@ impl SpeakerTurnsRepository {
             } else {
                 t.speaker_key.clone()
             };
+            if !known_speaker_keys.contains(&key) {
+                continue;
+            }
             sqlx::query("INSERT INTO speakers (id, meeting_id, workspace_id, speaker_key, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, meeting_id, speaker_key) DO UPDATE SET updated_at = excluded.updated_at")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(meeting_id).bind(ctx.tenant_id.as_str())
                 .bind(key).bind(&t.speaker_label).bind(&now).bind(&now).execute(&mut *tx).await?;
@@ -143,23 +176,36 @@ impl SpeakerTurnsRepository {
 
         // Reconcile only automatic assignments. `manual` is intentionally a
         // durable override and must outlive every later offline pass.
-        let rows = sqlx::query("SELECT id, audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
+        let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
             .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(&mut *tx).await?;
-        let timings: Vec<TranscriptTiming> = rows
+        let transcript_inputs: Vec<(TranscriptTiming, String)> = rows
             .into_iter()
             .filter_map(|row| {
                 let start: Option<f64> = row.get("audio_start_time");
                 let end: Option<f64> = row.get("audio_end_time");
                 match (start, end) {
-                    (Some(start), Some(end)) if end > start => Some(TranscriptTiming {
-                        id: row.get("id"),
-                        start_ms: (start * 1000.0).round() as i64,
-                        end_ms: (end * 1000.0).round() as i64,
-                        audio_source: audio_source_from_db(&row.get::<String, _>("audio_source")),
-                    }),
+                    (Some(start), Some(end)) if end > start => Some((
+                        TranscriptTiming {
+                            id: row.get("id"),
+                            start_ms: (start * 1000.0).round() as i64,
+                            end_ms: (end * 1000.0).round() as i64,
+                            audio_source: audio_source_from_db(
+                                &row.get::<String, _>("audio_source"),
+                            ),
+                        },
+                        row.get("transcript"),
+                    )),
                     _ => None,
                 }
             })
+            .collect();
+        let timings: Vec<TranscriptTiming> = transcript_inputs
+            .iter()
+            .map(|(timing, _)| timing.clone())
+            .collect();
+        let transcript_text: std::collections::HashMap<&str, &str> = transcript_inputs
+            .iter()
+            .map(|(timing, text)| (timing.id.as_str(), text.as_str()))
             .collect();
         let speaker_segments: Vec<SpeakerSegment> = turns
             .iter()
@@ -180,7 +226,30 @@ impl SpeakerTurnsRepository {
                 overlap: false,
             })
             .collect();
+        let prototypes = MeetingSpeakerPrototypeStore::new(known_speaker_keys.iter().cloned());
+        let refiner = ShortTurnRefiner::default();
+        let timings_by_id: std::collections::HashMap<&str, &TranscriptTiming> = timings
+            .iter()
+            .map(|timing| (timing.id.as_str(), timing))
+            .collect();
         for assignment in reconcile_transcript(&timings, &speaker_segments) {
+            let assignment = timings_by_id
+                .get(assignment.transcript_id.as_str())
+                .map(|timing| {
+                    refine_timeline_assignment(
+                        &refiner,
+                        &prototypes,
+                        timing,
+                        transcript_text
+                            .get(assignment.transcript_id.as_str())
+                            .copied()
+                            .unwrap_or_default(),
+                        None,
+                        assignment.clone(),
+                        &speaker_segments,
+                    )
+                })
+                .unwrap_or(assignment);
             sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = ?, speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
                 .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(assignment.transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
         }

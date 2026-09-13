@@ -2,7 +2,7 @@
 
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
-use crate::audio::vad::get_speech_chunks_with_progress;
+use crate::audio::vad::get_speech_chunks_with_progress_and_min_speech;
 use crate::config::{DEFAULT_PARAKEET_MODEL, DEFAULT_WHISPER_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
@@ -465,9 +465,10 @@ async fn run_import<R: Runtime>(
     let app_for_vad = app.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
-        get_speech_chunks_with_progress(
+        get_speech_chunks_with_progress_and_min_speech(
             &audio_samples,
             VAD_REDEMPTION_TIME_MS,
+            crate::diarization::short_turn::ShortTurnConfig::default().min_candidate_ms,
             |vad_progress, segments_found| {
                 let overall_progress = 25 + (vad_progress as f32 * 0.05) as u32;
                 emit_progress(
@@ -620,7 +621,11 @@ async fn run_import<R: Runtime>(
         );
 
         // Skip very short segments
-        if segment.samples.len() < 1600 {
+        if segment.samples.len()
+            < crate::diarization::short_turn::min_candidate_samples_16khz(
+                &crate::diarization::short_turn::ShortTurnConfig::default(),
+            )
+        {
             debug!(
                 "Skipping short segment {} with {} samples",
                 i,

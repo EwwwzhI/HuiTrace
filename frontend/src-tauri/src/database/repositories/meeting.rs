@@ -369,6 +369,15 @@ pub(crate) async fn delete_meeting_with_connection(
         .execute(&mut *transaction)
         .await?;
 
+    // Stable meeting-local speaker profiles are derived diarization data too.
+    // Foreign-key actions are disabled on this connection, so profiles need
+    // the same explicit tenant-scoped deletion as their turns.
+    sqlx::query("DELETE FROM speakers WHERE meeting_id = ? AND workspace_id = ?")
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .execute(&mut *transaction)
+        .await?;
+
     // Finally delete only the caller-owned parent. With cascades disabled on
     // this disposable connection, foreign malformed children remain untouched.
     let result = sqlx::query("DELETE FROM meetings WHERE id = ? AND workspace_id = ?")

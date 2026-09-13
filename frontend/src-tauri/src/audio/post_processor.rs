@@ -131,11 +131,9 @@ impl PostProcessor {
         // Step 1: Clean repetitive text (most expensive operation)
         let deduplicated = Self::clean_repetitive_text(text);
 
-        // Step 2: Remove common transcription artifacts
-        let cleaned = Self::remove_artifacts(&deduplicated);
-
-        // Step 3: Normalize whitespace and punctuation
-        let normalized = Self::normalize_text(&cleaned);
+        // Step 2: Normalize whitespace and punctuation. Lexical fillers and
+        // backchannels remain part of the evidence-bearing transcript.
+        let normalized = Self::normalize_text(&deduplicated);
 
         // Step 4: Apply contextual improvements (if not partial)
         let final_text = if !request.is_partial {
@@ -196,24 +194,6 @@ impl PostProcessor {
         }
 
         result.join(" ")
-    }
-
-    /// Remove common transcription artifacts using simple string matching
-    fn remove_artifacts(text: &str) -> String {
-        let mut words: Vec<String> = text.split_whitespace().map(|w| w.to_string()).collect();
-
-        // Remove common filler words and sounds
-        let fillers = [
-            "uh", "um", "er", "ah", "oh", "hm", "hmm", "uhh", "umm", "err", "ahh", "ohh",
-        ];
-
-        words.retain(|word| {
-            let clean_word_temp = word.to_lowercase();
-            let clean_word = clean_word_temp.trim_matches(|c: char| !c.is_alphabetic());
-            !fillers.contains(&clean_word) || clean_word.len() > 3
-        });
-
-        words.join(" ")
     }
 
     /// Normalize text formatting
