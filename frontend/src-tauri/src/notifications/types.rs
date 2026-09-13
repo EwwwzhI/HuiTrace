@@ -170,7 +170,8 @@ impl Notification {
                     format!("Transcription completed and saved to: {}", path)
                 }
             }
-            None => crate::ui_language::text("Transcription has been completed", "转写已完成").to_string(),
+            None => crate::ui_language::text("Transcription has been completed", "转写已完成")
+                .to_string(),
         };
 
         Notification::new("HuiTrace", body, NotificationType::TranscriptionComplete)

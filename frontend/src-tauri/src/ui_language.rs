@@ -4,7 +4,11 @@ use tauri::{AppHandle, Runtime};
 static CHINESE: AtomicBool = AtomicBool::new(false);
 
 pub fn text(en: &'static str, zh: &'static str) -> &'static str {
-    if CHINESE.load(Ordering::Relaxed) { zh } else { en }
+    if CHINESE.load(Ordering::Relaxed) {
+        zh
+    } else {
+        en
+    }
 }
 
 pub fn is_chinese() -> bool {
