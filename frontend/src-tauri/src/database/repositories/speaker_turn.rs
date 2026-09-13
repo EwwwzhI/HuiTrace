@@ -13,11 +13,14 @@ use sqlx::{Row, SqlitePool};
 use std::sync::OnceLock;
 
 use crate::context::AuthContext;
+use crate::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use crate::diarization::short_turn::{
     apply_revision_semantics, refine_assignment_with_candidate, MeetingSpeakerPrototypeStore,
-    ShortTurnCandidateExtractor, ShortTurnConfig, ShortTurnRefiner, TranscriptCandidateInput,
+    ShortTurnCandidateExtractor, ShortTurnCandidateSource, ShortTurnRefiner,
+    SpeakerAcceptancePolicy, SpeakerAcceptanceTurn, TranscriptCandidateInput,
     VadEventCandidateInput,
 };
+use crate::diarization::short_turn_event::ShortTurnMaterializationPolicy;
 use crate::diarization::timeline::reconcile_transcript;
 use crate::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
@@ -38,84 +41,6 @@ pub struct SpeakerTurn {
 pub struct SpeakerProfile {
     pub speaker_key: String,
     pub display_name: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SpeakerAcceptanceEvidence {
-    pub total_duration_ms: u64,
-    pub turn_count: usize,
-    pub longest_turn_ms: u64,
-    pub available_confidence_count: usize,
-    pub mean_available_confidence: Option<f64>,
-    pub overlap_ratio: f64,
-}
-
-fn acceptance_evidence(turns: &[SpeakerTurn], speaker_key: &str) -> SpeakerAcceptanceEvidence {
-    let owned: Vec<_> = turns
-        .iter()
-        .filter(|turn| turn.speaker_key == speaker_key)
-        .collect();
-    let total_duration_ms = owned
-        .iter()
-        .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
-        .sum();
-    let longest_turn_ms = owned
-        .iter()
-        .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
-        .max()
-        .unwrap_or(0);
-    let confidences: Vec<_> = owned.iter().filter_map(|turn| turn.confidence).collect();
-    let mean_available_confidence = (!confidences.is_empty())
-        .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
-    let overlap_ms: u64 = owned
-        .iter()
-        .map(|turn| {
-            turns
-                .iter()
-                .filter(|other| other.speaker_key != speaker_key)
-                .map(|other| {
-                    turn.end_ms
-                        .min(other.end_ms)
-                        .saturating_sub(turn.start_ms.max(other.start_ms))
-                        .max(0) as u64
-                })
-                .sum::<u64>()
-                .min(turn.end_ms.saturating_sub(turn.start_ms) as u64)
-        })
-        .sum();
-    SpeakerAcceptanceEvidence {
-        total_duration_ms,
-        turn_count: owned.len(),
-        longest_turn_ms,
-        available_confidence_count: confidences.len(),
-        mean_available_confidence,
-        overlap_ratio: if total_duration_ms == 0 {
-            0.0
-        } else {
-            overlap_ms as f64 / total_duration_ms as f64
-        },
-    }
-}
-
-fn qualifies_as_accepted_speaker(
-    evidence: &SpeakerAcceptanceEvidence,
-    config: &ShortTurnConfig,
-) -> bool {
-    if evidence.overlap_ratio > 0.50 {
-        return false;
-    }
-    match evidence.mean_available_confidence {
-        Some(confidence) => {
-            evidence.total_duration_ms >= config.prototype_min_duration_ms
-                && evidence.longest_turn_ms >= 1_200
-                && confidence >= config.high_confidence_threshold
-        }
-        None => {
-            evidence.total_duration_ms >= 4_000
-                && evidence.turn_count >= 2
-                && evidence.longest_turn_ms >= config.prototype_min_duration_ms
-        }
-    }
 }
 
 pub struct SpeakerTurnsRepository;
@@ -207,7 +132,7 @@ impl SpeakerTurnsRepository {
         // meeting speaker. Existing keys remain known across reruns; a new key
         // becomes eligible only after a long, confident, non-overlap speech
         // turn can seed the Phase 2A meeting-local prototype abstraction.
-        let short_turn_config = ShortTurnConfig::default();
+        let acceptance_policy = SpeakerAcceptancePolicy::default();
         let mut known_speaker_keys: std::collections::HashSet<String> = sqlx::query_scalar(
             "SELECT speaker_key FROM speakers WHERE meeting_id = ? AND workspace_id = ?",
         )
@@ -217,16 +142,16 @@ impl SpeakerTurnsRepository {
         .await?
         .into_iter()
         .collect();
-        for key in turns
+        let acceptance_turns = turns
             .iter()
-            .map(|turn| turn.speaker_key.as_str())
-            .collect::<std::collections::HashSet<_>>()
-        {
-            let evidence = acceptance_evidence(&turns, key);
-            if qualifies_as_accepted_speaker(&evidence, &short_turn_config) {
-                known_speaker_keys.insert(key.to_string());
-            }
-        }
+            .map(|turn| SpeakerAcceptanceTurn {
+                start_ms: turn.start_ms,
+                end_ms: turn.end_ms,
+                speaker_key: turn.speaker_key.clone(),
+                confidence: turn.confidence,
+            })
+            .collect::<Vec<_>>();
+        known_speaker_keys.extend(acceptance_policy.accepted_speaker_keys(&acceptance_turns));
         let manual_speakers: Vec<String> = sqlx::query_scalar(
             "SELECT DISTINCT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL",
         )
@@ -235,6 +160,14 @@ impl SpeakerTurnsRepository {
         .fetch_all(&mut *tx)
         .await?;
         known_speaker_keys.extend(manual_speakers);
+        let manual_event_speakers: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT speaker_key FROM short_turn_events WHERE meeting_id = ? AND workspace_id = ? AND assignment_method = 'manual' AND speaker_key IS NOT NULL",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_all(&mut *tx)
+        .await?;
+        known_speaker_keys.extend(manual_event_speakers);
 
         // Profiles are upserted without touching display_name. A person may
         // rename "Speaker 1" to a real-world name; re-running automatic
@@ -282,7 +215,7 @@ impl SpeakerTurnsRepository {
 
         // Reconcile only automatic assignments. `manual` is intentionally a
         // durable override and must outlive every later offline pass.
-        let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, COALESCE(segment_kind, 'unknown') AS segment_kind, COALESCE(audio_source, 'mixed') AS audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
+        let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, COALESCE(segment_kind, 'unknown') AS segment_kind, COALESCE(audio_source, 'mixed') AS audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ?")
             .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(&mut *tx).await?;
         let transcript_inputs: Vec<(
             TranscriptCandidateInput,
@@ -374,25 +307,34 @@ impl SpeakerTurnsRepository {
             &raw_speaker_segments,
             vad_events,
         );
-        let candidates_by_transcript: std::collections::HashMap<
+        let mut candidates_by_transcript: std::collections::HashMap<
             &str,
-            &crate::diarization::short_turn::ShortTurnCandidate,
-        > = extracted
-            .iter()
-            .flat_map(|candidate| {
-                candidate
-                    .transcript_ids
-                    .iter()
-                    .map(move |id| (id.as_str(), candidate))
-            })
-            .collect();
+            Vec<&crate::diarization::short_turn::ShortTurnCandidate>,
+        > = std::collections::HashMap::new();
+        for (id, candidate) in extracted.iter().flat_map(|candidate| {
+            candidate
+                .transcript_ids
+                .iter()
+                .map(move |id| (id.as_str(), candidate))
+        }) {
+            candidates_by_transcript
+                .entry(id)
+                .or_default()
+                .push(candidate);
+        }
         for assignment in reconcile_transcript(&timings, &speaker_segments) {
             let proposed = candidates_by_transcript
                 .get(assignment.transcript_id.as_str())
-                .filter(|candidate| {
-                    candidate.candidate_sources.contains(
-                        &crate::diarization::short_turn::ShortTurnCandidateSource::Transcript,
-                    )
+                .and_then(|candidates| {
+                    candidates.iter().copied().find(|candidate| {
+                        candidate
+                            .candidate_sources
+                            .contains(&ShortTurnCandidateSource::Transcript)
+                            && timings.iter().any(|timing| {
+                                timing.id == assignment.transcript_id
+                                    && timing.end_ms.saturating_sub(timing.start_ms) <= 1_200
+                            })
+                    })
                 })
                 .map(|candidate| {
                     refine_assignment_with_candidate(
@@ -411,10 +353,25 @@ impl SpeakerTurnsRepository {
                 .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(assignment.transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
         }
 
+        let materializer = ShortTurnMaterializationPolicy::default();
+        let events = extracted
+            .iter()
+            .filter_map(|candidate| {
+                let decision = refiner.refine(candidate, &prototypes);
+                materializer
+                    .materialize(meeting_id, candidate, &decision, &timings)
+                    .event
+            })
+            .collect::<Vec<_>>();
+        ShortTurnEventsRepository::replace_automatic_for_meeting_tx(
+            &mut tx, ctx, meeting_id, &events,
+        )
+        .await?;
+
         // A profile that is neither active nor manually referenced must not
         // survive a smaller rerun and appear in the picker as a phantom.
-        sqlx::query("DELETE FROM speakers WHERE meeting_id = ? AND workspace_id = ? AND speaker_key NOT IN (SELECT speaker_key FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ?) AND speaker_key NOT IN (SELECT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL)")
-            .bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM speakers WHERE meeting_id = ? AND workspace_id = ? AND speaker_key NOT IN (SELECT speaker_key FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ?) AND speaker_key NOT IN (SELECT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL) AND speaker_key NOT IN (SELECT speaker_key FROM short_turn_events WHERE meeting_id = ? AND workspace_id = ? AND assignment_method = 'manual' AND speaker_key IS NOT NULL)")
+            .bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
 
         // No `rev` bump: `meetings` is synced, and marking every diarized
         // meeting as freshly modified would make a sync peer re-pull it for a
@@ -593,27 +550,37 @@ fn remap_turn_keys(old: &[SpeakerTurn], new: &[SpeakerTurn]) -> Vec<SpeakerTurn>
             .then_with(|| a.2.cmp(&b.2))
     });
     let mut assigned = std::collections::HashMap::new();
-    let mut used = std::collections::HashSet::new();
+    let mut claimed_old = std::collections::HashSet::new();
     for (score, label, key) in claims {
-        if score > 0 && !assigned.contains_key(&label) && used.insert(key.clone()) {
+        if score > 0 && !assigned.contains_key(&label) && claimed_old.insert(key.clone()) {
             assigned.insert(label, key);
         }
     }
+    // Allocate once per backend cluster label, then reuse that stable key for
+    // every turn in the cluster. Reserving all old keys prevents a genuinely
+    // new cluster from accidentally inheriting an inactive identity merely
+    // because its generated number is available in this pass.
+    let mut used: std::collections::HashSet<String> = old_keys.into_iter().collect();
+    used.extend(assigned.values().cloned());
     let mut next = 1usize;
+    for label in &labels {
+        if assigned.contains_key(label) {
+            continue;
+        }
+        while used.contains(&format!("speaker_{next:02}")) {
+            next += 1;
+        }
+        let key = format!("speaker_{next:02}");
+        used.insert(key.clone());
+        assigned.insert(label.clone(), key);
+    }
     new.iter()
         .cloned()
         .map(|mut turn| {
             turn.speaker_key = assigned
                 .get(&turn.speaker_label)
                 .cloned()
-                .unwrap_or_else(|| {
-                    while used.contains(&format!("speaker_{next:02}")) {
-                        next += 1;
-                    }
-                    let key = format!("speaker_{next:02}");
-                    used.insert(key.clone());
-                    key
-                });
+                .expect("every deduplicated label received a key");
             turn
         })
         .collect()

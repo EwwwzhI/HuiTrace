@@ -48,6 +48,6 @@ harness lives under `evaluation/short_turn_dataset` and reports overall plus
 reports candidate recall by Transcript, DiarizerTurn, VadEvent, and union, plus
 separate transcript-assignment and visible-speaker false-new-speaker rates.
 
-Audio is intentionally excluded from source control. Model-assisted Phase 2C
+Audio is intentionally excluded from source control. Model-assisted Phase 2D
 should not begin until representative real-audio results show a remaining error
 that evidence plumbing and threshold tuning cannot address.

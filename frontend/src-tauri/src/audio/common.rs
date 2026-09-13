@@ -153,6 +153,25 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
     Ok(())
 }
 
+/// Short semantic events are exported beside, not inside, transcripts.json so
+/// the portable artifact preserves the Transcript != ShortTurnEvent boundary.
+pub(crate) fn write_short_turn_events_json(
+    folder: &Path,
+    events: &[crate::diarization::short_turn_event::ShortTurnEvent],
+) -> Result<()> {
+    let path = folder.join("short_turn_events.json");
+    let temporary = folder.join(".short_turn_events.json.tmp");
+    let json = serde_json::json!({
+        "version": "1.0",
+        "last_updated": chrono::Utc::now().to_rfc3339(),
+        "total_events": events.len(),
+        "events": events,
+    });
+    std::fs::write(&temporary, serde_json::to_string_pretty(&json)?)?;
+    std::fs::rename(&temporary, &path)?;
+    Ok(())
+}
+
 /// Split a long speech segment at the lowest-energy (silence) point near the target size.
 ///
 /// Scans for 100ms windows with minimal RMS energy within +/-3 seconds of each target
@@ -283,5 +302,38 @@ mod tests {
 
         acquired_rx.await.unwrap();
         waiter.await.unwrap();
+    }
+
+    #[test]
+    fn short_turn_events_export_stays_separate_from_transcripts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let event = crate::diarization::short_turn_event::ShortTurnEvent {
+            id: "event-1".into(),
+            meeting_id: "meeting-1".into(),
+            start_ms: 100,
+            end_ms: 400,
+            transcript_id: Some("transcript-1".into()),
+            kind: crate::diarization::types::SegmentKind::Backchannel,
+            kind_confidence: 0.9,
+            speaker_key: Some("speaker_02".into()),
+            speaker_display_name: Some("Speaker 2".into()),
+            speaker_confidence: Some(0.8),
+            candidate_sources: vec![
+                crate::diarization::short_turn::ShortTurnCandidateSource::Transcript,
+            ],
+            audio_source: crate::diarization::types::AudioSource::Mixed,
+            revision: 1,
+            assignment_method: crate::diarization::types::AssignmentMethod::ShortTurnRefinement,
+            transcript_aligned: true,
+            user_visible: true,
+        };
+        write_short_turn_events_json(dir.path(), &[event]).expect("write events");
+        let json: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("short_turn_events.json")).expect("read"),
+        )
+        .expect("json");
+        assert_eq!(json["total_events"], 1);
+        assert_eq!(json["events"][0]["transcript_id"], "transcript-1");
+        assert!(!dir.path().join("transcripts.json").exists());
     }
 }

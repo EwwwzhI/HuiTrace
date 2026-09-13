@@ -8,7 +8,7 @@ import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
-import { TranscriptSegmentData } from "@/types";
+import { ShortTurnEvent, TranscriptSegmentData } from "@/types";
 import { SpeakerChips } from "./report/SpeakerTurns";
 import { hasCrosstalk, speakersForRow, talkTime, type SpeakerTurn } from "@/lib/speakerTurns";
 import { translateUI } from '@/i18n';
@@ -39,7 +39,10 @@ export interface VirtualizedTranscriptViewProps {
      * all rather than a row of "Unknown".
      */
     speakerTurns?: SpeakerTurn[];
+    /** Embedded semantic events. Transcript-aligned events are filtered by the backend. */
+    shortTurnEvents?: ShortTurnEvent[];
     onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
+    onAssignShortTurnEventSpeaker?: (eventId: string, speakerKey: string | null) => Promise<void> | void;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
 
@@ -80,6 +83,19 @@ function formatRecordingTime(seconds: number | undefined): string {
     return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
 }
 
+function formatPreciseRecordingTime(milliseconds: number): string {
+    const totalSeconds = Math.max(0, milliseconds) / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = (totalSeconds % 60).toFixed(1).padStart(4, '0');
+    return `[${minutes.toString().padStart(2, '0')}:${seconds}]`;
+}
+
+function shortEventLabel(kind: ShortTurnEvent['kind']): string {
+    if (kind === 'backchannel') return translateUI('Short feedback');
+    if (kind === 'speech') return translateUI('Short speech');
+    return translateUI('Unclassified vocal event');
+}
+
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
@@ -97,6 +113,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerAssignmentMethod,
     speakerChoices,
     onAssignSpeaker,
+    shortTurnEvents,
+    onAssignShortTurnEventSpeaker,
 }: {
     id: string;
     timestamp: number;
@@ -122,6 +140,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerAssignmentMethod?: string;
     speakerChoices?: Array<{ key: string; label: string }>;
     onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
+    shortTurnEvents?: ShortTurnEvent[];
+    onAssignShortTurnEventSpeaker?: (eventId: string, speakerKey: string | null) => Promise<void> | void;
 }) {
   useUiTranslation();
     // The primary transcript is the evidence-bearing raw ASR output. Cleanup,
@@ -181,6 +201,41 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     ) : (
                         <p className="text-[15px] text-foreground leading-7">{displayText}</p>
                     )}
+                    {shortTurnEvents && shortTurnEvents.length > 0 && (
+                        <div className="mt-2 space-y-1 border-l-2 border-primary/25 pl-3">
+                            {shortTurnEvents.map((event) => (
+                                <div key={event.id} className="rounded-md bg-muted/45 px-2.5 py-2 text-xs text-muted-foreground">
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => onSeek?.(event.start_ms / 1000)}
+                                            disabled={!onSeek}
+                                            className="tabular-nums hover:text-primary disabled:cursor-default"
+                                            aria-label={translateUI('Play short event')}
+                                        >
+                                            ↳ {formatPreciseRecordingTime(event.start_ms)}
+                                        </button>
+                                        <span className="font-medium text-foreground/85">
+                                            {event.speaker_display_name ?? translateUI('Unconfirmed speaker')}
+                                        </span>
+                                        <span>· {shortEventLabel(event.kind)}</span>
+                                        {speakerChoices && speakerChoices.length > 0 && onAssignShortTurnEventSpeaker && (
+                                            <select
+                                                aria-label="Assign short event speaker"
+                                                value={event.speaker_key ?? ''}
+                                                onChange={(change) => void onAssignShortTurnEventSpeaker(event.id, change.target.value || null)}
+                                                className="ml-auto max-w-40 rounded border bg-background px-1 text-xs"
+                                            >
+                                                {event.assignment_method === 'manual' && <option value="">Restore automatic</option>}
+                                                {event.assignment_method !== 'manual' && <option value="" disabled>Assign speaker…</option>}
+                                                {speakerChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+                                            </select>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -206,7 +261,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     scrollNonce,
     onRequestSegment,
     speakerTurns,
+    shortTurnEvents = [],
     onAssignSpeaker,
+    onAssignShortTurnEventSpeaker,
 }) => {
   useUiTranslation();
     // Speaker order is fixed for the whole transcript so one speaker keeps one
@@ -244,6 +301,29 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         [speakerTurns]
     );
     const speakerChoices = useMemo(() => [...new Map((speakerTurns ?? []).filter((turn) => turn.speaker_key).map((turn) => [turn.speaker_key!, { key: turn.speaker_key!, label: turn.speaker_label }])).values()], [speakerTurns]);
+    const shortEventsBySegment = useMemo(() => {
+        const result = new Map<string, ShortTurnEvent[]>();
+        for (const event of shortTurnEvents.filter((item) => item.user_visible && !item.transcript_aligned)) {
+            let segmentId = event.transcript_id;
+            if (!segmentId) {
+                const best = segments
+                    .map((segment) => {
+                        const start = Math.round(segment.timestamp * 1000);
+                        const end = Math.round((segment.endTime ?? segment.timestamp) * 1000);
+                        return { id: segment.id, overlap: Math.max(0, Math.min(end, event.end_ms) - Math.max(start, event.start_ms)) };
+                    })
+                    .filter((candidate) => candidate.overlap > 0)
+                    .sort((left, right) => right.overlap - left.overlap || left.id.localeCompare(right.id))[0];
+                segmentId = best?.id;
+            }
+            if (!segmentId) continue;
+            const events = result.get(segmentId) ?? [];
+            events.push(event);
+            events.sort((left, right) => left.start_ms - right.start_ms || left.id.localeCompare(right.id));
+            result.set(segmentId, events);
+        }
+        return result;
+    }, [segments, shortTurnEvents]);
 
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -491,6 +571,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerAssignmentMethod={segment.speaker_assignment_method}
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
+                                        shortTurnEvents={shortEventsBySegment.get(segment.id)}
+                                        onAssignShortTurnEventSpeaker={onAssignShortTurnEventSpeaker}
                                     />
                                 </div>
                             );
@@ -554,6 +636,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerAssignmentMethod={segment.speaker_assignment_method}
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
+                                        shortTurnEvents={shortEventsBySegment.get(segment.id)}
+                                        onAssignShortTurnEventSpeaker={onAssignShortTurnEventSpeaker}
                                     />
                                 </motion.div>
                             );

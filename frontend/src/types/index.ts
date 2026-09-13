@@ -153,3 +153,24 @@ export interface TranscriptSegmentData {
   speaker_assignment_method?: string;
   speaker_overlap?: boolean;
 }
+
+export type ShortTurnCandidateSource = 'transcript' | 'diarizer_turn' | 'vad_event';
+
+export interface ShortTurnEvent {
+  id: string;
+  meeting_id: string;
+  start_ms: number;
+  end_ms: number;
+  transcript_id?: string | null;
+  kind: 'speech' | 'backchannel' | 'noise' | 'non_speech_vocalization' | 'unknown';
+  kind_confidence: number;
+  speaker_key?: string | null;
+  speaker_display_name?: string | null;
+  speaker_confidence?: number | null;
+  candidate_sources: ShortTurnCandidateSource[];
+  audio_source: 'microphone' | 'system' | 'imported' | 'mixed';
+  revision: number;
+  assignment_method: 'diarization' | 'short_turn_refinement' | 'manual';
+  transcript_aligned: boolean;
+  user_visible: boolean;
+}

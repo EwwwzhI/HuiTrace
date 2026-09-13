@@ -122,6 +122,59 @@ pub async fn api_get_speaker_turns(
     .map_err(|e| format!("{e:#}"))
 }
 
+/// User-visible embedded short events. Transcript-aligned events are omitted
+/// because their transcript row owns primary rendering.
+#[tauri::command]
+pub async fn api_get_short_turn_events(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<crate::diarization::short_turn_event::ShortTurnEvent>, String> {
+    let ctx = crate::context::current();
+    crate::database::repositories::short_turn_event::ShortTurnEventsRepository::list_visible_annotations_for_meeting(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn api_assign_short_turn_event_speaker(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    event_id: String,
+    speaker_key: String,
+) -> Result<(), String> {
+    let ctx = crate::context::current();
+    crate::database::repositories::short_turn_event::ShortTurnEventsRepository::assign_speaker(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+        &event_id,
+        &speaker_key,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn api_restore_short_turn_event_speaker(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    event_id: String,
+) -> Result<(), String> {
+    let ctx = crate::context::current();
+    crate::database::repositories::short_turn_event::ShortTurnEventsRepository::restore_automatic(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+        &event_id,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
+}
+
 /// List the meeting-local speakers. Keys stay stable when a display name is
 /// edited; this endpoint never attempts voice identification.
 #[tauri::command]

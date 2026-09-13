@@ -284,7 +284,12 @@ fn is_managed_top_level_file(path: &Path) -> bool {
 
     if matches!(
         lower.as_str(),
-        "metadata.json" | "transcripts.json" | ".metadata.json.tmp" | ".transcripts.json.tmp"
+        "metadata.json"
+            | "transcripts.json"
+            | "short_turn_events.json"
+            | ".metadata.json.tmp"
+            | ".transcripts.json.tmp"
+            | ".short_turn_events.json.tmp"
     ) || lower.starts_with(".metadata.json.")
     {
         return true;

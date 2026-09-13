@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 import type { DiarizationAvailability, SpeakerTurn } from '@/lib/speakerTurns';
+import type { ShortTurnEvent } from '@/types';
 import type { TalkTimeState } from '@/components/report/SpeakerTurns';
 
 /**
@@ -29,10 +30,12 @@ export function useDiarization(meetingId: string | undefined) {
   const [state, setState] = useState<TalkTimeState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [events, setEvents] = useState<ShortTurnEvent[]>([]);
 
   const refresh = useCallback(async () => {
     if (!meetingId) {
       setState(null);
+      setEvents([]);
       return;
     }
     try {
@@ -51,12 +54,17 @@ export function useDiarization(meetingId: string | undefined) {
       };
       const job = availability.job.status;
       if (availability.result) {
-        const turns = await invoke<SpeakerTurn[]>('api_get_speaker_turns', { meetingId });
+        const [turns, shortTurnEvents] = await Promise.all([
+          invoke<SpeakerTurn[]>('api_get_speaker_turns', { meetingId }),
+          invoke<ShortTurnEvent[]>('api_get_short_turn_events', { meetingId }),
+        ]);
+        setEvents(shortTurnEvents);
         setState({ kind: 'done', diarizedAt: availability.result.diarized_at, turns,
           ...(job !== 'idle' ? { job, jobError: 'error' in availability.job ? availability.job.error : null } : {}) });
         return;
       }
       const kind = job === 'idle' ? 'ready' : job;
+      setEvents([]);
       setState('error' in availability.job ? { kind, error: availability.job.error } : { kind });
     } catch (e) {
       // A failure to ASK is not a state of the pass, so it must not be rendered
@@ -140,5 +148,17 @@ export function useDiarization(meetingId: string | undefined) {
     } catch (e) { setError(String(e)); throw e; }
   }, [meetingId]);
 
-  return { state, turns, busy, error, run, downloadModels, refresh, renameSpeaker, assignTranscriptSpeaker };
+  const assignShortTurnEventSpeaker = useCallback(async (eventId: string, speakerKey: string | null) => {
+    if (!meetingId) return;
+    setError(null);
+    try {
+      await invoke(
+        speakerKey === null ? 'api_restore_short_turn_event_speaker' : 'api_assign_short_turn_event_speaker',
+        speakerKey === null ? { meetingId, eventId } : { meetingId, eventId, speakerKey },
+      );
+      await refresh();
+    } catch (e) { setError(String(e)); throw e; }
+  }, [meetingId, refresh]);
+
+  return { state, turns, events, busy, error, run, downloadModels, refresh, renameSpeaker, assignTranscriptSpeaker, assignShortTurnEventSpeaker };
 }

@@ -72,6 +72,8 @@ next-env.d.ts
 /eval/report.md
 /eval/evidence/manifest.csv
 /eval/evidence/private/
+/evaluation/short_turn_dataset/local/
+/evaluation/short_turn_exports/
 
 # Large media files
 docs/demo.mov

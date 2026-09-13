@@ -2,6 +2,7 @@
 //! that distinguishes "ran and found nothing" from "never ran" (ADR-0034).
 
 use app_lib::context::{AuthContext, RequestId, Role, TenantId, UserId};
+use app_lib::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use app_lib::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
 use app_lib::diarization::short_turn::{
     refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnRefiner,
@@ -481,4 +482,226 @@ async fn missing_confidence_needs_multiple_turns_not_one_two_second_cluster() {
             .len(),
         2
     );
+}
+
+#[tokio::test]
+async fn embedded_short_turn_materializes_without_relabeling_long_transcript() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("embedded.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-long", "m-1", "a long sentence", 0.0, 5.0).await;
+
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[
+            confident_turn(0, 5_000, "Speaker A", 0.92),
+            confident_turn(2_100, 2_400, "Speaker B", 0.93),
+            confident_turn(6_000, 8_000, "Speaker B", 0.93),
+        ],
+    )
+    .await
+    .expect("diarization");
+
+    let transcript_speaker: Option<String> =
+        sqlx::query_scalar("SELECT speaker_id FROM transcripts WHERE id = 't-long'")
+            .fetch_one(&pool)
+            .await
+            .expect("transcript speaker");
+    let accepted = SpeakerTurnsRepository::list_accepted_turns_for_meeting(&pool, &ctx, "m-1")
+        .await
+        .expect("accepted");
+    let speaker_a = accepted
+        .iter()
+        .find(|turn| turn.speaker_label == "Speaker A")
+        .expect("speaker A");
+    let speaker_b = accepted
+        .iter()
+        .find(|turn| turn.speaker_label == "Speaker B")
+        .expect("speaker B");
+    assert_eq!(
+        transcript_speaker.as_deref(),
+        Some(speaker_a.speaker_key.as_str())
+    );
+
+    let events = ShortTurnEventsRepository::list_for_transcript(&pool, &ctx, "m-1", "t-long")
+        .await
+        .expect("events");
+    assert_eq!(events.len(), 1);
+    assert!(!events[0].transcript_aligned);
+    assert_eq!(
+        events[0].speaker_key.as_deref(),
+        Some(speaker_b.speaker_key.as_str())
+    );
+    assert_eq!(events[0].kind, SegmentKind::Speech);
+}
+
+#[tokio::test]
+async fn two_embedded_candidates_in_one_transcript_are_both_preserved() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("multiple.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-long", "m-1", "one long ASR row", 0.0, 5.0).await;
+
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[
+            confident_turn(0, 5_000, "Speaker A", 0.95),
+            confident_turn(1_500, 1_800, "Speaker B", 0.95),
+            confident_turn(5_500, 7_500, "Speaker B", 0.95),
+            confident_turn(3_000, 3_300, "Speaker C", 0.95),
+            confident_turn(8_000, 10_000, "Speaker C", 0.95),
+        ],
+    )
+    .await
+    .expect("diarization");
+
+    let events = ShortTurnEventsRepository::list_for_transcript(&pool, &ctx, "m-1", "t-long")
+        .await
+        .expect("events");
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].start_ms, 1_500);
+    assert_eq!(events[1].start_ms, 3_000);
+}
+
+#[tokio::test]
+async fn transcript_aligned_event_is_not_returned_as_duplicate_annotation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("aligned.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-short", "m-1", "hmm", 0.1, 0.4).await;
+
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[confident_turn(0, 2_000, "Speaker A", 0.95)],
+    )
+    .await
+    .expect("diarization");
+
+    let all = ShortTurnEventsRepository::list_for_transcript(&pool, &ctx, "m-1", "t-short")
+        .await
+        .expect("all events");
+    assert_eq!(all.len(), 1);
+    assert!(all[0].transcript_aligned);
+    assert!(
+        ShortTurnEventsRepository::list_visible_annotations_for_meeting(&pool, &ctx, "m-1")
+            .await
+            .expect("annotations")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn short_turn_event_reads_and_deletes_are_workspace_scoped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("event-tenant.db")).await;
+    let local = ctx_for("local");
+    let foreign = ctx_for("foreign");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-short", "m-1", "hmm", 0.1, 0.4).await;
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &local,
+        "m-1",
+        &[confident_turn(0, 2_000, "Speaker A", 0.95)],
+    )
+    .await
+    .expect("diarization");
+    assert_eq!(
+        ShortTurnEventsRepository::list_for_meeting(&pool, &local, "m-1")
+            .await
+            .expect("local")
+            .len(),
+        1
+    );
+    assert!(
+        ShortTurnEventsRepository::list_for_meeting(&pool, &foreign, "m-1")
+            .await
+            .expect("foreign")
+            .is_empty()
+    );
+    assert_eq!(
+        ShortTurnEventsRepository::delete_for_meeting(&pool, &foreign, "m-1")
+            .await
+            .expect("foreign delete"),
+        0
+    );
+    assert_eq!(
+        ShortTurnEventsRepository::list_for_meeting(&pool, &local, "m-1")
+            .await
+            .expect("still local")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn manual_event_assignment_survives_rerun_and_transcript_manual_is_independent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("manual-event.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-long", "m-1", "long row", 0.0, 5.0).await;
+    sqlx::query("UPDATE transcripts SET speaker_id = 'manual-main', speaker_assignment_method = 'manual' WHERE id = 't-long'")
+        .execute(&pool)
+        .await
+        .expect("manual transcript");
+    let turns = [
+        confident_turn(0, 5_000, "Speaker A", 0.95),
+        confident_turn(2_100, 2_400, "Speaker B", 0.95),
+        confident_turn(6_000, 8_000, "Speaker B", 0.95),
+    ];
+    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, "m-1", &turns)
+        .await
+        .expect("first pass");
+    let events = ShortTurnEventsRepository::list_for_transcript(&pool, &ctx, "m-1", "t-long")
+        .await
+        .expect("events");
+    assert_eq!(
+        events.len(),
+        1,
+        "manual transcript must not suppress embedded event"
+    );
+    let speaker_a = SpeakerTurnsRepository::list_accepted_turns_for_meeting(&pool, &ctx, "m-1")
+        .await
+        .expect("turns")
+        .into_iter()
+        .find(|turn| turn.speaker_label == "Speaker A")
+        .expect("speaker A");
+    ShortTurnEventsRepository::assign_speaker(
+        &pool,
+        &ctx,
+        "m-1",
+        &events[0].id,
+        &speaker_a.speaker_key,
+    )
+    .await
+    .expect("manual event");
+
+    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, "m-1", &turns)
+        .await
+        .expect("rerun");
+    let rerun = ShortTurnEventsRepository::list_for_transcript(&pool, &ctx, "m-1", "t-long")
+        .await
+        .expect("rerun event");
+    assert_eq!(rerun.len(), 1);
+    assert_eq!(rerun[0].assignment_method, AssignmentMethod::Manual);
+    assert_eq!(
+        rerun[0].speaker_key.as_deref(),
+        Some(speaker_a.speaker_key.as_str())
+    );
+    let transcript_method: String =
+        sqlx::query_scalar("SELECT speaker_assignment_method FROM transcripts WHERE id = 't-long'")
+            .fetch_one(&pool)
+            .await
+            .expect("transcript method");
+    assert_eq!(transcript_method, "manual");
 }

@@ -24,7 +24,9 @@ describe('useDiarization', () => {
     invoke.mockImplementation((cmd: string) =>
       cmd === 'api_diarization_availability'
         ? Promise.resolve({ status: 'done', diarized_at: '2026-08-09T10:00:00Z', turns: 1 })
-        : Promise.resolve(TURNS)
+        : cmd === 'api_get_speaker_turns'
+          ? Promise.resolve(TURNS)
+          : Promise.resolve([])
     );
     const { result } = renderHook(() => useDiarization('m1'));
     await waitFor(() => expect(result.current.state?.kind).toBe('done'));
@@ -33,6 +35,7 @@ describe('useDiarization', () => {
       diarizedAt: '2026-08-09T10:00:00Z',
       turns: TURNS,
     });
+    expect(invoke.mock.calls.map((call) => call[0])).toContain('api_get_short_turn_events');
   });
 
   /** One query, not two, for a meeting that was never diarized. */

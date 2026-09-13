@@ -343,6 +343,15 @@ pub(crate) async fn delete_meeting_with_connection(
         .execute(&mut *transaction)
         .await?;
 
+    // Phase 2C timeline annotations are local-derived but may reference a
+    // transcript. Delete them explicitly before transcripts because this
+    // privacy deletion connection intentionally disables foreign-key actions.
+    sqlx::query("DELETE FROM short_turn_events WHERE meeting_id = ? AND workspace_id = ?")
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .execute(&mut *transaction)
+        .await?;
+
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ? AND workspace_id = ?")
         .bind(meeting_id)
         .bind(ctx.tenant_id.as_str())

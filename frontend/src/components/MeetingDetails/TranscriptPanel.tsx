@@ -185,7 +185,9 @@ export function TranscriptPanel({
         <VirtualizedTranscriptView
           segments={convertedSegments}
           speakerTurns={diarization.turns}
+          shortTurnEvents={diarization.events}
           onAssignSpeaker={async (transcriptId, speakerKey) => { await diarization.assignTranscriptSpeaker(transcriptId, speakerKey); await onRefetchTranscripts?.(); await diarization.refresh(); }}
+          onAssignShortTurnEventSpeaker={diarization.assignShortTurnEventSpeaker}
           isRecording={isRecording}
           isPaused={false}
           isProcessing={false}

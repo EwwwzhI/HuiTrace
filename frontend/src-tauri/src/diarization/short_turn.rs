@@ -73,6 +73,122 @@ impl Default for ShortTurnConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeakerAcceptanceTurn {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub speaker_key: String,
+    pub confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SpeakerAcceptanceEvidence {
+    pub total_duration_ms: u64,
+    pub turn_count: usize,
+    pub longest_turn_ms: u64,
+    pub available_confidence_count: usize,
+    pub mean_available_confidence: Option<f64>,
+    pub overlap_ratio: f64,
+}
+
+/// Pure production policy shared by persistence and the benchmark. Unknown
+/// confidence is never promoted to perfect confidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeakerAcceptancePolicy {
+    pub config: ShortTurnConfig,
+    pub max_overlap_ratio: f64,
+    pub confident_min_longest_turn_ms: u64,
+    pub missing_confidence_min_total_ms: u64,
+    pub missing_confidence_min_turns: usize,
+}
+
+impl Default for SpeakerAcceptancePolicy {
+    fn default() -> Self {
+        Self {
+            config: ShortTurnConfig::default(),
+            max_overlap_ratio: 0.50,
+            confident_min_longest_turn_ms: 1_200,
+            missing_confidence_min_total_ms: 4_000,
+            missing_confidence_min_turns: 2,
+        }
+    }
+}
+
+impl SpeakerAcceptancePolicy {
+    pub fn evidence_for(
+        &self,
+        turns: &[SpeakerAcceptanceTurn],
+        speaker_key: &str,
+    ) -> SpeakerAcceptanceEvidence {
+        let owned: Vec<_> = turns
+            .iter()
+            .filter(|turn| turn.speaker_key == speaker_key)
+            .collect();
+        let total_duration_ms = owned
+            .iter()
+            .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
+            .sum();
+        let longest_turn_ms = owned
+            .iter()
+            .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
+            .max()
+            .unwrap_or(0);
+        let confidences: Vec<_> = owned.iter().filter_map(|turn| turn.confidence).collect();
+        let mean_available_confidence = (!confidences.is_empty())
+            .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
+        let overlap_ms: u64 = owned
+            .iter()
+            .map(|turn| {
+                turns
+                    .iter()
+                    .filter(|other| other.speaker_key != speaker_key)
+                    .map(|other| {
+                        overlap_ms(turn.start_ms, turn.end_ms, other.start_ms, other.end_ms) as u64
+                    })
+                    .sum::<u64>()
+                    .min(turn.end_ms.saturating_sub(turn.start_ms) as u64)
+            })
+            .sum();
+        SpeakerAcceptanceEvidence {
+            total_duration_ms,
+            turn_count: owned.len(),
+            longest_turn_ms,
+            available_confidence_count: confidences.len(),
+            mean_available_confidence,
+            overlap_ratio: if total_duration_ms == 0 {
+                0.0
+            } else {
+                overlap_ms as f64 / total_duration_ms as f64
+            },
+        }
+    }
+
+    pub fn qualifies(&self, evidence: &SpeakerAcceptanceEvidence) -> bool {
+        if evidence.overlap_ratio > self.max_overlap_ratio {
+            return false;
+        }
+        match evidence.mean_available_confidence {
+            Some(confidence) => {
+                evidence.total_duration_ms >= self.config.prototype_min_duration_ms
+                    && evidence.longest_turn_ms >= self.confident_min_longest_turn_ms
+                    && confidence >= self.config.high_confidence_threshold
+            }
+            None => {
+                evidence.total_duration_ms >= self.missing_confidence_min_total_ms
+                    && evidence.turn_count >= self.missing_confidence_min_turns
+                    && evidence.longest_turn_ms >= self.config.prototype_min_duration_ms
+            }
+        }
+    }
+
+    pub fn accepted_speaker_keys(&self, turns: &[SpeakerAcceptanceTurn]) -> BTreeSet<String> {
+        let keys: BTreeSet<_> = turns.iter().map(|turn| turn.speaker_key.clone()).collect();
+        keys.into_iter()
+            .filter(|key| self.qualifies(&self.evidence_for(turns, key)))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShortTurnCandidate {
     pub start_ms: i64,
@@ -192,7 +308,7 @@ impl ShortTurnCandidateExtractor {
                     })
                     .map(|t| t.timing.id.clone())
                     .collect();
-                seeds.push(self.candidate_for_window(
+                let mut candidate = self.candidate_for_window(
                     speaker.start_ms,
                     speaker.end_ms,
                     vec![ShortTurnCandidateSource::DiarizerTurn],
@@ -202,7 +318,14 @@ impl ShortTurnCandidateExtractor {
                     None,
                     speaker.audio_source.clone(),
                     speakers,
-                ));
+                );
+                // A diarizer-turn seed is direct evidence about that exact
+                // turn. Do not let a longer enclosing turn win an equal-overlap
+                // tie and erase the embedded speaker before refinement.
+                candidate.diarization_speaker = Some(speaker.speaker_key.clone());
+                candidate.diarization_confidence = speaker.speaker_confidence;
+                candidate.diarization_coverage_ratio = Some(1.0);
+                seeds.push(candidate);
             }
         }
         for event in vad_events {
@@ -315,8 +438,7 @@ fn overlap_ms(a_start: i64, a_end: i64, b_start: i64, b_end: i64) -> i64 {
 fn should_merge(left: &ShortTurnCandidate, right: &ShortTurnCandidate) -> bool {
     let intersection = overlap_ms(left.start_ms, left.end_ms, right.start_ms, right.end_ms) as f64;
     if intersection <= 0.0 {
-        return ((left.start_ms + left.end_ms) / 2 - (right.start_ms + right.end_ms) / 2).abs()
-            <= 150;
+        return false;
     }
     let union = left.end_ms.max(right.end_ms) - left.start_ms.min(right.start_ms);
     let shorter = left.duration_ms.min(right.duration_ms).max(1) as f64;
@@ -535,11 +657,16 @@ impl<D: BackchannelDetector> ShortTurnRefiner<D> {
             .clamp(0.0, 1.0);
         let effective = base * weight * coverage;
 
+        let strong_direct_speech = normalized_text.is_empty()
+            && base >= self.config.high_confidence_threshold
+            && coverage >= 0.75;
         let kind =
             if candidate.duration_ms < self.config.min_candidate_ms && normalized_text.is_empty() {
                 SegmentKind::Noise
             } else if lexical {
                 SegmentKind::Backchannel
+            } else if strong_direct_speech {
+                SegmentKind::Speech
             } else if normalized_text.is_empty()
                 && candidate.duration_ms <= self.config.very_short_ms
                 && base < self.config.weak_confidence_threshold
@@ -598,7 +725,10 @@ impl<D: BackchannelDetector> ShortTurnRefiner<D> {
                 }
             }
             SegmentKind::Noise => (1.0 - base).clamp(0.0, 1.0),
-            SegmentKind::Speech => candidate.asr_confidence.unwrap_or(0.0).clamp(0.0, 1.0),
+            SegmentKind::Speech => candidate
+                .asr_confidence
+                .unwrap_or(base * coverage)
+                .clamp(0.0, 1.0),
             SegmentKind::Unknown | SegmentKind::NonSpeechVocalization => 0.0,
         };
         let speaker_confidence = speaker.as_ref().map(|_| direct_score.max(0.40));
@@ -996,6 +1126,125 @@ pub fn compute_candidate_recall(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CandidateMatchConfig {
+    /// Engineering evaluation values. These are intentionally stricter than
+    /// "any overlap" so a 5 ms boundary touch cannot inflate recall.
+    pub min_iou: f64,
+    pub min_ground_truth_coverage: f64,
+    pub center_tolerance_ms: i64,
+}
+
+impl Default for CandidateMatchConfig {
+    fn default() -> Self {
+        Self {
+            min_iou: 0.30,
+            min_ground_truth_coverage: 0.75,
+            center_tolerance_ms: 200,
+        }
+    }
+}
+
+pub fn candidate_matches_ground_truth(
+    candidate_start_ms: i64,
+    candidate_end_ms: i64,
+    ground_truth_start_ms: i64,
+    ground_truth_end_ms: i64,
+    config: &CandidateMatchConfig,
+) -> bool {
+    let intersection = overlap_ms(
+        candidate_start_ms,
+        candidate_end_ms,
+        ground_truth_start_ms,
+        ground_truth_end_ms,
+    );
+    if intersection <= 0 {
+        return false;
+    }
+    let union =
+        candidate_end_ms.max(ground_truth_end_ms) - candidate_start_ms.min(ground_truth_start_ms);
+    let ground_truth_duration = ground_truth_end_ms
+        .saturating_sub(ground_truth_start_ms)
+        .max(1);
+    let iou = intersection as f64 / union.max(1) as f64;
+    let ground_truth_coverage = intersection as f64 / ground_truth_duration as f64;
+    let candidate_center = (candidate_start_ms + candidate_end_ms) / 2;
+    let ground_truth_center = (ground_truth_start_ms + ground_truth_end_ms) / 2;
+    iou >= config.min_iou
+        || (ground_truth_coverage >= config.min_ground_truth_coverage
+            && (candidate_center - ground_truth_center).abs() <= config.center_tolerance_ms)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterializationObservation {
+    pub expected_visible: bool,
+    pub predicted_visible: bool,
+    pub embedded: bool,
+    pub expected_speaker: Option<String>,
+    pub predicted_speaker: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct MaterializationMetrics {
+    pub sample_count: usize,
+    pub materialization_precision: f64,
+    pub materialization_recall: f64,
+    pub false_embedded_event_rate: f64,
+    pub embedded_event_speaker_accuracy: f64,
+}
+
+pub fn compute_materialization_metrics(
+    observations: &[MaterializationObservation],
+) -> MaterializationMetrics {
+    let ratio = |numerator: usize, denominator: usize| {
+        if denominator == 0 {
+            0.0
+        } else {
+            numerator as f64 / denominator as f64
+        }
+    };
+    let predicted = observations
+        .iter()
+        .filter(|item| item.predicted_visible)
+        .count();
+    let expected = observations
+        .iter()
+        .filter(|item| item.expected_visible)
+        .count();
+    let true_positive = observations
+        .iter()
+        .filter(|item| item.expected_visible && item.predicted_visible)
+        .count();
+    let embedded_predictions = observations
+        .iter()
+        .filter(|item| item.embedded && item.predicted_visible)
+        .count();
+    let false_embedded = observations
+        .iter()
+        .filter(|item| item.embedded && item.predicted_visible && !item.expected_visible)
+        .count();
+    let attributed_embedded = observations
+        .iter()
+        .filter(|item| item.embedded && item.expected_visible && item.expected_speaker.is_some())
+        .count();
+    let correct_embedded_speaker = observations
+        .iter()
+        .filter(|item| {
+            item.embedded
+                && item.expected_visible
+                && item.expected_speaker.is_some()
+                && item.expected_speaker == item.predicted_speaker
+        })
+        .count();
+    MaterializationMetrics {
+        sample_count: observations.len(),
+        materialization_precision: ratio(true_positive, predicted),
+        materialization_recall: ratio(true_positive, expected),
+        false_embedded_event_rate: ratio(false_embedded, embedded_predictions),
+        embedded_event_speaker_accuracy: ratio(correct_embedded_speaker, attributed_embedded),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct SpeakerAcceptanceMetrics {
     pub sample_count: usize,
@@ -1243,6 +1492,56 @@ mod tests {
                 ShortTurnCandidateSource::DiarizerTurn,
                 ShortTurnCandidateSource::VadEvent,
             ]
+        );
+    }
+
+    #[test]
+    fn adjacent_distinct_events_are_not_merged() {
+        let mut first = candidate(200, "", Some("speaker_01"), 0.9);
+        first.start_ms = 0;
+        first.end_ms = 200;
+        first.candidate_sources = vec![ShortTurnCandidateSource::DiarizerTurn];
+        let mut second = candidate(200, "", Some("speaker_02"), 0.9);
+        second.start_ms = 250;
+        second.end_ms = 450;
+        second.candidate_sources = vec![ShortTurnCandidateSource::VadEvent];
+        assert_eq!(merge_candidates(vec![first, second]).len(), 2);
+    }
+
+    #[test]
+    fn benchmark_matching_rejects_boundary_scrapes_and_accepts_real_coverage() {
+        let config = CandidateMatchConfig::default();
+        assert!(!candidate_matches_ground_truth(0, 105, 100, 300, &config));
+        assert!(candidate_matches_ground_truth(90, 290, 100, 300, &config));
+    }
+
+    #[test]
+    fn production_acceptance_policy_is_pure_and_requires_corroboration() {
+        let policy = SpeakerAcceptancePolicy::default();
+        let one_unknown = vec![SpeakerAcceptanceTurn {
+            start_ms: 0,
+            end_ms: 2_000,
+            speaker_key: "speaker_01".into(),
+            confidence: None,
+        }];
+        assert!(policy.accepted_speaker_keys(&one_unknown).is_empty());
+        let corroborated = vec![
+            SpeakerAcceptanceTurn {
+                start_ms: 0,
+                end_ms: 2_000,
+                speaker_key: "speaker_01".into(),
+                confidence: None,
+            },
+            SpeakerAcceptanceTurn {
+                start_ms: 3_000,
+                end_ms: 5_000,
+                speaker_key: "speaker_01".into(),
+                confidence: None,
+            },
+        ];
+        assert_eq!(
+            policy.accepted_speaker_keys(&corroborated),
+            BTreeSet::from(["speaker_01".to_string()])
         );
     }
 

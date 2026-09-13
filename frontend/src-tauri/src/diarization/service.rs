@@ -617,7 +617,14 @@ async fn sync_transcripts_json(
             speaker_overlap: Some(row.get::<i64, _>("speaker_overlap") != 0),
         })
         .collect::<Vec<_>>();
-    crate::audio::common::write_transcripts_json(folder, &segments)
+    crate::audio::common::write_transcripts_json(folder, &segments)?;
+    let events = crate::database::repositories::short_turn_event::ShortTurnEventsRepository::list_for_meeting(
+        pool,
+        ctx,
+        meeting_id,
+    )
+    .await?;
+    crate::audio::common::write_short_turn_events_json(folder, &events)
 }
 
 async fn set_status(
@@ -975,6 +982,10 @@ mod tests {
         )
         .await
         .expect("first success");
+        sqlx::query("INSERT INTO short_turn_events (id, meeting_id, workspace_id, start_ms, end_ms, segment_kind, kind_confidence, candidate_sources, audio_source, assignment_method, revision, transcript_aligned, user_visible, created_at, updated_at) VALUES ('event-before-failure', 'meeting-a', 'local', 100, 400, 'speech', 0.9, '[\"diarizer_turn\"]', 'mixed', 'short_turn_refinement', 1, 0, 1, '2026-09-13T00:00:00Z', '2026-09-13T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("seed successful short event");
         let before = SpeakerTurnsRepository::list_for_meeting(&pool, &ctx(), "meeting-a")
             .await
             .expect("previous result");
@@ -994,6 +1005,13 @@ mod tests {
             .await
             .expect("preserved result");
         assert_eq!(after_failure, before);
+        let preserved_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM short_turn_events WHERE id = 'event-before-failure'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("preserved short events");
+        assert_eq!(preserved_events, 1);
         let status: String =
             sqlx::query_scalar("SELECT diarization_status FROM meetings WHERE id = 'meeting-a'")
                 .fetch_one(&pool)
