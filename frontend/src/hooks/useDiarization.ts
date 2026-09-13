@@ -68,7 +68,10 @@ export function useDiarization(meetingId: string | undefined) {
       if (event.payload.meeting_id !== meetingId) return;
       if (event.payload.status === 'failed' && event.payload.error) setError(event.payload.error);
       void refresh();
-    }).then((dispose) => { unlisten = dispose; });
+    }).then((dispose) => { unlisten = dispose; }).catch(() => {
+      // The web/test runtime has no Tauri event bridge. Availability remains
+      // readable there; the desktop runtime installs this listener normally.
+    });
     return () => unlisten?.();
   }, [meetingId, refresh]);
 
@@ -90,7 +93,7 @@ export function useDiarization(meetingId: string | undefined) {
     setBusy(true);
     setError(null);
     try {
-      await invoke<number>('api_diarize_meeting', { meetingId });
+      await invoke<'scheduled' | 'alreadyRunning'>('api_diarize_meeting', { meetingId });
       // Deliberately re-read rather than trusting the returned count: zero turns
       // is a real outcome, and the stamp that distinguishes it from "never ran"
       // only exists in the database.
@@ -118,5 +121,14 @@ export function useDiarization(meetingId: string | undefined) {
     }
   }, [meetingId, refresh]);
 
-  return { state, turns, busy, error, run, downloadModels, refresh, renameSpeaker };
+  const assignTranscriptSpeaker = useCallback(async (transcriptId: string, speakerKey: string | null) => {
+    if (!meetingId) return;
+    setError(null);
+    try {
+      await invoke(speakerKey === null ? 'api_restore_transcript_speaker_assignment' : 'api_assign_transcript_speaker',
+        speakerKey === null ? { meetingId, transcriptId } : { meetingId, transcriptId, speakerKey });
+    } catch (e) { setError(String(e)); throw e; }
+  }, [meetingId]);
+
+  return { state, turns, busy, error, run, downloadModels, refresh, renameSpeaker, assignTranscriptSpeaker };
 }

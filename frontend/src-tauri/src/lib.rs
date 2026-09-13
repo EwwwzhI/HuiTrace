@@ -716,6 +716,7 @@ pub fn run() {
             diarization::commands::api_get_meeting_speakers,
             diarization::commands::api_rename_meeting_speaker,
             diarization::commands::api_assign_transcript_speaker,
+            diarization::commands::api_restore_transcript_speaker_assignment,
             api::api_search_transcripts,
             api::api_get_model_config,
             api::api_save_model_config,

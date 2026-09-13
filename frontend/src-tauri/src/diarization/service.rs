@@ -19,6 +19,16 @@ use crate::diarization::types::AudioSource;
 
 static ACTIVE_JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+/// The synchronous acknowledgement of a background request. It deliberately
+/// says nothing about model/audio availability: those are asynchronous job
+/// outcomes emitted through the normal lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiarizationRequestResult {
+    Scheduled,
+    AlreadyRunning,
+}
+
 /// Whether this meeting can be diarized, and what has already happened.
 ///
 /// Four states, because collapsing any two of them makes the UI lie. In
@@ -230,12 +240,12 @@ fn display_label_for_key(key: &str) -> String {
 /// availability or sidecar health. ASR and the saved meeting are already
 /// complete when this is called; every error becomes diagnosable state instead
 /// of a failed recording/import.
-pub fn schedule_offline_diarization<R: Runtime>(
+pub fn request_offline_diarization<R: Runtime>(
     app: AppHandle<R>,
     pool: SqlitePool,
     ctx: AuthContext,
     meeting_id: String,
-) {
+) -> DiarizationRequestResult {
     let registry = ACTIVE_JOBS.get_or_init(|| Mutex::new(HashSet::new()));
     let job_key = format!("{}:{meeting_id}", ctx.tenant_id);
     if !registry
@@ -243,7 +253,7 @@ pub fn schedule_offline_diarization<R: Runtime>(
         .expect("diarization registry poisoned")
         .insert(job_key.clone())
     {
-        return;
+        return DiarizationRequestResult::AlreadyRunning;
     }
     tauri::async_runtime::spawn(async move {
         let registry = ACTIVE_JOBS.get_or_init(|| Mutex::new(HashSet::new()));
@@ -266,12 +276,14 @@ pub fn schedule_offline_diarization<R: Runtime>(
         {
             Ok(value) => value.flatten(),
             Err(error) => {
+                let message = error.to_string();
+                let _ = set_status(&pool, &ctx, &meeting_id, "failed", Some(&message)).await;
                 log::warn!(
                     "speaker analysis could not read meeting {}: {}",
                     meeting_id,
                     error
                 );
-                emit("failed", Some(error.to_string()), None);
+                emit("failed", Some(message), None);
                 return;
             }
         };
@@ -384,6 +396,7 @@ pub fn schedule_offline_diarization<R: Runtime>(
             }
         }
     });
+    DiarizationRequestResult::Scheduled
 }
 
 struct ActiveJobGuard {

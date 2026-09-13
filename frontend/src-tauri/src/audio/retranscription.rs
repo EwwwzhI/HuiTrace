@@ -567,7 +567,7 @@ async fn run_retranscription<R: Runtime>(
 
     // The ASR replacement is already durable. Speaker analysis remains an
     // optional post-processing pass and therefore cannot fail retranscription.
-    crate::diarization::service::schedule_offline_diarization(
+    let _ = crate::diarization::service::request_offline_diarization(
         app.clone(),
         pool.clone(),
         ctx.clone(),

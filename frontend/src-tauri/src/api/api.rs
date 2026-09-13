@@ -1037,7 +1037,7 @@ pub async fn api_save_transcript<R: Runtime>(
             // Recording finalization reaches the database through this command
             // (not `stop_recording`). Start the independent enhancement only
             // after its meeting and transcript rows are durable.
-            crate::diarization::service::schedule_offline_diarization(
+            let _ = crate::diarization::service::request_offline_diarization(
                 _app.clone(),
                 pool.clone(),
                 ctx.clone(),

@@ -744,15 +744,6 @@ async fn run_import<R: Runtime>(
 
     folder_guard.committed = true;
 
-    // Speaker analysis is deliberately post-persistence and best-effort. A
-    // missing local model must never turn a successful import into a failure.
-    crate::diarization::service::schedule_offline_diarization(
-        app.clone(),
-        app_state.db_manager.pool().clone(),
-        crate::context::current(),
-        meeting_id.clone(),
-    );
-
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
@@ -770,6 +761,16 @@ async fn run_import<R: Runtime>(
     ) {
         warn!("Failed to write metadata.json: {}", e);
     }
+
+    // Every import artifact is now durable (or its best-effort write has
+    // returned). Only then may the background job update transcripts.json;
+    // scheduling earlier races its speaker-aware file against this base write.
+    let _ = crate::diarization::service::request_offline_diarization(
+        app.clone(),
+        app_state.db_manager.pool().clone(),
+        crate::context::current(),
+        meeting_id.clone(),
+    );
 
     emit_progress(&app, "complete", 100, "Import complete");
 

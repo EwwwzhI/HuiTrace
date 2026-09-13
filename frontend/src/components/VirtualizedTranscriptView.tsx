@@ -39,6 +39,7 @@ export interface VirtualizedTranscriptViewProps {
      * all rather than a row of "Unknown".
      */
     speakerTurns?: SpeakerTurn[];
+    onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
 
@@ -105,6 +106,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakers,
     speakerOrder,
     crosstalk,
+    speakerKey,
+    speakerChoices,
+    onAssignSpeaker,
 }: {
     id: string;
     timestamp: number;
@@ -126,6 +130,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerOrder?: string[];
     /** Two people talking at once here -- not merely two speakers in the row. */
     crosstalk?: boolean;
+    speakerKey?: string;
+    speakerChoices?: Array<{ key: string; label: string }>;
+    onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
 }) {
   useUiTranslation();
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
@@ -162,6 +169,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speakers && speakers.length > 0 && (
+                        speakerChoices && onAssignSpeaker ? <select aria-label="Assign speaker" value={speakerKey ?? ''} onChange={(event) => void onAssignSpeaker(id, event.target.value || null)} className="mb-1 max-w-40 rounded border bg-background px-1 text-xs">
+                            <option value="">Restore automatic</option>{speakerChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+                        </select> : null
+                    )}
                     {speakers && speakers.length > 0 && (
                         <SpeakerChips
                             speakers={speakers}
@@ -201,6 +213,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     scrollNonce,
     onRequestSegment,
     speakerTurns,
+    onAssignSpeaker,
 }) => {
   useUiTranslation();
     // Speaker order is fixed for the whole transcript so one speaker keeps one
@@ -237,6 +250,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         },
         [speakerTurns]
     );
+    const speakerChoices = useMemo(() => [...new Map((speakerTurns ?? []).filter((turn) => turn.speaker_key).map((turn) => [turn.speaker_key!, { key: turn.speaker_key!, label: turn.speaker_label }])).values()], [speakerTurns]);
 
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -480,6 +494,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakers={speakersFor(segment)}
                                         speakerOrder={speakerOrder}
                                         crosstalk={crosstalkFor(segment)}
+                                        speakerKey={segment.speaker_id}
+                                        speakerChoices={speakerChoices}
+                                        onAssignSpeaker={onAssignSpeaker}
                                     />
                                 </div>
                             );
@@ -539,6 +556,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakers={speakersFor(segment)}
                                         speakerOrder={speakerOrder}
                                         crosstalk={crosstalkFor(segment)}
+                                        speakerKey={segment.speaker_id}
+                                        speakerChoices={speakerChoices}
+                                        onAssignSpeaker={onAssignSpeaker}
                                     />
                                 </motion.div>
                             );
