@@ -16,6 +16,7 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  asr_confidence?: number;
   speaker_id?: string;
   speaker_confidence?: number;
   speaker_provisional?: boolean;
@@ -38,6 +39,7 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  asr_confidence?: number;
   speaker_id?: string;
   speaker_confidence?: number;
   speaker_provisional?: boolean;
@@ -141,6 +143,7 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  asr_confidence?: number;
   speaker_id?: string;
   speaker_confidence?: number;
   speaker_provisional?: boolean;

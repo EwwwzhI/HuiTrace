@@ -81,6 +81,7 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      asr_confidence: t.asr_confidence,
       speaker_id: t.speaker_id,
       speaker_confidence: t.speaker_confidence,
       speaker_provisional: t.speaker_provisional,

@@ -63,5 +63,47 @@
     "expected_kind": "speech",
     "expected_speaker": "speaker_01",
     "bypass": true
+  },
+  {
+    "name": "Chinese sentence beginning with 对 is speech",
+    "candidate": {"start_ms":0,"end_ms":1100,"duration_ms":1100,"text":"对这个问题我们继续讨论","asr_confidence":0.91,"diarization_speaker":"speaker_01","diarization_confidence":0.90,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01"
+  },
+  {
+    "name": "Chinese sentence beginning with 好的 is speech",
+    "candidate": {"start_ms":0,"end_ms":1150,"duration_ms":1150,"text":"好的，那么下一部分……","asr_confidence":0.90,"diarization_speaker":"speaker_01","diarization_confidence":0.88,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01"
+  },
+  {
+    "name": "English right prefix remains speech",
+    "candidate": {"start_ms":0,"end_ms":1000,"duration_ms":1000,"text":"right now we should...","asr_confidence":0.93,"diarization_speaker":"speaker_02","diarization_confidence":0.89,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_02"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_02"
+  },
+  {
+    "name": "English okay prefix remains speech",
+    "candidate": {"start_ms":0,"end_ms":1000,"duration_ms":1000,"text":"okay let us begin","asr_confidence":0.93,"diarization_speaker":"speaker_02","diarization_confidence":0.89,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_02"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_02"
+  },
+  {
+    "name": "Chinese hesitation followed by opinion remains speech",
+    "candidate": {"start_ms":0,"end_ms":1200,"duration_ms":1200,"text":"嗯……我觉得这个方案不太合适","asr_confidence":0.88,"diarization_speaker":"speaker_01","diarization_confidence":0.86,"audio_source":"mixed","overlaps_existing_turn":true,"true_speaker_overlap":false,"previous_speaker":null,"next_speaker":null,"previous_gap_ms":null,"next_gap_ms":null},
+    "known_speakers": ["speaker_01"],
+    "expected_kind": "speech",
+    "expected_speaker": "speaker_01"
+  },
+  {
+    "name": "Accidental oh ASR cannot create speaker attribution",
+    "candidate": {"start_ms":0,"end_ms":180,"duration_ms":180,"text":"oh","asr_confidence":null,"diarization_speaker":null,"diarization_confidence":null,"audio_source":"mixed","overlaps_existing_turn":false,"true_speaker_overlap":false,"previous_speaker":"speaker_01","next_speaker":"speaker_02","previous_gap_ms":10,"next_gap_ms":10},
+    "known_speakers": ["speaker_01","speaker_02"],
+    "expected_kind": "backchannel",
+    "expected_speaker": null
   }
 ]

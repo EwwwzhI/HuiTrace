@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::context::AuthContext;
 use crate::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
 use crate::diarization::models;
+use crate::diarization::short_turn::{ShortCandidateVadConfig, VadEventCandidateInput};
 use crate::diarization::types::AudioSource;
 
 #[cfg(test)]
@@ -262,6 +263,42 @@ pub fn prepare_wav(audio: &Path, dest: &Path) -> Result<f64> {
     Ok(samples.len() as f64 / 16_000.0)
 }
 
+/// Independent high-recall VAD branch for short-event discovery. It does not
+/// alter the main ASR segmentation or write transcript rows.
+pub fn extract_short_candidate_vad_events(
+    audio: &Path,
+    source: AudioSource,
+) -> Result<Vec<VadEventCandidateInput>> {
+    let config = ShortCandidateVadConfig::default();
+    let decoded = crate::audio::decoder::decode_audio_file(audio)
+        .with_context(|| format!("decode short-candidate audio {}", audio.display()))?;
+    let samples = decoded.to_whisper_format();
+    let mut processor = crate::audio::vad::ContinuousVadProcessor::new_with_min_speech(
+        16_000,
+        config.redemption_ms,
+        config.min_speech_ms,
+    )?;
+    let mut segments = processor.process_audio(&samples)?;
+    segments.extend(processor.flush()?);
+    Ok(segments
+        .into_iter()
+        .filter_map(|segment| {
+            let start_ms = segment.start_timestamp_ms.round() as i64;
+            let end_ms = segment.end_timestamp_ms.round() as i64;
+            let duration_ms = end_ms.saturating_sub(start_ms) as u64;
+            (duration_ms >= config.min_speech_ms && duration_ms <= config.max_candidate_ms)
+                .then_some(VadEventCandidateInput {
+                    start_ms,
+                    end_ms,
+                    // ContinuousVadProcessor currently exposes estimated
+                    // constants, not calibrated probabilities.
+                    confidence: None,
+                    audio_source: source.clone(),
+                })
+        })
+        .collect())
+}
+
 /// Run one diarization pass and persist it.
 ///
 /// Persists even when the pass separated nothing: the stamp is what
@@ -290,12 +327,18 @@ pub async fn diarize_meeting(
             speaker_key: segment.speaker_key,
         })
         .collect();
-    SpeakerTurnsRepository::replace_for_meeting_with_source(
+    let vad_events =
+        extract_short_candidate_vad_events(&audio, AudioSource::Mixed).unwrap_or_else(|error| {
+            log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
+            Vec::new()
+        });
+    SpeakerTurnsRepository::replace_for_meeting_with_evidence(
         pool,
         ctx,
         meeting_id,
         &turns,
         AudioSource::Mixed,
+        &vad_events,
     )
     .await?;
     if let Some(folder) = folder_path {
@@ -481,12 +524,18 @@ pub fn request_offline_diarization<R: Runtime>(
                         speaker_key: segment.speaker_key,
                     })
                     .collect();
-                if let Err(error) = SpeakerTurnsRepository::replace_for_meeting_with_source(
+                let vad_events = extract_short_candidate_vad_events(&audio, source.clone())
+                    .unwrap_or_else(|error| {
+                        log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
+                        Vec::new()
+                    });
+                if let Err(error) = SpeakerTurnsRepository::replace_for_meeting_with_evidence(
                     &pool,
                     &ctx,
                     &meeting_id,
                     &turns,
                     source,
+                    &vad_events,
                 )
                 .await
                 {
@@ -546,7 +595,7 @@ async fn sync_transcripts_json(
     folder: &Path,
 ) -> Result<()> {
     let rows = sqlx::query(
-        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? ORDER BY audio_start_time ASC",
+        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? ORDER BY audio_start_time ASC",
     ).bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(pool).await?;
     let segments = rows
         .into_iter()
@@ -557,6 +606,7 @@ async fn sync_transcripts_json(
             audio_start_time: row.get("audio_start_time"),
             audio_end_time: row.get("audio_end_time"),
             duration: row.get("duration"),
+            asr_confidence: row.get("asr_confidence"),
             speaker_id: row.get("speaker_id"),
             speaker_confidence: row.get("speaker_confidence"),
             speaker_provisional: Some(row.get::<i64, _>("speaker_provisional") != 0),

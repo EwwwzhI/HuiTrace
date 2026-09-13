@@ -65,6 +65,38 @@ pub(crate) fn create_transcript_segments(
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
+                asr_confidence: None,
+                speaker_id: None,
+                speaker_confidence: None,
+                speaker_provisional: None,
+                speaker_revision: None,
+                segment_kind: None,
+                audio_source: None,
+                speaker_assignment_method: None,
+                speaker_overlap: None,
+            }
+        })
+        .collect()
+}
+
+/// Confidence-aware form used by providers that expose a real ASR score.
+/// `None` is deliberately preserved for providers without calibrated scores.
+pub(crate) fn create_transcript_segments_with_confidence(
+    transcripts: &[(String, f64, f64, Option<f64>)],
+) -> Vec<TranscriptSegment> {
+    transcripts
+        .iter()
+        .map(|(text, start_ms, end_ms, asr_confidence)| {
+            let start_seconds = start_ms / 1000.0;
+            let end_seconds = end_ms / 1000.0;
+            TranscriptSegment {
+                id: format!("transcript-{}", Uuid::new_v4()),
+                text: text.trim().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                audio_start_time: Some(start_seconds),
+                audio_end_time: Some(end_seconds),
+                duration: Some(end_seconds - start_seconds),
+                asr_confidence: *asr_confidence,
                 speaker_id: None,
                 speaker_confidence: None,
                 speaker_provisional: None,
@@ -95,6 +127,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
+                "asr_confidence": s.asr_confidence,
                 "speaker_id": s.speaker_id,
                 "speaker_confidence": s.speaker_confidence,
                 "speaker_provisional": s.speaker_provisional,

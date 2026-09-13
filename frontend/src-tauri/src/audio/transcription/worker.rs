@@ -35,6 +35,9 @@ pub struct TranscriptUpdate {
     pub chunk_start_time: f64, // Legacy field, kept for compatibility
     pub is_partial: bool,
     pub confidence: f32,
+    /// Kept separate from speaker confidence; absent for providers such as Parakeet.
+    #[serde(default)]
+    pub asr_confidence: Option<f64>,
     // NEW: Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
@@ -248,6 +251,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             chunk_start_time: chunk_timestamp, // Legacy compatibility
                                             is_partial,
                                             confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
+                                            asr_confidence: confidence_opt.map(f64::from),
                                             // NEW: Recording-relative timestamps for sync
                                             audio_start_time,
                                             audio_end_time,

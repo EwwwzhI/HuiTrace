@@ -80,6 +80,13 @@ fn turn(start_ms: i64, end_ms: i64, label: &str) -> SpeakerTurn {
     }
 }
 
+fn confident_turn(start_ms: i64, end_ms: i64, label: &str, confidence: f64) -> SpeakerTurn {
+    SpeakerTurn {
+        confidence: Some(confidence),
+        ..turn(start_ms, end_ms, label)
+    }
+}
+
 #[tokio::test]
 async fn turns_round_trip_in_time_order_and_stamp_the_meeting() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -400,5 +407,78 @@ async fn restore_automatic_uses_the_current_timeline_immediately() {
     assert_eq!(
         restored.assignment_method,
         AssignmentMethod::ShortTurnRefinement
+    );
+}
+
+#[tokio::test]
+async fn weak_short_only_cluster_stays_raw_but_never_becomes_visible_or_final() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("phantom.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-weak", "m-1", "oh", 2.0, 2.25).await;
+
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[
+            confident_turn(0, 2_000, "Speaker 1", 0.92),
+            confident_turn(2_000, 2_250, "Speaker 3", 0.30),
+        ],
+    )
+    .await
+    .expect("store raw evidence");
+
+    assert_eq!(
+        SpeakerTurnsRepository::list_raw_turns_for_meeting(&pool, &ctx, "m-1")
+            .await
+            .expect("raw")
+            .len(),
+        2
+    );
+    let accepted = SpeakerTurnsRepository::list_accepted_turns_for_meeting(&pool, &ctx, "m-1")
+        .await
+        .expect("accepted");
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].speaker_key, "speaker_01");
+    let final_speaker: Option<String> =
+        sqlx::query_scalar("SELECT speaker_id FROM transcripts WHERE id = 't-weak'")
+            .fetch_one(&pool)
+            .await
+            .expect("final assignment");
+    assert_eq!(final_speaker, None);
+}
+
+#[tokio::test]
+async fn missing_confidence_needs_multiple_turns_not_one_two_second_cluster() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("acceptance.db")).await;
+    let ctx = ctx_for("local");
+    seed_meeting(&pool, "m-1", "local").await;
+    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, "m-1", &[turn(0, 2_000, "Speaker 1")])
+        .await
+        .expect("store raw turn");
+    assert!(
+        SpeakerTurnsRepository::list_accepted_turns_for_meeting(&pool, &ctx, "m-1")
+            .await
+            .expect("accepted")
+            .is_empty()
+    );
+
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &ctx,
+        "m-1",
+        &[turn(0, 2_000, "Speaker 1"), turn(3_000, 5_000, "Speaker 1")],
+    )
+    .await
+    .expect("store corroborated turns");
+    assert_eq!(
+        SpeakerTurnsRepository::list_accepted_turns_for_meeting(&pool, &ctx, "m-1")
+            .await
+            .expect("accepted")
+            .len(),
+        2
     );
 }

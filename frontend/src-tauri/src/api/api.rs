@@ -192,6 +192,8 @@ pub struct MeetingTranscript {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub asr_confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_confidence: Option<f64>,
@@ -254,6 +256,8 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asr_confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -858,6 +862,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    asr_confidence: t.asr_confidence,
                     speaker_id: t.speaker_id,
                     speaker_confidence: t.speaker_confidence,
                     speaker_provisional: t.speaker_provisional != 0,

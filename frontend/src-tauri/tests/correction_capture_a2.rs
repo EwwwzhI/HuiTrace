@@ -68,6 +68,7 @@ fn segment(id: &str, start: f64) -> TranscriptSegment {
         audio_start_time: Some(start),
         audio_end_time: Some(start + 1.0),
         duration: Some(1.0),
+        asr_confidence: None,
         speaker_id: None,
         speaker_confidence: None,
         speaker_provisional: None,

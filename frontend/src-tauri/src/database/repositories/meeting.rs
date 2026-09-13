@@ -120,6 +120,7 @@ impl MeetingsRepository {
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    asr_confidence: t.asr_confidence,
                     speaker_id: t.speaker_id,
                     speaker_confidence: t.speaker_confidence,
                     speaker_provisional: t.speaker_provisional != 0,

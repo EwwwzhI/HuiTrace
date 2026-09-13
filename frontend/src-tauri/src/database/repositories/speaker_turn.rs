@@ -10,10 +10,13 @@
 use anyhow::{bail, Result};
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
+use std::sync::OnceLock;
 
 use crate::context::AuthContext;
 use crate::diarization::short_turn::{
-    refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnConfig, ShortTurnRefiner,
+    apply_revision_semantics, refine_assignment_with_candidate, MeetingSpeakerPrototypeStore,
+    ShortTurnCandidateExtractor, ShortTurnConfig, ShortTurnRefiner, TranscriptCandidateInput,
+    VadEventCandidateInput,
 };
 use crate::diarization::timeline::reconcile_transcript;
 use crate::diarization::types::{
@@ -37,7 +40,87 @@ pub struct SpeakerProfile {
     pub display_name: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpeakerAcceptanceEvidence {
+    pub total_duration_ms: u64,
+    pub turn_count: usize,
+    pub longest_turn_ms: u64,
+    pub available_confidence_count: usize,
+    pub mean_available_confidence: Option<f64>,
+    pub overlap_ratio: f64,
+}
+
+fn acceptance_evidence(turns: &[SpeakerTurn], speaker_key: &str) -> SpeakerAcceptanceEvidence {
+    let owned: Vec<_> = turns
+        .iter()
+        .filter(|turn| turn.speaker_key == speaker_key)
+        .collect();
+    let total_duration_ms = owned
+        .iter()
+        .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
+        .sum();
+    let longest_turn_ms = owned
+        .iter()
+        .map(|turn| turn.end_ms.saturating_sub(turn.start_ms) as u64)
+        .max()
+        .unwrap_or(0);
+    let confidences: Vec<_> = owned.iter().filter_map(|turn| turn.confidence).collect();
+    let mean_available_confidence = (!confidences.is_empty())
+        .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
+    let overlap_ms: u64 = owned
+        .iter()
+        .map(|turn| {
+            turns
+                .iter()
+                .filter(|other| other.speaker_key != speaker_key)
+                .map(|other| {
+                    turn.end_ms
+                        .min(other.end_ms)
+                        .saturating_sub(turn.start_ms.max(other.start_ms))
+                        .max(0) as u64
+                })
+                .sum::<u64>()
+                .min(turn.end_ms.saturating_sub(turn.start_ms) as u64)
+        })
+        .sum();
+    SpeakerAcceptanceEvidence {
+        total_duration_ms,
+        turn_count: owned.len(),
+        longest_turn_ms,
+        available_confidence_count: confidences.len(),
+        mean_available_confidence,
+        overlap_ratio: if total_duration_ms == 0 {
+            0.0
+        } else {
+            overlap_ms as f64 / total_duration_ms as f64
+        },
+    }
+}
+
+fn qualifies_as_accepted_speaker(
+    evidence: &SpeakerAcceptanceEvidence,
+    config: &ShortTurnConfig,
+) -> bool {
+    if evidence.overlap_ratio > 0.50 {
+        return false;
+    }
+    match evidence.mean_available_confidence {
+        Some(confidence) => {
+            evidence.total_duration_ms >= config.prototype_min_duration_ms
+                && evidence.longest_turn_ms >= 1_200
+                && confidence >= config.high_confidence_threshold
+        }
+        None => {
+            evidence.total_duration_ms >= 4_000
+                && evidence.turn_count >= 2
+                && evidence.longest_turn_ms >= config.prototype_min_duration_ms
+        }
+    }
+}
+
 pub struct SpeakerTurnsRepository;
+
+static SPEAKER_TURN_WRITE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 impl SpeakerTurnsRepository {
     /// Replace this meeting's turns and stamp `meetings.diarized_at`, in ONE
@@ -68,6 +151,23 @@ impl SpeakerTurnsRepository {
         turns: &[SpeakerTurn],
         source: AudioSource,
     ) -> Result<usize> {
+        Self::replace_for_meeting_with_evidence(pool, ctx, meeting_id, turns, source, &[]).await
+    }
+
+    pub async fn replace_for_meeting_with_evidence(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+        turns: &[SpeakerTurn],
+        source: AudioSource,
+        vad_events: &[VadEventCandidateInput],
+    ) -> Result<usize> {
+        // SQLite permits concurrent analysis but only one writer. Keep the
+        // backend jobs independent while serializing their short commit phase.
+        let _write_guard = SPEAKER_TURN_WRITE_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         if meeting_id.trim().is_empty() {
             bail!("meeting_id cannot be empty");
         }
@@ -100,7 +200,7 @@ impl SpeakerTurnsRepository {
             bail!("meeting {meeting_id} is not in this workspace");
         }
 
-        let old_turns = Self::list_for_meeting_tx(&mut tx, ctx, meeting_id).await?;
+        let old_turns = Self::list_raw_for_meeting_tx(&mut tx, ctx, meeting_id).await?;
         let turns = remap_turn_keys(&old_turns, turns);
 
         // A short-only backend cluster is evidence, not permission to create a
@@ -108,17 +208,23 @@ impl SpeakerTurnsRepository {
         // becomes eligible only after a long, confident, non-overlap speech
         // turn can seed the Phase 2A meeting-local prototype abstraction.
         let short_turn_config = ShortTurnConfig::default();
-        let mut known_speaker_keys: std::collections::HashSet<String> = old_turns
+        let mut known_speaker_keys: std::collections::HashSet<String> = sqlx::query_scalar(
+            "SELECT speaker_key FROM speakers WHERE meeting_id = ? AND workspace_id = ?",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect();
+        for key in turns
             .iter()
-            .map(|turn| turn.speaker_key.clone())
-            .filter(|key| !key.is_empty())
-            .collect();
-        for turn in &turns {
-            let duration_ms = turn.end_ms.saturating_sub(turn.start_ms) as u64;
-            if duration_ms >= short_turn_config.prototype_min_duration_ms
-                && turn.confidence.unwrap_or(1.0) >= short_turn_config.high_confidence_threshold
-            {
-                known_speaker_keys.insert(turn.speaker_key.clone());
+            .map(|turn| turn.speaker_key.as_str())
+            .collect::<std::collections::HashSet<_>>()
+        {
+            let evidence = acceptance_evidence(&turns, key);
+            if qualifies_as_accepted_speaker(&evidence, &short_turn_config) {
+                known_speaker_keys.insert(key.to_string());
             }
         }
         let manual_speakers: Vec<String> = sqlx::query_scalar(
@@ -176,38 +282,65 @@ impl SpeakerTurnsRepository {
 
         // Reconcile only automatic assignments. `manual` is intentionally a
         // durable override and must outlive every later offline pass.
-        let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
+        let rows = sqlx::query("SELECT id, transcript, audio_start_time, audio_end_time, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, COALESCE(segment_kind, 'unknown') AS segment_kind, COALESCE(audio_source, 'mixed') AS audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
             .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(&mut *tx).await?;
-        let transcript_inputs: Vec<(TranscriptTiming, String)> = rows
+        let transcript_inputs: Vec<(
+            TranscriptCandidateInput,
+            crate::diarization::types::TranscriptSpeakerAssignment,
+        )> = rows
             .into_iter()
             .filter_map(|row| {
                 let start: Option<f64> = row.get("audio_start_time");
                 let end: Option<f64> = row.get("audio_end_time");
                 match (start, end) {
-                    (Some(start), Some(end)) if end > start => Some((
-                        TranscriptTiming {
-                            id: row.get("id"),
-                            start_ms: (start * 1000.0).round() as i64,
-                            end_ms: (end * 1000.0).round() as i64,
-                            audio_source: audio_source_from_db(
-                                &row.get::<String, _>("audio_source"),
-                            ),
-                        },
-                        row.get("transcript"),
-                    )),
+                    (Some(start), Some(end)) if end > start => {
+                        let id: String = row.get("id");
+                        let audio_source =
+                            audio_source_from_db(&row.get::<String, _>("audio_source"));
+                        Some((
+                            TranscriptCandidateInput {
+                                timing: TranscriptTiming {
+                                    id: id.clone(),
+                                    start_ms: (start * 1000.0).round() as i64,
+                                    end_ms: (end * 1000.0).round() as i64,
+                                    audio_source: audio_source.clone(),
+                                },
+                                text: row.get("transcript"),
+                                asr_confidence: row.get("asr_confidence"),
+                            },
+                            crate::diarization::types::TranscriptSpeakerAssignment {
+                                transcript_id: id,
+                                speaker_key: row.get("speaker_id"),
+                                speaker_confidence: row.get("speaker_confidence"),
+                                speaker_provisional: row.get::<i64, _>("speaker_provisional") != 0,
+                                speaker_revision: row.get("speaker_revision"),
+                                segment_kind: segment_kind_from_db(
+                                    &row.get::<String, _>("segment_kind"),
+                                ),
+                                audio_source,
+                                assignment_method: assignment_method_from_db(
+                                    &row.get::<String, _>("speaker_assignment_method"),
+                                ),
+                                overlap: row.get::<i64, _>("speaker_overlap") != 0,
+                            },
+                        ))
+                    }
                     _ => None,
                 }
             })
             .collect();
         let timings: Vec<TranscriptTiming> = transcript_inputs
             .iter()
-            .map(|(timing, _)| timing.clone())
+            .map(|(input, _)| input.timing.clone())
             .collect();
-        let transcript_text: std::collections::HashMap<&str, &str> = transcript_inputs
+        let previous_assignments: std::collections::HashMap<
+            &str,
+            &crate::diarization::types::TranscriptSpeakerAssignment,
+        > = transcript_inputs
             .iter()
-            .map(|(timing, text)| (timing.id.as_str(), text.as_str()))
+            .map(|(input, assignment)| (input.timing.id.as_str(), assignment))
             .collect();
-        let speaker_segments: Vec<SpeakerSegment> = turns
+        let raw_speaker_segments: Vec<SpeakerSegment> = turns
             .iter()
             .map(|turn| SpeakerSegment {
                 start_ms: turn.start_ms,
@@ -226,30 +359,54 @@ impl SpeakerTurnsRepository {
                 overlap: false,
             })
             .collect();
+        let speaker_segments: Vec<SpeakerSegment> = raw_speaker_segments
+            .iter()
+            .filter(|segment| known_speaker_keys.contains(&segment.speaker_key))
+            .cloned()
+            .collect();
         let prototypes = MeetingSpeakerPrototypeStore::new(known_speaker_keys.iter().cloned());
         let refiner = ShortTurnRefiner::default();
-        let timings_by_id: std::collections::HashMap<&str, &TranscriptTiming> = timings
+        let extracted = ShortTurnCandidateExtractor::default().extract(
+            &transcript_inputs
+                .iter()
+                .map(|(input, _)| input.clone())
+                .collect::<Vec<_>>(),
+            &raw_speaker_segments,
+            vad_events,
+        );
+        let candidates_by_transcript: std::collections::HashMap<
+            &str,
+            &crate::diarization::short_turn::ShortTurnCandidate,
+        > = extracted
             .iter()
-            .map(|timing| (timing.id.as_str(), timing))
+            .flat_map(|candidate| {
+                candidate
+                    .transcript_ids
+                    .iter()
+                    .map(move |id| (id.as_str(), candidate))
+            })
             .collect();
         for assignment in reconcile_transcript(&timings, &speaker_segments) {
-            let assignment = timings_by_id
+            let proposed = candidates_by_transcript
                 .get(assignment.transcript_id.as_str())
-                .map(|timing| {
-                    refine_timeline_assignment(
+                .filter(|candidate| {
+                    candidate.candidate_sources.contains(
+                        &crate::diarization::short_turn::ShortTurnCandidateSource::Transcript,
+                    )
+                })
+                .map(|candidate| {
+                    refine_assignment_with_candidate(
                         &refiner,
                         &prototypes,
-                        timing,
-                        transcript_text
-                            .get(assignment.transcript_id.as_str())
-                            .copied()
-                            .unwrap_or_default(),
-                        None,
+                        candidate,
                         assignment.clone(),
-                        &speaker_segments,
                     )
                 })
                 .unwrap_or(assignment);
+            let assignment = previous_assignments
+                .get(proposed.transcript_id.as_str())
+                .map(|previous| apply_revision_semantics(previous, proposed.clone()))
+                .unwrap_or(proposed);
             sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = ?, speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ? AND speaker_assignment_method != 'manual'")
                 .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(assignment.transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
         }
@@ -273,15 +430,24 @@ impl SpeakerTurnsRepository {
         Ok(turns.len())
     }
 
-    /// This meeting's turns, earliest first.
+    /// Raw evidence turns, retained for repository compatibility and internal
+    /// analysis. User-facing callers must use `list_accepted_turns_for_meeting`.
     pub async fn list_for_meeting(
         pool: &SqlitePool,
         ctx: &AuthContext,
         meeting_id: &str,
     ) -> Result<Vec<SpeakerTurn>> {
+        Self::list_raw_turns_for_meeting(pool, ctx, meeting_id).await
+    }
+
+    pub async fn list_accepted_turns_for_meeting(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+    ) -> Result<Vec<SpeakerTurn>> {
         let rows = sqlx::query(
-            "SELECT COALESCE(s.display_name, st.speaker_label) AS speaker_label, COALESCE(st.speaker_key, '') AS speaker_key, st.start_ms, st.end_ms, st.confidence FROM speaker_turns st \
-             LEFT JOIN speakers s ON s.meeting_id = st.meeting_id AND s.workspace_id = st.workspace_id AND s.speaker_key = st.speaker_key \
+            "SELECT s.display_name AS speaker_label, st.speaker_key, st.start_ms, st.end_ms, st.confidence FROM speaker_turns st \
+             INNER JOIN speakers s ON s.meeting_id = st.meeting_id AND s.workspace_id = st.workspace_id AND s.speaker_key = st.speaker_key \
              WHERE st.meeting_id = ? AND st.workspace_id = ? ORDER BY st.start_ms, st.end_ms",
         )
         .bind(meeting_id)
@@ -301,12 +467,31 @@ impl SpeakerTurnsRepository {
             .collect())
     }
 
-    async fn list_for_meeting_tx(
+    pub async fn list_raw_turns_for_meeting(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+    ) -> Result<Vec<SpeakerTurn>> {
+        let rows = sqlx::query("SELECT speaker_label, COALESCE(speaker_key, '') AS speaker_key, start_ms, end_ms, confidence FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ? ORDER BY start_ms, end_ms")
+            .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SpeakerTurn {
+                speaker_label: r.get("speaker_label"),
+                speaker_key: r.get("speaker_key"),
+                start_ms: r.get("start_ms"),
+                end_ms: r.get("end_ms"),
+                confidence: r.get("confidence"),
+            })
+            .collect())
+    }
+
+    async fn list_raw_for_meeting_tx(
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         ctx: &AuthContext,
         meeting_id: &str,
     ) -> Result<Vec<SpeakerTurn>> {
-        let rows = sqlx::query("SELECT COALESCE(s.display_name, st.speaker_label) AS speaker_label, COALESCE(st.speaker_key, '') AS speaker_key, st.start_ms, st.end_ms, st.confidence FROM speaker_turns st LEFT JOIN speakers s ON s.meeting_id = st.meeting_id AND s.workspace_id = st.workspace_id AND s.speaker_key = st.speaker_key WHERE st.meeting_id = ? AND st.workspace_id = ?")
+        let rows = sqlx::query("SELECT speaker_label, COALESCE(speaker_key, '') AS speaker_key, start_ms, end_ms, confidence FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ?")
             .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(&mut **tx).await?;
         Ok(rows
             .into_iter()
@@ -457,6 +642,24 @@ fn audio_source_from_db(value: &str) -> AudioSource {
         "system" => AudioSource::System,
         "imported" => AudioSource::Imported,
         _ => AudioSource::Mixed,
+    }
+}
+
+fn segment_kind_from_db(value: &str) -> SegmentKind {
+    match value {
+        "speech" => SegmentKind::Speech,
+        "backchannel" => SegmentKind::Backchannel,
+        "noise" => SegmentKind::Noise,
+        "non_speech_vocalization" => SegmentKind::NonSpeechVocalization,
+        _ => SegmentKind::Unknown,
+    }
+}
+
+fn assignment_method_from_db(value: &str) -> AssignmentMethod {
+    match value {
+        "manual" => AssignmentMethod::Manual,
+        "short_turn_refinement" => AssignmentMethod::ShortTurnRefinement,
+        _ => AssignmentMethod::Diarization,
     }
 }
 

@@ -113,7 +113,7 @@ pub async fn api_get_speaker_turns(
     meeting_id: String,
 ) -> Result<Vec<crate::database::repositories::speaker_turn::SpeakerTurn>, String> {
     let ctx = crate::context::current();
-    crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_for_meeting(
+    crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_accepted_turns_for_meeting(
         state.db_manager.pool(),
         &ctx,
         &meeting_id,
@@ -180,8 +180,8 @@ pub async fn api_assign_transcript_speaker(
         if valid.is_none() {
             return Err("speaker does not belong to this meeting".into());
         }
-        sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_assignment_method = 'manual', speaker_provisional = 0 WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
-            .bind(key).bind(transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await
+        sqlx::query("UPDATE transcripts SET speaker_revision = speaker_revision + CASE WHEN speaker_id IS NOT ? OR speaker_assignment_method != 'manual' THEN 1 ELSE 0 END, speaker_id = ?, speaker_confidence = NULL, speaker_assignment_method = 'manual', speaker_provisional = 0 WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+            .bind(&key).bind(&key).bind(transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await
     } else {
         return api_restore_transcript_speaker_assignment(state, meeting_id, transcript_id).await;
     };
@@ -204,11 +204,13 @@ pub async fn api_restore_transcript_speaker_assignment(
     use sqlx::Row;
     let ctx = crate::context::current();
     let pool = state.db_manager.pool();
-    let row = sqlx::query("SELECT transcript, audio_start_time, audio_end_time, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
+    let row = sqlx::query("SELECT transcript, audio_start_time, audio_end_time, asr_confidence, speaker_revision, COALESCE(audio_source, 'mixed') AS audio_source FROM transcripts WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
         .bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).fetch_optional(pool).await.map_err(|e| format!("read transcript: {e}"))?.ok_or("transcript does not belong to this meeting")?;
     let text: String = row.get("transcript");
     let start: Option<f64> = row.get("audio_start_time");
     let end: Option<f64> = row.get("audio_end_time");
+    let asr_confidence: Option<f64> = row.get("asr_confidence");
+    let current_revision: i64 = row.get("speaker_revision");
     let source = match row.get::<String, _>("audio_source").as_str() {
         "imported" => AudioSource::Imported,
         "microphone" => AudioSource::Microphone,
@@ -219,7 +221,7 @@ pub async fn api_restore_transcript_speaker_assignment(
         return Err("transcript has no timing for automatic assignment".into());
     };
     let turns =
-        crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_for_meeting(
+        crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_accepted_turns_for_meeting(
             pool,
             &ctx,
             &meeting_id,
@@ -269,12 +271,12 @@ pub async fn api_restore_transcript_speaker_assignment(
         &prototypes,
         &timing,
         &text,
-        None,
+        asr_confidence,
         assignment,
         &speakers,
     );
     let result = sqlx::query("UPDATE transcripts SET speaker_id = ?, speaker_confidence = ?, speaker_provisional = ?, speaker_revision = ?, segment_kind = ?, audio_source = ?, speaker_assignment_method = ?, speaker_overlap = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
-        .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await.map_err(|e| format!("restore assignment: {e}"))?;
+        .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(current_revision.saturating_add(1)).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(&transcript_id).bind(&meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await.map_err(|e| format!("restore assignment: {e}"))?;
     if result.rows_affected() != 1 {
         return Err("transcript does not belong to this meeting".into());
     }

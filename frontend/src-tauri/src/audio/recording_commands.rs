@@ -342,6 +342,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     duration: update.duration,
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
+                    asr_confidence: update.asr_confidence,
                     sequence_id: update.sequence_id,
                     speaker_id: update.speaker_id.clone(),
                     speaker_confidence: update.speaker_confidence,
@@ -546,6 +547,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     duration: update.duration,
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
+                    asr_confidence: update.asr_confidence,
                     sequence_id: update.sequence_id,
                     speaker_id: update.speaker_id.clone(),
                     speaker_confidence: update.speaker_confidence,

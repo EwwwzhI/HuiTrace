@@ -827,10 +827,10 @@ async fn insert_transcript_segment(
     sqlx::query(
         "INSERT INTO transcripts \
          (id, workspace_id, meeting_id, transcript, timestamp, audio_start_time, \
-          audio_end_time, duration, speaker_id, speaker_confidence, speaker_provisional, \
+          audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, \
           speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap, \
           created_at, updated_at, updated_by, rev) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
     )
     .bind(transcript_id)
     .bind(ctx.tenant_id.as_str())
@@ -840,6 +840,7 @@ async fn insert_transcript_segment(
     .bind(segment.audio_start_time)
     .bind(segment.audio_end_time)
     .bind(segment.duration)
+    .bind(segment.asr_confidence)
     .bind(&segment.speaker_id)
     .bind(segment.speaker_confidence)
     .bind(segment.speaker_provisional.unwrap_or(false) as i64)

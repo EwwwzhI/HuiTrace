@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+#[cfg(test)]
+use super::common::create_transcript_segments;
+use super::common::{split_segment_at_silence, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -597,8 +599,9 @@ async fn run_import<R: Runtime>(
     );
 
     // Process each speech segment
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    let mut all_transcripts: Vec<(String, f64, f64, Option<f64>)> = Vec::new();
     let mut total_confidence = 0.0f32;
+    let mut confidence_count = 0usize;
 
     for (i, segment) in processable_segments.iter().enumerate() {
         if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -641,14 +644,14 @@ async fn run_import<R: Runtime>(
                 .transcribe_audio(segment.samples.clone())
                 .await
                 .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
+            (text, None)
         } else {
             let engine = whisper_engine.as_ref().unwrap();
             let (text, conf, _) = engine
                 .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
                 .await
                 .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, conf)
+            (text, Some(conf))
         };
 
         let trimmed = text.trim();
@@ -658,7 +661,7 @@ async fn run_import<R: Runtime>(
                 i + 1,
                 processable_count,
                 segment_duration_sec,
-                conf,
+                conf.unwrap_or_default(),
                 if trimmed.len() > 80 {
                     let mut end = 80;
                     while !trimmed.is_char_boundary(end) {
@@ -669,8 +672,16 @@ async fn run_import<R: Runtime>(
                     trimmed
                 }
             );
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
-            total_confidence += conf;
+            all_transcripts.push((
+                text,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms,
+                conf.map(f64::from),
+            ));
+            if let Some(conf) = conf {
+                total_confidence += conf;
+                confidence_count += 1;
+            }
         } else {
             debug!(
                 "Segment {}/{}: {:.1}s — empty transcription",
@@ -682,8 +693,8 @@ async fn run_import<R: Runtime>(
     }
 
     let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
+    let avg_confidence = if confidence_count > 0 {
+        total_confidence / confidence_count as f32
     } else {
         0.0
     };
@@ -702,7 +713,8 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "saving", 85, "Creating meeting...");
 
     // Create transcript segments
-    let mut segments = create_transcript_segments(&all_transcripts);
+    let mut segments =
+        crate::audio::common::create_transcript_segments_with_confidence(&all_transcripts);
     for segment in &mut segments {
         segment.audio_source = Some("imported".to_string());
         segment.segment_kind = Some("speech".to_string());
@@ -1316,6 +1328,7 @@ mod tests {
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                asr_confidence: None,
                 speaker_id: None,
                 speaker_confidence: None,
                 speaker_provisional: None,
@@ -1332,6 +1345,7 @@ mod tests {
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                asr_confidence: None,
                 speaker_id: None,
                 speaker_confidence: None,
                 speaker_provisional: None,

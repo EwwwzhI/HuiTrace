@@ -1,6 +1,7 @@
 use app_lib::diarization::short_turn::{
-    compute_metrics, MeetingSpeakerPrototypeStore, ShortTurnCandidate,
-    ShortTurnEvaluationObservation, ShortTurnRefiner,
+    compute_candidate_recall, compute_duration_bucket_metrics, compute_metrics,
+    CandidateRecallObservation, MeetingSpeakerPrototypeStore, ShortTurnCandidate,
+    ShortTurnCandidateSource, ShortTurnEvaluationObservation, ShortTurnRefiner,
 };
 use app_lib::diarization::types::SegmentKind;
 use serde::Deserialize;
@@ -60,4 +61,56 @@ fn metadata_driven_short_turn_fixture_suite() {
     assert_eq!(metrics.speaker_attribution_accuracy, 1.0);
     assert_eq!(metrics.false_new_speaker_rate, 0.0);
     assert_eq!(metrics.manual_override_violation_count, 0);
+}
+
+#[test]
+fn duration_buckets_and_candidate_source_recall_are_reported_separately() {
+    let observation = |duration| {
+        (
+            duration,
+            ShortTurnEvaluationObservation {
+                expected_kind: SegmentKind::Backchannel,
+                expected_speaker: Some("speaker_02".into()),
+                predicted_kind: SegmentKind::Backchannel,
+                predicted_speaker: Some("speaker_02".into()),
+                predicted_is_new_speaker: false,
+                manual_override_violated: false,
+            },
+        )
+    };
+    let buckets = compute_duration_bucket_metrics(&[
+        observation(200),
+        observation(400),
+        observation(650),
+        observation(900),
+        observation(1_300),
+    ]);
+    for label in [
+        "100-300ms",
+        "300-500ms",
+        "500-800ms",
+        "800-1200ms",
+        "1200-1500ms-control",
+    ] {
+        assert_eq!(buckets[label].sample_count, 1, "{label}");
+    }
+
+    let recall = compute_candidate_recall(&[
+        CandidateRecallObservation {
+            expected_short_event: true,
+            found_sources: vec![ShortTurnCandidateSource::Transcript],
+        },
+        CandidateRecallObservation {
+            expected_short_event: true,
+            found_sources: vec![
+                ShortTurnCandidateSource::DiarizerTurn,
+                ShortTurnCandidateSource::VadEvent,
+            ],
+        },
+    ]);
+    assert_eq!(recall.sample_count, 2);
+    assert_eq!(recall.transcript, 0.5);
+    assert_eq!(recall.diarizer_turn, 0.5);
+    assert_eq!(recall.vad_event, 0.5);
+    assert_eq!(recall.union, 1.0);
 }

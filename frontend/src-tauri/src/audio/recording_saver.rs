@@ -21,6 +21,9 @@ pub struct TranscriptSegment {
     pub duration: f64,         // Segment duration in seconds
     pub display_time: String,  // Formatted time for display like "[02:15]"
     pub confidence: f32,
+    /// Provider ASR confidence. `None` means the provider supplied no score.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asr_confidence: Option<f64>,
     pub sequence_id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_id: Option<String>,
@@ -175,6 +178,7 @@ impl RecordingSaver {
             duration: 0.0,
             display_time: "[00:00]".to_string(),
             confidence: 1.0,
+            asr_confidence: None,
             sequence_id: 0,
             speaker_id: None,
             speaker_confidence: None,
