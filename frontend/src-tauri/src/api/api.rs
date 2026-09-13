@@ -191,6 +191,18 @@ pub struct MeetingTranscript {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_confidence: Option<f64>,
+    pub speaker_provisional: bool,
+    pub speaker_revision: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_source: Option<String>,
+    pub speaker_assignment_method: String,
+    pub speaker_overlap: bool,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -242,6 +254,22 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_provisional: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_assignment_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_overlap: Option<bool>,
 }
 
 // Helper function to get auth token from store (optional)
@@ -830,6 +858,14 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker_id: t.speaker_id,
+                    speaker_confidence: t.speaker_confidence,
+                    speaker_provisional: t.speaker_provisional != 0,
+                    speaker_revision: t.speaker_revision,
+                    segment_kind: t.segment_kind,
+                    audio_source: t.audio_source,
+                    speaker_assignment_method: t.speaker_assignment_method,
+                    speaker_overlap: t.speaker_overlap != 0,
                 })
                 .collect::<Vec<_>>();
 
@@ -998,6 +1034,15 @@ pub async fn api_save_transcript<R: Runtime>(
             if let Some(reservation) = recording_folder_reservation.take() {
                 reservation.commit(&meeting_id);
             }
+            // Recording finalization reaches the database through this command
+            // (not `stop_recording`). Start the independent enhancement only
+            // after its meeting and transcript rows are durable.
+            crate::diarization::service::schedule_offline_diarization(
+                _app.clone(),
+                pool.clone(),
+                ctx.clone(),
+                meeting_id.clone(),
+            );
             log_info!("Successfully saved transcript and created meeting");
             Ok(serde_json::json!({
                 "status": "success",

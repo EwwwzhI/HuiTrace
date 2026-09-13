@@ -129,6 +129,7 @@ pub fn parse_output(stdout: &str) -> Result<DiarizationOutcome> {
             end_ms: t.end_ms,
             speaker_label: t.speaker_label,
             confidence: t.confidence,
+            speaker_key: String::new(),
         });
     }
     Ok(DiarizationOutcome {

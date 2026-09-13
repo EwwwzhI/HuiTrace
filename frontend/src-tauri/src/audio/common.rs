@@ -65,6 +65,14 @@ pub(crate) fn create_transcript_segments(
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
+                speaker_id: None,
+                speaker_confidence: None,
+                speaker_provisional: None,
+                speaker_revision: None,
+                segment_kind: None,
+                audio_source: None,
+                speaker_assignment_method: None,
+                speaker_overlap: None,
             }
         })
         .collect()
@@ -87,6 +95,14 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
+                "speaker_id": s.speaker_id,
+                "speaker_confidence": s.speaker_confidence,
+                "speaker_provisional": s.speaker_provisional,
+                "speaker_revision": s.speaker_revision,
+                "segment_kind": s.segment_kind,
+                "audio_source": s.audio_source,
+                "speaker_assignment_method": s.speaker_assignment_method,
+                "speaker_overlap": s.speaker_overlap,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()

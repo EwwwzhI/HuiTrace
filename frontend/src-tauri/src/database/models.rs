@@ -35,6 +35,14 @@ pub struct Transcript {
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
+    pub speaker_id: Option<String>,
+    pub speaker_confidence: Option<f64>,
+    pub speaker_provisional: i64,
+    pub speaker_revision: i64,
+    pub segment_kind: Option<String>,
+    pub audio_source: Option<String>,
+    pub speaker_assignment_method: String,
+    pub speaker_overlap: i64,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

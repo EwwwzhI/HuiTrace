@@ -49,6 +49,7 @@ fn turn(start_ms: i64, end_ms: i64, label: &str) -> SpeakerTurn {
         end_ms,
         speaker_label: label.to_string(),
         confidence: None,
+        speaker_key: String::new(),
     }
 }
 

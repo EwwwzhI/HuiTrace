@@ -19,7 +19,8 @@
  *   both are shown rather than the louder one winning.
  */
 
-import { Users } from 'lucide-react';
+import { Pencil, Users } from 'lucide-react';
+import { useState } from 'react';
 import { translateUI, uiI18n } from '@/i18n';
 import { useUiTranslation } from '@/i18n/client';
 
@@ -130,14 +131,18 @@ export function SpeakerChips({
   );
 }
 
-function TalkTimeRow({ row, order }: { row: SpeakerTalkTime; order: string[] }) {
+function TalkTimeRow({ row, order, speakerKey, onRename }: { row: SpeakerTalkTime; order: string[]; speakerKey?: string; onRename?: (key: string, name: string) => void }) {
   useUiTranslation();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(row.label);
   const s = swatchFor(row.label, order);
   const percent = Math.round(row.shareOfSpeech * 100);
   return (
     <li className="flex items-center gap-3">
       <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot}`} aria-hidden />
-      <span className="w-24 shrink-0 truncate text-sm font-medium">{displaySpeaker(row.label, order)}</span>
+      <span className="w-28 shrink-0 truncate text-sm font-medium">
+        {editing ? <input aria-label="Speaker name" className="w-full rounded border border-input bg-background px-1 py-0.5 text-sm" value={name} autoFocus onChange={(e) => setName(e.target.value)} onBlur={() => { if (speakerKey && name.trim() && name.trim() !== row.label) onRename?.(speakerKey, name); setEditing(false); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setName(row.label); setEditing(false); } }} /> : <>{displaySpeaker(row.label, order)}{speakerKey && onRename && <button type="button" aria-label={`Rename ${row.label}`} onClick={() => setEditing(true)} className="ml-1 inline-flex text-muted-foreground hover:text-foreground"><Pencil className="h-3 w-3" /></button>}</>}
+      </span>
       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <span
           className={`block h-full rounded-full ${s.bar}`}
@@ -192,11 +197,13 @@ export function TalkTimePanel({
   onRun,
   onGetModels,
   busy,
+  onRename,
 }: {
   state: TalkTimeState;
   onRun?: () => void;
   onGetModels?: () => void;
   busy?: boolean;
+  onRename?: (speakerKey: string, displayName: string) => void;
 }) {
   useUiTranslation();
   if (state.kind === 'noAudio') {
@@ -268,7 +275,7 @@ export function TalkTimePanel({
     <Frame>
       <ul className="space-y-2">
         {rows.map((row) => (
-          <TalkTimeRow key={row.label} row={row} order={order} />
+          <TalkTimeRow key={row.label} row={row} order={order} speakerKey={state.turns.find((turn) => turn.speaker_label === row.label)?.speaker_key} onRename={onRename} />
         ))}
       </ul>
       <p className="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">

@@ -565,6 +565,15 @@ async fn run_retranscription<R: Runtime>(
         warn!("Failed to update metadata.json: {}", e);
     }
 
+    // The ASR replacement is already durable. Speaker analysis remains an
+    // optional post-processing pass and therefore cannot fail retranscription.
+    crate::diarization::service::schedule_offline_diarization(
+        app.clone(),
+        pool.clone(),
+        ctx.clone(),
+        meeting_id.clone(),
+    );
+
     emit_progress(
         &app,
         &meeting_id,

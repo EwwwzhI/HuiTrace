@@ -7,7 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::context::AuthContext;
 use crate::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
@@ -119,35 +120,197 @@ pub async fn diarize_meeting(
     let audio = meeting_audio(folder_path).ok_or_else(|| {
         anyhow!("this meeting has no saved audio, so speakers cannot be identified")
     })?;
-    let paths = match models::status(models_dir).await {
-        models::ModelStatus::Available(p) => p,
-        models::ModelStatus::Missing => bail!("diarization models are not downloaded yet"),
-        models::ModelStatus::Corrupted { filename, reason } => {
-            bail!("diarization model {filename} failed verification: {reason}")
-        }
-    };
-    let binary = crate::diarization::sidecar::resolve_binary()?;
-
-    let temp = tempfile::Builder::new()
-        .prefix("mityu-diarize-")
-        .suffix(".wav")
-        .tempfile()
-        .context("create temporary audio file")?;
-    let wav_path = temp.path().to_path_buf();
-
-    let audio_for_blocking = audio.clone();
-    let wav_for_blocking = wav_path.clone();
-    tokio::task::spawn_blocking(move || prepare_wav(&audio_for_blocking, &wav_for_blocking))
-        .await
-        .context("audio preparation task panicked")??;
-
-    let outcome =
-        crate::diarization::sidecar::run(&binary, &wav_path, &paths.segmentation, &paths.embedding)
-            .await?;
-
-    let turns: Vec<SpeakerTurn> = outcome.turns;
+    let segments = crate::diarization::offline::OfflineDiarizationService::default()
+        .analyze(&audio, models_dir)
+        .await?;
+    let turns: Vec<SpeakerTurn> = segments
+        .into_iter()
+        .map(|segment| SpeakerTurn {
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            speaker_label: display_label_for_key(&segment.speaker_key),
+            confidence: segment.speaker_confidence,
+            speaker_key: segment.speaker_key,
+        })
+        .collect();
     SpeakerTurnsRepository::replace_for_meeting(pool, ctx, meeting_id, &turns).await?;
+    if let Some(folder) = folder_path {
+        if let Err(error) = sync_transcripts_json(pool, ctx, meeting_id, Path::new(folder)).await {
+            log::warn!(
+                "speaker transcript JSON sync failed for {}: {:#}",
+                meeting_id,
+                error
+            );
+        }
+    }
     Ok(turns.len())
+}
+
+fn display_label_for_key(key: &str) -> String {
+    key.strip_prefix("speaker_")
+        .and_then(|number| number.parse::<usize>().ok())
+        .map(|number| format!("Speaker {number}"))
+        .unwrap_or_else(|| key.to_string())
+}
+
+/// Start an enhancement pass without coupling meeting persistence to model
+/// availability or sidecar health. ASR and the saved meeting are already
+/// complete when this is called; every error becomes diagnosable state instead
+/// of a failed recording/import.
+pub fn schedule_offline_diarization<R: Runtime>(
+    app: AppHandle<R>,
+    pool: SqlitePool,
+    ctx: AuthContext,
+    meeting_id: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        let folder: Option<String> = match sqlx::query_scalar(
+            "SELECT folder_path FROM meetings WHERE id = ? AND workspace_id = ?",
+        )
+        .bind(&meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_optional(&pool)
+        .await
+        {
+            Ok(value) => value.flatten(),
+            Err(error) => {
+                log::warn!(
+                    "speaker analysis could not read meeting {}: {}",
+                    meeting_id,
+                    error
+                );
+                return;
+            }
+        };
+        let Some(audio) = meeting_audio(folder.as_deref()) else {
+            let _ = set_status(
+                &pool,
+                &ctx,
+                &meeting_id,
+                "unavailable",
+                Some("No saved audio available for speaker analysis"),
+            )
+            .await;
+            return;
+        };
+        let models_dir = match app.path().app_data_dir() {
+            Ok(dir) => models::models_dir(&dir),
+            Err(error) => {
+                let _ = set_status(
+                    &pool,
+                    &ctx,
+                    &meeting_id,
+                    "failed",
+                    Some(&format!("Resolve diarization model directory: {error}")),
+                )
+                .await;
+                return;
+            }
+        };
+        if !matches!(
+            models::status(&models_dir).await,
+            models::ModelStatus::Available(_)
+        ) {
+            let _ = set_status(
+                &pool,
+                &ctx,
+                &meeting_id,
+                "unavailable",
+                Some("Diarization models are not installed"),
+            )
+            .await;
+            return;
+        }
+        let _ = set_status(&pool, &ctx, &meeting_id, "running", None).await;
+        match crate::diarization::offline::OfflineDiarizationService::default()
+            .analyze(&audio, &models_dir)
+            .await
+        {
+            Ok(segments) => {
+                let turns: Vec<SpeakerTurn> = segments
+                    .into_iter()
+                    .map(|segment| SpeakerTurn {
+                        start_ms: segment.start_ms,
+                        end_ms: segment.end_ms,
+                        speaker_label: display_label_for_key(&segment.speaker_key),
+                        confidence: segment.speaker_confidence,
+                        speaker_key: segment.speaker_key,
+                    })
+                    .collect();
+                if let Err(error) =
+                    SpeakerTurnsRepository::replace_for_meeting(&pool, &ctx, &meeting_id, &turns)
+                        .await
+                {
+                    let _ =
+                        set_status(&pool, &ctx, &meeting_id, "failed", Some(&error.to_string()))
+                            .await;
+                    log::warn!(
+                        "speaker analysis persistence failed for {}: {:#}",
+                        meeting_id,
+                        error
+                    );
+                } else if let Some(folder) = folder.as_deref() {
+                    if let Err(error) =
+                        sync_transcripts_json(&pool, &ctx, &meeting_id, Path::new(folder)).await
+                    {
+                        log::warn!(
+                            "speaker transcript JSON sync failed for {}: {:#}",
+                            meeting_id,
+                            error
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                let _ =
+                    set_status(&pool, &ctx, &meeting_id, "failed", Some(&error.to_string())).await;
+                log::warn!("speaker analysis failed for {}: {:#}", meeting_id, error);
+            }
+        }
+    });
+}
+
+async fn sync_transcripts_json(
+    pool: &SqlitePool,
+    ctx: &AuthContext,
+    meeting_id: &str,
+    folder: &Path,
+) -> Result<()> {
+    let rows = sqlx::query(
+        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? ORDER BY audio_start_time ASC",
+    ).bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(pool).await?;
+    let segments = rows
+        .into_iter()
+        .map(|row| crate::api::TranscriptSegment {
+            id: row.get("id"),
+            text: row.get("transcript"),
+            timestamp: row.get("timestamp"),
+            audio_start_time: row.get("audio_start_time"),
+            audio_end_time: row.get("audio_end_time"),
+            duration: row.get("duration"),
+            speaker_id: row.get("speaker_id"),
+            speaker_confidence: row.get("speaker_confidence"),
+            speaker_provisional: Some(row.get::<i64, _>("speaker_provisional") != 0),
+            speaker_revision: Some(row.get("speaker_revision")),
+            segment_kind: row.get("segment_kind"),
+            audio_source: row.get("audio_source"),
+            speaker_assignment_method: Some(row.get("speaker_assignment_method")),
+            speaker_overlap: Some(row.get::<i64, _>("speaker_overlap") != 0),
+        })
+        .collect::<Vec<_>>();
+    crate::audio::common::write_transcripts_json(folder, &segments)
+}
+
+async fn set_status(
+    pool: &SqlitePool,
+    ctx: &AuthContext,
+    meeting_id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE meetings SET diarization_status = ?, diarization_error = ? WHERE id = ? AND workspace_id = ?")
+        .bind(status).bind(error).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(pool).await?;
+    Ok(())
 }
 
 #[cfg(test)]

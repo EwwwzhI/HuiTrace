@@ -34,14 +34,21 @@ pub(crate) static CAPTURE_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mute
 /// Ensures flag is cleared even if import panics or returns early
 struct ImportGuard;
 
-struct ImportFolderGuard { folder: PathBuf, committed: bool }
+struct ImportFolderGuard {
+    folder: PathBuf,
+    committed: bool,
+}
 impl Drop for ImportFolderGuard {
     fn drop(&mut self) {
         if !self.committed {
             let ctx = crate::context::current();
             if let Err(error) = crate::database::deletion::erase_recording_folder(
-                &self.folder, &[get_default_recordings_folder()], &ctx,
-            ) { warn!("Could not clean incomplete import: {}", error); }
+                &self.folder,
+                &[get_default_recordings_folder()],
+                &ctx,
+            ) {
+                warn!("Could not clean incomplete import: {}", error);
+            }
         }
     }
 }
@@ -275,8 +282,15 @@ pub async fn start_import<R: Runtime>(
     run_guarded_import(app, source_path, title, language, model, provider, _guard).await
 }
 
-async fn run_guarded_import<R: Runtime>(app: AppHandle<R>, source_path: String, title: String, language: Option<String>, model: Option<String>, provider: Option<String>, _guard: ImportGuard) -> Result<ImportResult> {
-
+async fn run_guarded_import<R: Runtime>(
+    app: AppHandle<R>,
+    source_path: String,
+    title: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    _guard: ImportGuard,
+) -> Result<ImportResult> {
     let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_import(app.clone(), source_path, title, language, model, provider).await;
 
@@ -354,10 +368,16 @@ async fn run_import<R: Runtime>(
     let base_folder = std::fs::canonicalize(&base_folder)?;
     let meeting_folder = base_folder.join(format!("import-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&meeting_folder)?;
-    std::fs::write(meeting_folder.join("metadata.json"), serde_json::to_vec(&serde_json::json!({
-        "workspace_id": crate::context::current().tenant_id.as_str(), "source": "import", "status": "importing"
-    }))?)?;
-    let mut folder_guard = ImportFolderGuard { folder: meeting_folder.clone(), committed: false };
+    std::fs::write(
+        meeting_folder.join("metadata.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "workspace_id": crate::context::current().tenant_id.as_str(), "source": "import", "status": "importing"
+        }))?,
+    )?;
+    let mut folder_guard = ImportFolderGuard {
+        folder: meeting_folder.clone(),
+        committed: false,
+    };
 
     // Copy audio file to meeting folder
     emit_progress(&app, "copying", 10, "Copying audio file...");
@@ -678,6 +698,10 @@ async fn run_import<R: Runtime>(
 
     // Create transcript segments
     let mut segments = create_transcript_segments(&all_transcripts);
+    for segment in &mut segments {
+        segment.audio_source = Some("imported".to_string());
+        segment.segment_kind = Some("speech".to_string());
+    }
 
     // Save to database
     let app_state = app
@@ -719,6 +743,15 @@ async fn run_import<R: Runtime>(
     .await?;
 
     folder_guard.committed = true;
+
+    // Speaker analysis is deliberately post-persistence and best-effort. A
+    // missing local model must never turn a successful import into a failure.
+    crate::diarization::service::schedule_offline_diarization(
+        app.clone(),
+        app_state.db_manager.pool().clone(),
+        crate::context::current(),
+        meeting_id.clone(),
+    );
 
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
@@ -984,9 +1017,10 @@ pub async fn select_and_validate_audio_command<R: Runtime>(
 
             match validate_audio_file(Path::new(&path_str)) {
                 Ok(info) => {
-                    *SELECTED_AUDIO.lock().unwrap() = Some(std::fs::canonicalize(&path_str).map_err(|e| e.to_string())?);
+                    *SELECTED_AUDIO.lock().unwrap() =
+                        Some(std::fs::canonicalize(&path_str).map_err(|e| e.to_string())?);
                     Ok(Some(info))
-                },
+                }
                 Err(e) => {
                     error!("Validation failed: {}", e);
                     Err(e.to_string())
@@ -1021,12 +1055,20 @@ pub async fn start_import_audio_command<R: Runtime>(
     crate::licensing::commands::ensure_capture_allowed(&app).await?;
 
     let _start_lock = CAPTURE_START_LOCK.lock().await;
-    if super::recording_commands::is_recording().await || super::recording_commands::is_recording_post_processing_pending() {
+    if super::recording_commands::is_recording().await
+        || super::recording_commands::is_recording_post_processing_pending()
+    {
         return Err("Finish the current recording before importing audio.".into());
     }
-    let selected = SELECTED_AUDIO.lock().unwrap().clone().ok_or("Select an audio file using the file picker first.")?;
+    let selected = SELECTED_AUDIO
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Select an audio file using the file picker first.")?;
     let requested = std::fs::canonicalize(&source_path).map_err(|e| e.to_string())?;
-    if selected != requested { return Err("Import file does not match the selected audio.".into()); }
+    if selected != requested {
+        return Err("Import file does not match the selected audio.".into());
+    }
     validate_audio_file(&requested).map_err(|e| e.to_string())?;
     let guard = ImportGuard::acquire()?;
 
@@ -1034,7 +1076,16 @@ pub async fn start_import_audio_command<R: Runtime>(
 
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = run_guarded_import(app, requested.to_string_lossy().into_owned(), title, language, model, provider, guard).await;
+        let result = run_guarded_import(
+            app,
+            requested.to_string_lossy().into_owned(),
+            title,
+            language,
+            model,
+            provider,
+            guard,
+        )
+        .await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
@@ -1259,6 +1310,14 @@ mod tests {
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                speaker_id: None,
+                speaker_confidence: None,
+                speaker_provisional: None,
+                speaker_revision: None,
+                segment_kind: None,
+                audio_source: None,
+                speaker_assignment_method: None,
+                speaker_overlap: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1267,6 +1326,14 @@ mod tests {
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                speaker_id: None,
+                speaker_confidence: None,
+                speaker_provisional: None,
+                speaker_revision: None,
+                segment_kind: None,
+                audio_source: None,
+                speaker_assignment_method: None,
+                speaker_overlap: None,
             },
         ];
 

@@ -223,10 +223,18 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Per-row, because a row can overlap more than one turn. Cheap: only the
     // rows the virtualizer actually mounts are ever asked.
     const speakersFor = useCallback(
-        (segment: TranscriptSegmentData) =>
-            speakerTurns?.length
+        (segment: TranscriptSegmentData) => {
+            // Prefer the persisted reconciler assignment. The turn-overlap
+            // fallback keeps historical meetings (which predate the migration)
+            // readable without inventing a speaker for an unassigned segment.
+            if (segment.speaker_id) {
+                const label = speakerTurns?.find((turn) => turn.speaker_key === segment.speaker_id)?.speaker_label;
+                return label ? [label] : undefined;
+            }
+            return speakerTurns?.length
                 ? speakersForRow({ start: segment.timestamp, end: segment.endTime }, speakerTurns)
-                : undefined,
+                : undefined;
+        },
         [speakerTurns]
     );
 

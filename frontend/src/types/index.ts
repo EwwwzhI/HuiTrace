@@ -16,6 +16,14 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  speaker_id?: string;
+  speaker_confidence?: number;
+  speaker_provisional?: boolean;
+  speaker_revision?: number;
+  segment_kind?: string;
+  audio_source?: 'microphone' | 'system' | 'imported' | 'mixed';
+  speaker_assignment_method?: 'diarization' | 'manual';
+  speaker_overlap?: boolean;
 }
 
 export interface TranscriptUpdate {
@@ -30,6 +38,12 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  speaker_id?: string;
+  speaker_confidence?: number;
+  speaker_provisional?: boolean;
+  speaker_revision?: number;
+  segment_kind?: string;
+  audio_source?: 'microphone' | 'system' | 'imported' | 'mixed';
 }
 
 export interface Block {
@@ -127,4 +141,12 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  speaker_id?: string;
+  speaker_confidence?: number;
+  speaker_provisional?: boolean;
+  speaker_revision?: number;
+  segment_kind?: string;
+  audio_source?: string;
+  speaker_assignment_method?: string;
+  speaker_overlap?: boolean;
 }

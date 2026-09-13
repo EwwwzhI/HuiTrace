@@ -120,6 +120,14 @@ impl MeetingsRepository {
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker_id: t.speaker_id,
+                    speaker_confidence: t.speaker_confidence,
+                    speaker_provisional: t.speaker_provisional != 0,
+                    speaker_revision: t.speaker_revision,
+                    segment_kind: t.segment_kind,
+                    audio_source: t.audio_source,
+                    speaker_assignment_method: t.speaker_assignment_method,
+                    speaker_overlap: t.speaker_overlap != 0,
                 })
                 .collect::<Vec<_>>();
 

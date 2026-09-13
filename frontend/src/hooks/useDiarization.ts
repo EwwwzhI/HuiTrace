@@ -90,5 +90,19 @@ export function useDiarization(meetingId: string | undefined) {
 
   const turns: SpeakerTurn[] = state?.kind === 'done' ? state.turns : [];
 
-  return { state, turns, busy, error, run, downloadModels, refresh };
+  const renameSpeaker = useCallback(async (speakerKey: string, displayName: string) => {
+    if (!meetingId || !displayName.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke('api_rename_meeting_speaker', { meetingId, speakerKey, displayName: displayName.trim() });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [meetingId, refresh]);
+
+  return { state, turns, busy, error, run, downloadModels, refresh, renameSpeaker };
 }

@@ -39,6 +39,19 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
+    /// Capture provenance, never a person identity. Live ASR sees mixed PCM.
+    #[serde(default)]
+    pub audio_source: Option<String>,
+    #[serde(default)]
+    pub speaker_id: Option<String>,
+    #[serde(default)]
+    pub speaker_confidence: Option<f64>,
+    #[serde(default)]
+    pub speaker_provisional: Option<bool>,
+    #[serde(default)]
+    pub speaker_revision: Option<i64>,
+    #[serde(default)]
+    pub segment_kind: Option<String>,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -239,6 +252,12 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            audio_source: Some("mixed".to_string()),
+                                            speaker_id: None,
+                                            speaker_confidence: None,
+                                            speaker_provisional: None,
+                                            speaker_revision: None,
+                                            segment_kind: Some("speech".to_string()),
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)

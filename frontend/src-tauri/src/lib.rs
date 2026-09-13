@@ -74,7 +74,6 @@ pub mod learning;
 /// lazy/fail-open, and expiry gates ONLY new capture (recording/import) — never
 /// existing data.
 pub mod licensing;
-mod ui_language;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -96,6 +95,7 @@ pub mod summary;
 pub mod sync;
 pub mod text;
 pub mod tray;
+mod ui_language;
 pub mod utils;
 pub mod whisper_engine;
 
@@ -713,6 +713,8 @@ pub fn run() {
             diarization::commands::api_diarization_download_models,
             diarization::commands::api_diarize_meeting,
             diarization::commands::api_get_speaker_turns,
+            diarization::commands::api_get_meeting_speakers,
+            diarization::commands::api_rename_meeting_speaker,
             api::api_search_transcripts,
             api::api_get_model_config,
             api::api_save_model_config,

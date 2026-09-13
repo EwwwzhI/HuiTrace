@@ -126,13 +126,19 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     );
 
     let _capture_start_lock = super::import::CAPTURE_START_LOCK.lock().await;
-    if super::import::is_import_in_progress() { return Err("Wait for audio import to finish before recording.".into()); }
+    if super::import::is_import_in_progress() {
+        return Err("Wait for audio import to finish before recording.".into());
+    }
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_FOLDER.lock().unwrap().is_some() {
+    if current_recording_state
+        || STOP_IN_PROGRESS.load(Ordering::SeqCst)
+        || DISCARD_IN_PROGRESS.load(Ordering::SeqCst)
+        || DISCARD_FOLDER.lock().unwrap().is_some()
+    {
         return Err("Recording already in progress".to_string());
     }
     if is_recording_post_processing_pending() {
@@ -337,6 +343,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker_id: update.speaker_id.clone(),
+                    speaker_confidence: update.speaker_confidence,
+                    speaker_provisional: update.speaker_provisional,
+                    speaker_revision: update.speaker_revision,
+                    segment_kind: update.segment_kind.clone(),
+                    audio_source: update.audio_source.clone(),
                 };
 
                 // Save to recording manager
@@ -399,13 +411,19 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     );
 
     let _capture_start_lock = super::import::CAPTURE_START_LOCK.lock().await;
-    if super::import::is_import_in_progress() { return Err("Wait for audio import to finish before recording.".into()); }
+    if super::import::is_import_in_progress() {
+        return Err("Wait for audio import to finish before recording.".into());
+    }
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state || STOP_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_IN_PROGRESS.load(Ordering::SeqCst) || DISCARD_FOLDER.lock().unwrap().is_some() {
+    if current_recording_state
+        || STOP_IN_PROGRESS.load(Ordering::SeqCst)
+        || DISCARD_IN_PROGRESS.load(Ordering::SeqCst)
+        || DISCARD_FOLDER.lock().unwrap().is_some()
+    {
         return Err("Recording already in progress".to_string());
     }
     if is_recording_post_processing_pending() {
@@ -529,6 +547,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker_id: update.speaker_id.clone(),
+                    speaker_confidence: update.speaker_confidence,
+                    speaker_provisional: update.speaker_provisional,
+                    speaker_revision: update.speaker_revision,
+                    segment_kind: update.segment_kind.clone(),
+                    audio_source: update.audio_source.clone(),
                 };
 
                 // Save to recording manager
@@ -720,7 +744,10 @@ async fn finish_recording<R: Runtime>(app: AppHandle<R>, discard: bool) -> Resul
                     *TRANSCRIPTION_TASK.lock().unwrap() = Some(task_handle);
                     *RECORDING_MANAGER.lock().unwrap() = manager_for_cleanup;
                     progress_task.abort();
-                    return Err("Transcription is still shutting down. Retry discard after it finishes.".to_string());
+                    return Err(
+                        "Transcription is still shutting down. Retry discard after it finishes."
+                            .to_string(),
+                    );
                 }
                 warn!("⏱️ Transcription timeout (10 minutes) reached, continuing shutdown to prevent indefinite hang");
                 // Continue shutdown even on timeout - better to lose some chunks than hang forever
@@ -1055,12 +1082,16 @@ async fn erase_discarded_recording<R: Runtime>(app: &AppHandle<R>) -> Result<(),
                 &folder,
                 &[super::recording_preferences::get_default_recordings_folder()],
                 &ctx,
-            ).map_err(|e| e.to_string())
-        }).await.map_err(|e| e.to_string())??;
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     }
     *DISCARD_FOLDER.lock().unwrap() = None;
     DISCARD_IN_PROGRESS.store(false, Ordering::SeqCst);
-    app.emit("recording-discarded", ()).map_err(|e| e.to_string())?;
+    app.emit("recording-discarded", ())
+        .map_err(|e| e.to_string())?;
     crate::tray::update_tray_menu(app);
     Ok(())
 }

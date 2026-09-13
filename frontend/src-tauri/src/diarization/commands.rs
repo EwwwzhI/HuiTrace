@@ -124,3 +124,39 @@ pub async fn api_get_speaker_turns(
     .await
     .map_err(|e| format!("{e:#}"))
 }
+
+/// List the meeting-local speakers. Keys stay stable when a display name is
+/// edited; this endpoint never attempts voice identification.
+#[tauri::command]
+pub async fn api_get_meeting_speakers(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Vec<crate::database::repositories::speaker_turn::SpeakerProfile>, String> {
+    let ctx = crate::context::current();
+    crate::database::repositories::speaker_turn::SpeakerTurnsRepository::list_speakers(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn api_rename_meeting_speaker(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker_key: String,
+    display_name: String,
+) -> Result<(), String> {
+    let ctx = crate::context::current();
+    crate::database::repositories::speaker_turn::SpeakerTurnsRepository::rename_speaker(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+        &speaker_key,
+        &display_name,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
+}

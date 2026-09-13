@@ -39,6 +39,14 @@ function convertTranscriptsToSegments(transcripts: Transcript[]): TranscriptSegm
         endTime: t.audio_end_time,
         text: t.text,
         confidence: t.confidence,
+        speaker_id: t.speaker_id,
+        speaker_confidence: t.speaker_confidence,
+        speaker_provisional: t.speaker_provisional,
+        speaker_revision: t.speaker_revision,
+        segment_kind: t.segment_kind,
+        audio_source: t.audio_source,
+        speaker_assignment_method: t.speaker_assignment_method,
+        speaker_overlap: t.speaker_overlap,
     }));
 }
 

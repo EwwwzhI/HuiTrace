@@ -28,6 +28,8 @@ export interface SpeakerTurn {
   end_ms: number;
   speaker_label: string;
   confidence: number | null;
+  /** Stable meeting-local id. Older stored turns omit it. */
+  speaker_key?: string;
 }
 
 /**
