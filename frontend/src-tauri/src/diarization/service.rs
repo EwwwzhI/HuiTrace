@@ -35,28 +35,26 @@ pub enum DiarizationRequestResult {
 /// particular an empty result and a pass that never ran are different facts:
 /// the first is an answer, the second is an offer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Availability {
+    pub result: Option<DiarizationResult>,
+    pub job: DiarizationJobState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DiarizationResult {
+    pub diarized_at: String,
+    pub turns: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
-pub enum Availability {
-    /// No saved audio, so a pass can never run for this meeting. Offering a
-    /// button here would be offering something that cannot work.
-    NoAudio,
-    /// Audio present, models present, never run.
-    Ready,
-    /// Models are not on disk yet.
-    ModelsMissing,
-    /// A pass completed. `turns` may be zero, which means it separated nothing.
-    Done {
-        diarized_at: String,
-        turns: usize,
-    },
+pub enum DiarizationJobState {
+    Idle,
     Queued,
     Running,
-    Failed {
-        error: Option<String>,
-    },
-    Unavailable {
-        error: Option<String>,
-    },
+    Failed { error: Option<String> },
+    Unavailable { error: Option<String> },
+    ModelsMissing,
+    NoAudio,
 }
 
 /// Where a meeting's recording lives, if it kept one.
@@ -73,7 +71,11 @@ pub fn meeting_audio(folder_path: Option<&str>) -> Option<PathBuf> {
     crate::audio::retranscription::find_audio_file(&folder).ok()
 }
 
-async fn source_for_meeting(pool: &SqlitePool, ctx: &AuthContext, meeting_id: &str) -> AudioSource {
+pub async fn resolve_meeting_audio_source(
+    pool: &SqlitePool,
+    ctx: &AuthContext,
+    meeting_id: &str,
+) -> AudioSource {
     let value: Option<String> = sqlx::query_scalar("SELECT audio_source FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND audio_source IS NOT NULL LIMIT 1")
         .bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_optional(pool).await.ok().flatten();
     match value.as_deref() {
@@ -92,6 +94,17 @@ pub async fn availability(
     folder_path: Option<&str>,
     models_dir: &Path,
 ) -> Result<Availability> {
+    let result =
+        if let Some(at) = SpeakerTurnsRepository::diarized_at(pool, ctx, meeting_id).await? {
+            Some(DiarizationResult {
+                turns: SpeakerTurnsRepository::list_for_meeting(pool, ctx, meeting_id)
+                    .await?
+                    .len(),
+                diarized_at: at,
+            })
+        } else {
+            None
+        };
     let persisted: Option<(String, Option<String>)> = sqlx::query_as(
         "SELECT diarization_status, diarization_error FROM meetings WHERE id = ? AND workspace_id = ?",
     )
@@ -118,37 +131,66 @@ pub async fn availability(
                     Some("Speaker analysis interrupted by application restart"),
                 )
                 .await?;
-                return Ok(Availability::Failed {
-                    error: Some("Speaker analysis interrupted by application restart".into()),
+                return Ok(Availability {
+                    result,
+                    job: DiarizationJobState::Failed {
+                        error: Some("Speaker analysis interrupted by application restart".into()),
+                    },
                 });
             }
         }
         match status.as_str() {
-            "queued" => return Ok(Availability::Queued),
-            "running" => return Ok(Availability::Running),
-            "failed" => return Ok(Availability::Failed { error }),
-            "unavailable" => return Ok(Availability::Unavailable { error }),
+            "queued" => {
+                return Ok(Availability {
+                    result,
+                    job: DiarizationJobState::Queued,
+                })
+            }
+            "running" => {
+                return Ok(Availability {
+                    result,
+                    job: DiarizationJobState::Running,
+                })
+            }
+            "failed" => {
+                return Ok(Availability {
+                    result,
+                    job: DiarizationJobState::Failed { error },
+                })
+            }
+            "unavailable" => {
+                return Ok(Availability {
+                    result,
+                    job: DiarizationJobState::Unavailable { error },
+                })
+            }
             _ => {}
         }
     }
-    if let Some(at) = SpeakerTurnsRepository::diarized_at(pool, ctx, meeting_id).await? {
-        let turns = SpeakerTurnsRepository::list_for_meeting(pool, ctx, meeting_id)
-            .await?
-            .len();
-        return Ok(Availability::Done {
-            diarized_at: at,
-            turns,
+    if result.is_some() {
+        return Ok(Availability {
+            result,
+            job: DiarizationJobState::Idle,
         });
     }
     if meeting_audio(folder_path).is_none() {
-        return Ok(Availability::NoAudio);
+        return Ok(Availability {
+            result,
+            job: DiarizationJobState::NoAudio,
+        });
     }
     match models::status(models_dir).await {
-        models::ModelStatus::Available(_) => Ok(Availability::Ready),
+        models::ModelStatus::Available(_) => Ok(Availability {
+            result,
+            job: DiarizationJobState::Idle,
+        }),
         // Corrupted is reported as missing on purpose: from the caller's side
         // the remedy is identical (acquire them), and the detail belongs in the
         // log rather than in a status the UI switches on.
-        _ => Ok(Availability::ModelsMissing),
+        _ => Ok(Availability {
+            result,
+            job: DiarizationJobState::ModelsMissing,
+        }),
     }
 }
 
@@ -337,7 +379,7 @@ pub fn request_offline_diarization<R: Runtime>(
             );
             return;
         }
-        let source = source_for_meeting(&pool, &ctx, &meeting_id).await;
+        let source = resolve_meeting_audio_source(&pool, &ctx, &meeting_id).await;
         let _ = set_status(&pool, &ctx, &meeting_id, "running", None).await;
         emit("running", None, None);
         match crate::diarization::offline::OfflineDiarizationService::default()
@@ -476,32 +518,22 @@ mod tests {
         assert!(meeting_audio(dir.path().to_str()).is_none());
     }
 
-    /// The exact JSON the frontend receives. Asserted rather than assumed
-    /// because serde's `rename_all` on an enum renames the VARIANTS but leaves
-    /// struct-variant fields alone -- so the tag is `modelsMissing` while the
-    /// field beside it is `diarized_at`. A UI written to the plausible-looking
-    /// `diarizedAt` would render `undefined` and still typecheck.
+    /// Result and latest job are deliberately independent: a failed rerun must
+    /// not hide the last successful speaker timeline.
     #[test]
     fn the_wire_shape_the_ui_is_written_against() {
         assert_eq!(
-            serde_json::to_string(&Availability::Done {
-                diarized_at: "2026-08-09T10:00:00Z".into(),
-                turns: 3,
+            serde_json::to_string(&Availability {
+                result: Some(DiarizationResult {
+                    diarized_at: "2026-08-09T10:00:00Z".into(),
+                    turns: 3
+                }),
+                job: DiarizationJobState::Failed {
+                    error: Some("boom".into())
+                }
             })
             .expect("serialize"),
-            r#"{"status":"done","diarized_at":"2026-08-09T10:00:00Z","turns":3}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&Availability::NoAudio).expect("serialize"),
-            r#"{"status":"noAudio"}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&Availability::Ready).expect("serialize"),
-            r#"{"status":"ready"}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&Availability::ModelsMissing).expect("serialize"),
-            r#"{"status":"modelsMissing"}"#
+            r#"{"result":{"diarized_at":"2026-08-09T10:00:00Z","turns":3},"job":{"status":"failed","error":"boom"}}"#
         );
     }
 

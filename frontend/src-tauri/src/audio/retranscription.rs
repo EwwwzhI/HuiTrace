@@ -501,6 +501,12 @@ async fn run_retranscription<R: Runtime>(
     // no SQL is issued from the audio module.
     let pool = app_state.db_manager.pool();
     let ctx = crate::context::current();
+    let source =
+        crate::diarization::service::resolve_meeting_audio_source(pool, &ctx, &meeting_id).await;
+    for segment in &mut segments {
+        segment.audio_source = Some(source.as_str().to_string());
+        segment.segment_kind = Some("speech".to_string());
+    }
 
     // Opt-in PII/keyword redaction BEFORE persistence (BACKLOG C6). Applied at this
     // text-persist boundary so both the replaced DB rows and the on-disk

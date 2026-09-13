@@ -107,6 +107,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerOrder,
     crosstalk,
     speakerKey,
+    speakerAssignmentMethod,
     speakerChoices,
     onAssignSpeaker,
 }: {
@@ -131,6 +132,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     /** Two people talking at once here -- not merely two speakers in the row. */
     crosstalk?: boolean;
     speakerKey?: string;
+    speakerAssignmentMethod?: string;
     speakerChoices?: Array<{ key: string; label: string }>;
     onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
 }) {
@@ -169,10 +171,12 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
-                    {speakers && speakers.length > 0 && (
-                        speakerChoices && onAssignSpeaker ? <select aria-label="Assign speaker" value={speakerKey ?? ''} onChange={(event) => void onAssignSpeaker(id, event.target.value || null)} className="mb-1 max-w-40 rounded border bg-background px-1 text-xs">
-                            <option value="">Restore automatic</option>{speakerChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
-                        </select> : null
+                    {speakerChoices && speakerChoices.length > 0 && onAssignSpeaker && (
+                        <select aria-label="Assign speaker" value={speakerKey ?? ''} onChange={(event) => void onAssignSpeaker(id, event.target.value || null)} className="mb-1 max-w-40 rounded border bg-background px-1 text-xs">
+                            {speakerAssignmentMethod === 'manual' && <option value="">Restore automatic</option>}
+                            {speakerAssignmentMethod !== 'manual' && <option value="" disabled>Assign speaker…</option>}
+                            {speakerChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}{speakerKey === choice.key && speakerAssignmentMethod === 'manual' ? ' · Manual' : ''}</option>)}
+                        </select>
                     )}
                     {speakers && speakers.length > 0 && (
                         <SpeakerChips
@@ -495,6 +499,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerOrder={speakerOrder}
                                         crosstalk={crosstalkFor(segment)}
                                         speakerKey={segment.speaker_id}
+                                        speakerAssignmentMethod={segment.speaker_assignment_method}
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
                                     />
@@ -557,6 +562,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerOrder={speakerOrder}
                                         crosstalk={crosstalkFor(segment)}
                                         speakerKey={segment.speaker_id}
+                                        speakerAssignmentMethod={segment.speaker_assignment_method}
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
                                     />

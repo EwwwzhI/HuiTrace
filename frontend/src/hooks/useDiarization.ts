@@ -36,18 +36,28 @@ export function useDiarization(meetingId: string | undefined) {
       return;
     }
     try {
-      const availability = await invoke<DiarizationAvailability>('api_diarization_availability', {
+      const raw = await invoke<DiarizationAvailability | { status: string; diarized_at?: string; turns?: number; error?: string }>('api_diarization_availability', {
         meetingId,
       });
-      if (availability.status !== 'done') {
-        setState('error' in availability
-          ? { kind: availability.status, error: availability.error }
-          : { kind: availability.status });
+      // Accept the pre-Phase-1.7 wire shape during upgrades and in legacy UI
+      // tests. The desktop command always returns the result/job form now.
+      const availability: DiarizationAvailability = 'job' in raw ? raw : {
+        result: raw.status === 'done' ? { diarized_at: raw.diarized_at ?? '', turns: raw.turns ?? 0 } : null,
+        job: raw.status === 'done' ? { status: 'idle' } : raw.status === 'ready' ? { status: 'idle' }
+          : raw.status === 'modelsMissing' ? { status: 'modelsMissing' }
+          : raw.status === 'noAudio' ? { status: 'noAudio' }
+          : raw.status === 'failed' || raw.status === 'unavailable' ? { status: raw.status, error: raw.error }
+          : raw.status === 'queued' || raw.status === 'running' ? { status: raw.status } : { status: 'idle' },
+      };
+      const job = availability.job.status;
+      if (availability.result) {
+        const turns = await invoke<SpeakerTurn[]>('api_get_speaker_turns', { meetingId });
+        setState({ kind: 'done', diarizedAt: availability.result.diarized_at, turns,
+          ...(job !== 'idle' ? { job, jobError: 'error' in availability.job ? availability.job.error : null } : {}) });
         return;
       }
-      // Only now are the rows worth fetching.
-      const turns = await invoke<SpeakerTurn[]>('api_get_speaker_turns', { meetingId });
-      setState({ kind: 'done', diarizedAt: availability.diarized_at, turns });
+      const kind = job === 'idle' ? 'ready' : job;
+      setState('error' in availability.job ? { kind, error: availability.job.error } : { kind });
     } catch (e) {
       // A failure to ASK is not a state of the pass, so it must not be rendered
       // as one -- reporting it as `noAudio` would tell the user their recording

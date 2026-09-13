@@ -41,13 +41,11 @@ export interface SpeakerTurn {
  * `diarization::service::tests::the_wire_shape_the_ui_is_written_against`,
  * because `diarizedAt` would read `undefined` and still typecheck.
  */
-export type DiarizationAvailability =
-  | { status: 'noAudio' }
-  | { status: 'ready' }
-  | { status: 'modelsMissing' }
-  | { status: 'done'; diarized_at: string; turns: number }
-  | { status: 'queued' } | { status: 'running' }
-  | { status: 'failed'; error?: string | null } | { status: 'unavailable'; error?: string | null };
+export type DiarizationAvailability = {
+  result: { diarized_at: string; turns: number } | null;
+  job: { status: 'idle' | 'queued' | 'running' | 'modelsMissing' | 'noAudio' }
+    | { status: 'failed' | 'unavailable'; error?: string | null };
+};
 
 /**
  * A transcript row's extent, in seconds from the recording start.

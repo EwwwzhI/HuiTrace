@@ -172,7 +172,7 @@ export type TalkTimeState =
   | { kind: 'failed'; error?: string | null }
   | { kind: 'unavailable'; error?: string | null }
   /** A pass finished. `turns` may be empty -- that is an answer, not a failure. */
-  | { kind: 'done'; diarizedAt: string; turns: SpeakerTurn[] };
+  | { kind: 'done'; diarizedAt: string; turns: SpeakerTurn[]; job?: string; jobError?: string | null };
 
 function Frame({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
   useUiTranslation();
@@ -269,10 +269,14 @@ export function TalkTimePanel({
   const rows = talkTime(state.turns);
   const count = speakerCount(state.turns);
 
+  const latestJobNotice = state.job === 'queued' || state.job === 'running'
+    ? <p className="mb-2 text-xs text-muted-foreground" role="status">Re-analysing speakers…</p>
+    : state.job === 'failed' ? <p className="mb-2 text-xs text-destructive">Latest speaker analysis failed: {state.jobError} <button type="button" onClick={onRun} className="underline">Retry</button></p> : null;
+
   if (rows.length === 0) {
     return (
       <Frame>
-        <p className="text-sm text-muted-foreground"> {translateUI("Analysed on")} {state.diarizedAt.slice(0, 10)} {translateUI("and no distinct speakers were separated. That is the expected result for a single-voice recording, and can also happen when voices are too similar or the audio is too noisy to tell apart.")} </p>
+        {latestJobNotice}<p className="text-sm text-muted-foreground"> {translateUI("Analysed on")} {state.diarizedAt.slice(0, 10)} {translateUI("and no distinct speakers were separated. That is the expected result for a single-voice recording, and can also happen when voices are too similar or the audio is too noisy to tell apart.")} </p>
       </Frame>
     );
   }
@@ -283,6 +287,7 @@ export function TalkTimePanel({
   const interword = uiI18n.language === 'zh-CN' ? '' : ' ';
   return (
     <Frame>
+      {latestJobNotice}
       <ul className="space-y-2">
         {rows.map((row) => (
           <TalkTimeRow key={row.label} row={row} order={order} speakerKey={state.turns.find((turn) => turn.speaker_label === row.label)?.speaker_key} onRename={onRename} />
