@@ -388,6 +388,17 @@ pub(crate) async fn delete_meeting_with_connection(
         .execute(&mut *transaction)
         .await?;
 
+    // Phase 2D.1 snapshots contain transcript-adjacent evaluation evidence.
+    // They are local-derived but sensitive and must be erased explicitly while
+    // this privacy path has foreign-key actions disabled.
+    sqlx::query(
+        "DELETE FROM meeting_production_snapshots WHERE meeting_id = ? AND workspace_id = ?",
+    )
+    .bind(meeting_id)
+    .bind(ctx.tenant_id.as_str())
+    .execute(&mut *transaction)
+    .await?;
+
     // Finally delete only the caller-owned parent. With cascades disabled on
     // this disposable connection, foreign malformed children remain untouched.
     let result = sqlx::query("DELETE FROM meetings WHERE id = ? AND workspace_id = ?")

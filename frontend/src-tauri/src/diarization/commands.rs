@@ -9,6 +9,7 @@
 //! `crate::context::current()`, never from the frontend (`docs/CONTRACTS.md`).
 
 use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::diarization::{models, service};
 use crate::state::AppState;
@@ -104,6 +105,47 @@ pub async fn api_diarize_meeting<R: Runtime>(
         ctx,
         meeting_id,
     ))
+}
+
+/// Export the latest completed production run without invoking inference.
+///
+/// The renderer supplies only a tenant-scoped meeting id. A native save dialog
+/// chooses the destination, so no renderer-controlled filesystem path crosses
+/// the command boundary. Nothing is uploaded.
+#[tauri::command]
+pub async fn api_export_short_turn_production_artifact<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Option<String>, String> {
+    let ctx = crate::context::current();
+    let artifact = crate::evaluation::production_artifact::build_from_persisted_meeting(
+        state.db_manager.pool(),
+        &ctx,
+        &meeting_id,
+    )
+    .await
+    .map_err(|error| format!("build production artifact: {error:#}"))?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("HuiTrace production artifact", &["json"])
+        .set_file_name(format!("{}.production.json", artifact.meeting_id))
+        .save_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(selected) = receiver
+        .await
+        .map_err(|_| "production artifact save dialog closed unexpectedly".to_string())?
+    else {
+        return Ok(None);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|_| "production artifact must be saved to a local filesystem path".to_string())?;
+    crate::evaluation::production_artifact::write_artifact(&path, &artifact)
+        .map_err(|error| format!("write production artifact: {error:#}"))?;
+    Ok(Some(path.display().to_string()))
 }
 
 /// This meeting's stored speaker turns.

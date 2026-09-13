@@ -56,6 +56,7 @@ pub mod console_utils;
 pub mod context;
 pub mod database;
 pub mod diarization;
+pub mod evaluation;
 pub mod groq;
 /// Local inference capability + backend selection (Tier-0 seam, DORMANT).
 /// One offline picture of what this device can run — shared by STT and the
@@ -712,6 +713,7 @@ pub fn run() {
             diarization::commands::api_diarization_availability,
             diarization::commands::api_diarization_download_models,
             diarization::commands::api_diarize_meeting,
+            diarization::commands::api_export_short_turn_production_artifact,
             diarization::commands::api_get_speaker_turns,
             diarization::commands::api_get_short_turn_events,
             diarization::commands::api_get_meeting_speakers,

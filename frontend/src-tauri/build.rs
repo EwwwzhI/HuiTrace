@@ -2,6 +2,7 @@
 mod ffmpeg;
 
 fn main() {
+    emit_git_commit_sha();
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
@@ -19,6 +20,32 @@ fn main() {
     ffmpeg::ensure_ffmpeg_binary();
 
     tauri_build::build()
+}
+
+fn emit_git_commit_sha() {
+    let git_output = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let sha =
+        git_output(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown-source-tree".to_string());
+    println!("cargo:rustc-env=HUITRACE_GIT_COMMIT_SHA={sha}");
+    if let Some(head) = git_output(&["rev-parse", "--git-path", "HEAD"]) {
+        println!("cargo:rerun-if-changed={head}");
+    }
+    if let Some(reference) = git_output(&["symbolic-ref", "-q", "HEAD"]) {
+        if let Some(reference_path) = git_output(&["rev-parse", "--git-path", &reference]) {
+            // HEAD normally contains only `ref: refs/heads/main`; watching the
+            // referenced file makes a new commit refresh the embedded SHA.
+            println!("cargo:rerun-if-changed={reference_path}");
+        }
+    }
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance

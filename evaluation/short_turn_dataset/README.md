@@ -2,6 +2,8 @@
 
 Private audio, production artifacts, annotations, and benchmark reports belong
 under the gitignored `local/` directory. Only schemas and examples are committed.
+The complete collection, privacy, QA, and replay procedure is documented in
+`docs/SHORT_TURN_PHASE_2D_DATASET.md`.
 
 ## Blind annotation
 
@@ -21,6 +23,12 @@ Every event uses source-meeting timestamps and a stable
 Use `annotation_uncertain=true` when speaker, acoustic kind, or overlap is not
 reliably decidable; uncertain rows remain in case analysis but are excluded
 from hard metrics and the representative-data count.
+
+Validate the production export before creating windows:
+
+```text
+cargo run -p huitrace --bin short_turn_artifact -- validate local/MEETING_ID/MEETING_ID.production.json
+```
 
 ## Ground truth and production artifacts
 
@@ -59,3 +67,9 @@ eight overlap cases, and eight speaker-handoff cases.
 Below the gate the only architecture decision is
 `INSUFFICIENT_REPRESENTATIVE_DATA`; model selection and threshold tuning are
 not allowed.
+
+Print current quota deltas and possible duplicate ids with:
+
+```text
+cargo run -p huitrace --bin short_turn_dataset_check -- --dataset evaluation/short_turn_dataset/local
+```

@@ -114,8 +114,10 @@ experimental path against both the frozen and tuned model-free baselines.
 
 - There is no committed representative real-meeting dataset or benchmark
   output, so no real-world recall or attribution number can be claimed.
-- Production artifact generation is a schema contract; wiring automatic export
-  into the desktop lifecycle remains future work.
+- Phase 2D.1 wires production run snapshots and local artifact export into the
+  desktop lifecycle; see `SHORT_TURN_PHASE_2D_DATASET.md`. Existing meetings
+  processed before that migration need a normal production reprocessing run
+  before they can be exported.
 - Pipeline mode remains unsupported to avoid duplicating inference lifecycle.
 - Materialization safety counters must be captured by production artifacts;
   annotated evidence replay explicitly reports them as not exercised.

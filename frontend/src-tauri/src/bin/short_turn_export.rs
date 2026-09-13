@@ -3,9 +3,13 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use app_lib::diarization::service::extract_short_candidate_vad_events;
-use app_lib::diarization::short_turn::ShortTurnCandidateExtractor;
-use app_lib::diarization::types::AudioSource;
+use app_lib::diarization::short_turn::{
+    ShortTurnCandidateExtractor, TranscriptCandidateInput, VadEventCandidateInput,
+};
+use app_lib::diarization::types::{
+    AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
+};
+use app_lib::evaluation::production_artifact::read_and_validate_artifact;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -20,7 +24,7 @@ struct Args {
     /// JSON exported by a real app run. It should contain transcripts, all raw
     /// diarizer turns, VAD events, and accepted/visible speakers.
     #[arg(long)]
-    production_artifact: Option<PathBuf>,
+    production_artifact: PathBuf,
     #[arg(long, default_value_t = 5_000)]
     window_ms: i64,
     #[arg(long, default_value_t = 4_000)]
@@ -37,8 +41,51 @@ fn main() -> Result<()> {
     }
     fs::create_dir_all(&args.output)
         .with_context(|| format!("create {}", args.output.display()))?;
-    let vad = extract_short_candidate_vad_events(&args.audio, AudioSource::Imported)?;
-    let candidates = ShortTurnCandidateExtractor::default().extract(&[], &[], &vad);
+    let artifact = read_and_validate_artifact(&args.production_artifact, Some(&args.meeting_id))?;
+    let transcripts = artifact
+        .transcripts
+        .iter()
+        .map(|row| TranscriptCandidateInput {
+            timing: TranscriptTiming {
+                id: row.id.clone(),
+                start_ms: row.start_ms,
+                end_ms: row.end_ms,
+                audio_source: AudioSource::Imported,
+            },
+            text: row.text.clone(),
+            asr_confidence: row.asr_confidence,
+        })
+        .collect::<Vec<_>>();
+    let speakers = artifact
+        .raw_diarizer_turns
+        .iter()
+        .map(|turn| SpeakerSegment {
+            start_ms: turn.start_ms,
+            end_ms: turn.end_ms,
+            speaker_key: turn.speaker_key.clone(),
+            speaker_confidence: turn.confidence,
+            audio_source: AudioSource::Imported,
+            provisional: false,
+            revision: 1,
+            segment_kind: SegmentKind::Speech,
+            assignment_method: AssignmentMethod::Diarization,
+            overlap: turn.overlap,
+        })
+        .collect::<Vec<_>>();
+    let vad = artifact
+        .vad_events
+        .iter()
+        .map(|event| VadEventCandidateInput {
+            start_ms: event.start_ms,
+            end_ms: event.end_ms,
+            confidence: event.confidence,
+            audio_source: AudioSource::Imported,
+        })
+        .collect::<Vec<_>>();
+    let candidates = ShortTurnCandidateExtractor {
+        config: artifact.production_config.short_turn.clone(),
+    }
+    .extract(&transcripts, &speakers, &vad);
     let decoded = app_lib::audio::decoder::decode_audio_file(&args.audio)?;
     let samples = decoded.to_whisper_format();
     let audio_end_ms = samples.len() as i64 * 1_000 / 16_000;
@@ -46,10 +93,7 @@ fn main() -> Result<()> {
     let review_manifest_path = args.output.join("annotation_windows.review.jsonl");
     let mut blind_manifest = BufWriter::new(File::create(&blind_manifest_path)?);
     let mut review_manifest = BufWriter::new(File::create(&review_manifest_path)?);
-    let artifact = args
-        .production_artifact
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string());
+    let artifact_path = args.production_artifact.to_string_lossy().to_string();
 
     let mut window_start = 0;
     let mut index = 1;
@@ -82,7 +126,7 @@ fn main() -> Result<()> {
                 "audio_path": filename,
                 "source_start_ms": window_start,
                 "source_end_ms": window_end,
-                "production_artifact_path": artifact,
+                "production_artifact_path": &artifact_path,
                 "instructions": "Annotate every event on the source meeting timeline, including missed speech, noise, ordinary non-short controls, overlap, handoff, and uncertain cases. Write separate ground_truth_event rows to manifest.jsonl."
         });
         writeln!(blind_manifest, "{}", serde_json::to_string(&common)?)?;

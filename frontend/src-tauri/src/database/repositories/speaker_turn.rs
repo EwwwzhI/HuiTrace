@@ -373,6 +373,28 @@ impl SpeakerTurnsRepository {
         sqlx::query("DELETE FROM speakers WHERE meeting_id = ? AND workspace_id = ? AND speaker_key NOT IN (SELECT speaker_key FROM speaker_turns WHERE meeting_id = ? AND workspace_id = ?) AND speaker_key NOT IN (SELECT speaker_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND speaker_assignment_method = 'manual' AND speaker_id IS NOT NULL) AND speaker_key NOT IN (SELECT speaker_key FROM short_turn_events WHERE meeting_id = ? AND workspace_id = ? AND assignment_method = 'manual' AND speaker_key IS NOT NULL)")
             .bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
 
+        // Freeze the exact production state used by this pass. Export reads
+        // this snapshot plus the rows written in this transaction; it never
+        // re-runs ASR, diarization, VAD, refinement, or materialization.
+        let mut production_speakers = known_speaker_keys.iter().cloned().collect::<Vec<_>>();
+        production_speakers.sort();
+        let visible_speakers: Vec<String> = sqlx::query_scalar(
+            "SELECT speaker_key FROM speakers WHERE meeting_id = ? AND workspace_id = ? ORDER BY speaker_key",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_all(&mut *tx)
+        .await?;
+        crate::evaluation::production_artifact::persist_run_snapshot_tx(
+            &mut tx,
+            ctx,
+            meeting_id,
+            vad_events,
+            &production_speakers,
+            &visible_speakers,
+        )
+        .await?;
+
         // No `rev` bump: `meetings` is synced, and marking every diarized
         // meeting as freshly modified would make a sync peer re-pull it for a
         // field that is local-derived anyway.

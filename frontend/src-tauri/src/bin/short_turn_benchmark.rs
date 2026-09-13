@@ -5,27 +5,29 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use app_lib::diarization::short_turn::{
-    candidate_matches_ground_truth, CandidateMatchConfig, LexicalBackchannelDetector,
-    MeetingSpeakerPrototypeStore, ShortCandidateVadConfig, ShortTurnCandidate,
-    ShortTurnCandidateExtractor, ShortTurnCandidateSource, ShortTurnConfig, ShortTurnDecision,
-    ShortTurnRefiner, SpeakerAcceptancePolicy, SpeakerAcceptanceTurn, TranscriptCandidateInput,
-    VadEventCandidateInput,
+    candidate_matches_ground_truth, LexicalBackchannelDetector, MeetingSpeakerPrototypeStore,
+    ShortTurnCandidate, ShortTurnCandidateExtractor, ShortTurnCandidateSource, ShortTurnDecision,
+    ShortTurnRefiner, SpeakerAcceptanceTurn, TranscriptCandidateInput, VadEventCandidateInput,
 };
-use app_lib::diarization::short_turn_event::{ShortTurnEvent, ShortTurnMaterializationPolicy};
+use app_lib::diarization::short_turn_event::ShortTurnEvent;
 use app_lib::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
+};
+use app_lib::evaluation::dataset::{coverage, CoveragePolicy, GateSample};
+use app_lib::evaluation::production_artifact::{
+    validate_artifact, ArtifactBackend, ArtifactDiarizerTurn, ArtifactTranscript, ArtifactVadEvent,
+    MeetingProductionArtifact, ProductionConfigSnapshot, ProductionSafetyObservations,
+    SourceAudioMetadata, ARTIFACT_SCHEMA_VERSION, PHASE_2C1_FROZEN_BASELINE_COMMIT,
 };
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const PHASE_2C1_FROZEN_BASELINE_COMMIT: &str = "7b34d7b7d422deeafeb21f07449f8a3ca8c5f60a";
-const ARTIFACT_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum BenchmarkMode {
     Evidence,
     ProductionArtifactReplay,
+    CounterfactualReplay,
     Pipeline,
 }
 
@@ -35,6 +37,9 @@ struct Args {
     dataset: PathBuf,
     #[arg(long, value_enum, default_value_t = BenchmarkMode::Evidence)]
     mode: BenchmarkMode,
+    /// Complete experimental config used only by counterfactual replay.
+    #[arg(long)]
+    experiment_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,113 +95,6 @@ struct ManifestRow {
     tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-struct ArtifactTranscript {
-    id: String,
-    start_ms: i64,
-    end_ms: i64,
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    asr_confidence: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-struct ArtifactDiarizerTurn {
-    start_ms: i64,
-    end_ms: i64,
-    speaker_key: String,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    overlap: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-struct ArtifactVadEvent {
-    start_ms: i64,
-    end_ms: i64,
-    #[serde(default)]
-    confidence: Option<f64>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ArtifactBackend {
-    backend: String,
-    model: String,
-    #[serde(default)]
-    version_or_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct SourceAudioMetadata {
-    #[serde(default)]
-    path_hint: Option<String>,
-    duration_ms: i64,
-    #[serde(default)]
-    sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ProductionConfigSnapshot {
-    short_turn: ShortTurnConfig,
-    short_candidate_vad: ShortCandidateVadConfig,
-    speaker_acceptance: SpeakerAcceptancePolicy,
-    candidate_match: CandidateMatchConfig,
-    materialization: ShortTurnMaterializationPolicy,
-    vad_implementation: String,
-    #[serde(default)]
-    vad_runtime_config: serde_json::Value,
-}
-
-impl Default for ProductionConfigSnapshot {
-    fn default() -> Self {
-        Self {
-            short_turn: ShortTurnConfig::default(),
-            short_candidate_vad: ShortCandidateVadConfig::default(),
-            speaker_acceptance: SpeakerAcceptancePolicy::default(),
-            candidate_match: CandidateMatchConfig::default(),
-            materialization: ShortTurnMaterializationPolicy::default(),
-            vad_implementation: "silero_rs::ContinuousVadProcessor".into(),
-            vad_runtime_config: serde_json::json!({
-                "sample_rate_hz": 16000,
-                "positive_speech_threshold": 0.50,
-                "negative_speech_threshold": 0.35
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-struct ProductionSafetyObservations {
-    #[serde(default)]
-    long_transcript_speaker_corruption_count: usize,
-    #[serde(default)]
-    manual_override_violation_count: usize,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct MeetingProductionArtifact {
-    schema_version: u32,
-    artifact_id: String,
-    meeting_id: String,
-    source_audio: SourceAudioMetadata,
-    created_at: String,
-    app_commit_sha: String,
-    asr: ArtifactBackend,
-    diarization: ArtifactBackend,
-    production_config: ProductionConfigSnapshot,
-    transcripts: Vec<ArtifactTranscript>,
-    raw_diarizer_turns: Vec<ArtifactDiarizerTurn>,
-    vad_events: Vec<ArtifactVadEvent>,
-    accepted_speakers: Vec<String>,
-    visible_speakers: Vec<String>,
-    #[serde(default)]
-    safety_observations: ProductionSafetyObservations,
-    #[serde(default)]
-    production_metadata: serde_json::Value,
-}
-
 #[derive(Debug, Clone, Serialize)]
 struct ArtifactProvenance {
     artifact_id: String,
@@ -224,6 +122,9 @@ struct Prediction {
 #[derive(Debug, Clone)]
 struct MeetingRun {
     artifact: MeetingProductionArtifact,
+    replay_config: ProductionConfigSnapshot,
+    #[cfg(test)]
+    prototype_speakers: BTreeSet<String>,
     candidates: Vec<ShortTurnCandidate>,
     predictions: Vec<Prediction>,
     predicted_accepted: BTreeSet<String>,
@@ -239,53 +140,6 @@ enum RootCause {
     MaterializationError,
     SegmentationOverlapError,
     AnnotationUncertain,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct CoveragePolicy {
-    min_scorable_samples: usize,
-    min_true_short_events: usize,
-    min_short_speech: usize,
-    min_backchannel: usize,
-    min_negative_controls: usize,
-    min_per_short_duration_bucket: usize,
-    min_meetings: usize,
-    min_multi_speaker_meetings: usize,
-    min_overlap_cases: usize,
-    min_speaker_handoff_cases: usize,
-}
-
-impl Default for CoveragePolicy {
-    fn default() -> Self {
-        Self {
-            min_scorable_samples: 100,
-            min_true_short_events: 60,
-            min_short_speech: 20,
-            min_backchannel: 15,
-            min_negative_controls: 20,
-            min_per_short_duration_bucket: 10,
-            min_meetings: 3,
-            min_multi_speaker_meetings: 2,
-            min_overlap_cases: 8,
-            min_speaker_handoff_cases: 8,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-struct CoverageSummary {
-    scorable_samples: usize,
-    uncertain_samples: usize,
-    true_short_events: usize,
-    short_speech: usize,
-    backchannel: usize,
-    negative_controls: usize,
-    meeting_count: usize,
-    multi_speaker_meeting_count: usize,
-    overlap_cases: usize,
-    speaker_handoff_cases: usize,
-    duration_buckets: BTreeMap<String, usize>,
-    missing_requirements: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -327,6 +181,51 @@ where
         value => Err(serde::de::Error::custom(format!(
             "invalid ground_truth_kind {value:?}"
         ))),
+    }
+}
+
+impl GateSample for ManifestRow {
+    fn event_id(&self) -> &str {
+        &self.ground_truth_event_id
+    }
+
+    fn meeting_id(&self) -> &str {
+        &self.meeting_id
+    }
+
+    fn start_ms(&self) -> i64 {
+        self.start_ms
+    }
+
+    fn end_ms(&self) -> i64 {
+        self.end_ms
+    }
+
+    fn kind_label(&self) -> &'static str {
+        match self.ground_truth_kind {
+            SegmentKind::Speech if self.end_ms - self.start_ms <= 1_200 => "short_speech",
+            SegmentKind::Speech => "ordinary_speech_control",
+            SegmentKind::Backchannel => "backchannel",
+            SegmentKind::Noise => "noise",
+            SegmentKind::NonSpeechVocalization => "non_speech_vocalization",
+            SegmentKind::Unknown => "invalid",
+        }
+    }
+
+    fn ground_truth_speaker(&self) -> Option<&str> {
+        self.ground_truth_speaker.as_deref()
+    }
+
+    fn expected_visible_speakers(&self) -> &[String] {
+        &self.expected_visible_speakers
+    }
+
+    fn annotation_uncertain(&self) -> bool {
+        self.annotation_uncertain
+    }
+
+    fn tags(&self) -> &[String] {
+        &self.tags
     }
 }
 
@@ -453,45 +352,6 @@ fn validate_manifest(rows: &[ManifestRow], production_only: bool) -> Result<()> 
     Ok(())
 }
 
-fn validate_artifact(artifact: &MeetingProductionArtifact, expected_meeting: &str) -> Result<()> {
-    if artifact.schema_version != ARTIFACT_SCHEMA_VERSION {
-        bail!("artifact schema {} is unsupported", artifact.schema_version);
-    }
-    if artifact.artifact_id.trim().is_empty()
-        || artifact.meeting_id != expected_meeting
-        || artifact.created_at.trim().is_empty()
-        || artifact.app_commit_sha.trim().is_empty()
-        || artifact.source_audio.duration_ms <= 0
-        || artifact.asr.backend.trim().is_empty()
-        || artifact.asr.model.trim().is_empty()
-        || artifact.diarization.backend.trim().is_empty()
-        || artifact.diarization.model.trim().is_empty()
-        || artifact
-            .production_config
-            .vad_implementation
-            .trim()
-            .is_empty()
-    {
-        bail!("artifact identity, backend, or production config is incomplete");
-    }
-    if artifact.transcripts.iter().any(|item| {
-        item.id.trim().is_empty()
-            || item.start_ms < 0
-            || item.end_ms <= item.start_ms
-            || !valid_confidence(item.asr_confidence)
-    }) || artifact.raw_diarizer_turns.iter().any(|item| {
-        item.speaker_key.trim().is_empty()
-            || item.start_ms < 0
-            || item.end_ms <= item.start_ms
-            || !valid_confidence(item.confidence)
-    }) || artifact.vad_events.iter().any(|item| {
-        item.start_ms < 0 || item.end_ms <= item.start_ms || !valid_confidence(item.confidence)
-    }) {
-        bail!("artifact contains invalid full-meeting evidence");
-    }
-    Ok(())
-}
-
 fn resolved_path(dataset: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -533,7 +393,7 @@ fn load_production_artifacts(
         }
         let artifact: MeetingProductionArtifact =
             serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-        validate_artifact(&artifact, &meeting_id)?;
+        validate_artifact(&artifact, Some(&meeting_id))?;
         let provenance = ArtifactProvenance {
             artifact_id: artifact.artifact_id.clone(),
             meeting_id: meeting_id.clone(),
@@ -626,9 +486,14 @@ fn build_evidence_meetings(rows: &[ManifestRow]) -> Result<BTreeMap<String, Load
     Ok(loaded)
 }
 
-fn run_meeting(loaded: LoadedMeeting) -> MeetingRun {
+fn run_meeting(
+    loaded: LoadedMeeting,
+    experiment_config: Option<&ProductionConfigSnapshot>,
+) -> MeetingRun {
     let artifact = loaded.artifact;
-    let config = artifact.production_config.clone();
+    let config = experiment_config
+        .cloned()
+        .unwrap_or_else(|| artifact.production_config.clone());
     let transcripts = artifact
         .transcripts
         .iter()
@@ -682,11 +547,13 @@ fn run_meeting(loaded: LoadedMeeting) -> MeetingRun {
     let predicted_accepted = config
         .speaker_acceptance
         .accepted_speaker_keys(&acceptance_turns);
-    let prototype_keys = if artifact.accepted_speakers.is_empty() {
+    let prototype_keys = if experiment_config.is_some() {
         predicted_accepted.iter().cloned().collect::<Vec<_>>()
     } else {
         artifact.accepted_speakers.clone()
     };
+    #[cfg(test)]
+    let prototype_speakers = prototype_keys.iter().cloned().collect();
     let prototypes = MeetingSpeakerPrototypeStore::new(prototype_keys);
     let candidates = ShortTurnCandidateExtractor {
         config: config.short_turn.clone(),
@@ -715,6 +582,9 @@ fn run_meeting(loaded: LoadedMeeting) -> MeetingRun {
         .collect();
     MeetingRun {
         artifact,
+        replay_config: config,
+        #[cfg(test)]
+        prototype_speakers,
         candidates,
         predictions,
         predicted_accepted,
@@ -742,16 +612,32 @@ fn match_predictions<'a>(
                     prediction.candidate.end_ms,
                     row.start_ms,
                     row.end_ms,
-                    &run.artifact.production_config.candidate_match,
+                    &run.replay_config.candidate_match,
                 ) {
                     edges.push((
                         row.annotation_uncertain,
+                        std::cmp::Reverse(prediction.decision.kind == row.ground_truth_kind),
+                        std::cmp::Reverse(
+                            row.ground_truth_speaker.is_some()
+                                && prediction.decision.speaker_key == row.ground_truth_speaker,
+                        ),
                         std::cmp::Reverse(overlap_ms(
                             prediction.candidate.start_ms,
                             prediction.candidate.end_ms,
                             row.start_ms,
                             row.end_ms,
                         )),
+                        (prediction.candidate.end_ms - prediction.candidate.start_ms)
+                            + (row.end_ms - row.start_ms)
+                            - 2 * overlap_ms(
+                                prediction.candidate.start_ms,
+                                prediction.candidate.end_ms,
+                                row.start_ms,
+                                row.end_ms,
+                            ),
+                        ((prediction.candidate.start_ms + prediction.candidate.end_ms)
+                            - (row.start_ms + row.end_ms))
+                            .abs(),
                         row_index,
                         prediction_index,
                     ));
@@ -761,7 +647,7 @@ fn match_predictions<'a>(
         edges.sort();
         let mut used_rows = HashSet::new();
         let mut used_predictions = HashSet::new();
-        for (_, _, row_index, prediction_index) in edges {
+        for (_, _, _, _, _, _, row_index, prediction_index) in edges {
             if used_rows.insert(row_index) && used_predictions.insert(prediction_index) {
                 matched.insert(
                     meeting_rows[row_index].ground_truth_event_id.clone(),
@@ -831,122 +717,6 @@ fn root_cause(
         return Some(RootCause::MaterializationError);
     }
     None
-}
-
-fn coverage(rows: &[ManifestRow], policy: &CoveragePolicy) -> CoverageSummary {
-    let scorable = rows
-        .iter()
-        .filter(|row| !row.annotation_uncertain)
-        .collect::<Vec<_>>();
-    let true_short = scorable
-        .iter()
-        .copied()
-        .filter(|row| is_true_short(row))
-        .collect::<Vec<_>>();
-    let mut speaker_sets: HashMap<&str, HashSet<&str>> = HashMap::new();
-    for row in &scorable {
-        if let Some(speaker) = row.ground_truth_speaker.as_deref() {
-            speaker_sets
-                .entry(&row.meeting_id)
-                .or_default()
-                .insert(speaker);
-        }
-        for speaker in &row.expected_visible_speakers {
-            speaker_sets
-                .entry(&row.meeting_id)
-                .or_default()
-                .insert(speaker);
-        }
-    }
-    let mut result = CoverageSummary {
-        scorable_samples: scorable.len(),
-        uncertain_samples: rows.len() - scorable.len(),
-        true_short_events: true_short.len(),
-        short_speech: true_short
-            .iter()
-            .filter(|row| row.ground_truth_kind == SegmentKind::Speech)
-            .count(),
-        backchannel: true_short
-            .iter()
-            .filter(|row| row.ground_truth_kind == SegmentKind::Backchannel)
-            .count(),
-        negative_controls: scorable.iter().filter(|row| is_negative(row)).count(),
-        meeting_count: scorable
-            .iter()
-            .map(|row| row.meeting_id.as_str())
-            .collect::<HashSet<_>>()
-            .len(),
-        multi_speaker_meeting_count: speaker_sets.values().filter(|set| set.len() >= 2).count(),
-        overlap_cases: scorable
-            .iter()
-            .filter(|row| row.tags.iter().any(|tag| tag == "overlap"))
-            .count(),
-        speaker_handoff_cases: scorable
-            .iter()
-            .filter(|row| row.tags.iter().any(|tag| tag == "speaker_handoff"))
-            .count(),
-        ..CoverageSummary::default()
-    };
-    for bucket in ["100-300ms", "300-500ms", "500-800ms", "800-1200ms"] {
-        result.duration_buckets.insert(
-            bucket.into(),
-            true_short
-                .iter()
-                .filter(|row| row.duration_bucket == bucket)
-                .count(),
-        );
-    }
-    let checks = [
-        (
-            result.scorable_samples,
-            policy.min_scorable_samples,
-            "scorable samples",
-        ),
-        (
-            result.true_short_events,
-            policy.min_true_short_events,
-            "true short events",
-        ),
-        (result.short_speech, policy.min_short_speech, "short_speech"),
-        (result.backchannel, policy.min_backchannel, "backchannel"),
-        (
-            result.negative_controls,
-            policy.min_negative_controls,
-            "negative controls",
-        ),
-        (result.meeting_count, policy.min_meetings, "meetings"),
-        (
-            result.multi_speaker_meeting_count,
-            policy.min_multi_speaker_meetings,
-            "multi-speaker meetings",
-        ),
-        (
-            result.overlap_cases,
-            policy.min_overlap_cases,
-            "overlap cases",
-        ),
-        (
-            result.speaker_handoff_cases,
-            policy.min_speaker_handoff_cases,
-            "speaker handoff cases",
-        ),
-    ];
-    for (actual, required, label) in checks {
-        if actual < required {
-            result
-                .missing_requirements
-                .push(format!("{label}: {actual}/{required}"));
-        }
-    }
-    for (bucket, actual) in &result.duration_buckets {
-        if *actual < policy.min_per_short_duration_bucket {
-            result.missing_requirements.push(format!(
-                "{bucket} true short events: {actual}/{}",
-                policy.min_per_short_duration_bucket
-            ));
-        }
-    }
-    result
 }
 
 fn ratio(n: usize, d: usize) -> f64 {
@@ -1137,7 +907,24 @@ fn main() -> Result<()> {
         bail!("Pipeline Mode remains unsupported until the desktop application service layer can be reused directly");
     }
     let rows = read_manifest(&args.dataset)?;
-    let production_mode = matches!(args.mode, BenchmarkMode::ProductionArtifactReplay);
+    let production_mode = matches!(
+        args.mode,
+        BenchmarkMode::ProductionArtifactReplay | BenchmarkMode::CounterfactualReplay
+    );
+    let experiment_config = match (&args.mode, &args.experiment_config) {
+        (BenchmarkMode::CounterfactualReplay, Some(path)) => Some(
+            serde_json::from_slice::<ProductionConfigSnapshot>(
+                &fs::read(path)
+                    .with_context(|| format!("read counterfactual config {}", path.display()))?,
+            )
+            .context("parse complete counterfactual production config")?,
+        ),
+        (BenchmarkMode::CounterfactualReplay, None) => {
+            bail!("counterfactual replay requires --experiment-config")
+        }
+        (_, Some(_)) => bail!("--experiment-config is only valid with counterfactual replay"),
+        _ => None,
+    };
     validate_manifest(&rows, production_mode)?;
     let loaded = if production_mode {
         load_production_artifacts(&args.dataset, &rows)?
@@ -1150,7 +937,7 @@ fn main() -> Result<()> {
         .collect::<Vec<_>>();
     let runs = loaded
         .into_iter()
-        .map(|(id, meeting)| (id, run_meeting(meeting)))
+        .map(|(id, meeting)| (id, run_meeting(meeting, experiment_config.as_ref())))
         .collect::<BTreeMap<_, _>>();
     let matched = match_predictions(&rows, &runs);
     let scorable = rows
@@ -1349,22 +1136,24 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
     let unique_events = event_ids.iter().copied().collect::<HashSet<_>>().len();
-    let long_corruption: usize = runs
+    let long_corruption = runs
         .values()
         .map(|run| {
             run.artifact
                 .safety_observations
                 .long_transcript_speaker_corruption_count
         })
-        .sum();
-    let manual_violations: usize = runs
+        .collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().sum::<usize>());
+    let manual_violations = runs
         .values()
         .map(|run| {
             run.artifact
                 .safety_observations
                 .manual_override_violation_count
         })
-        .sum();
+        .collect::<Option<Vec<_>>>()
+        .map(|values| values.into_iter().sum::<usize>());
     let mut taxonomy: BTreeMap<RootCause, Vec<String>> = BTreeMap::new();
     let mut overgeneration = Vec::new();
     for row in &rows {
@@ -1427,7 +1216,7 @@ fn main() -> Result<()> {
         "claim": "reliability bins only; not calibrated"
     });
     let report = serde_json::json!({
-        "mode": if production_mode { "production_artifact_replay" } else { "annotated_evidence_replay" },
+        "mode": match args.mode { BenchmarkMode::Evidence => "annotated_evidence_replay", BenchmarkMode::ProductionArtifactReplay => "frozen_production_replay", BenchmarkMode::CounterfactualReplay => "counterfactual_replay", BenchmarkMode::Pipeline => unreachable!() },
         "pipeline_mode": "unsupported_not_run",
         "phase_2c1_frozen_baseline": {"name": "PHASE_2C1_FROZEN_BASELINE", "commit_sha": PHASE_2C1_FROZEN_BASELINE_COMMIT, "production_config": ProductionConfigSnapshot::default()},
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION, "production_artifacts": provenance,
@@ -1448,7 +1237,7 @@ fn main() -> Result<()> {
             "long_transcript_speaker_corruption_count": long_corruption, "manual_override_violation_count": manual_violations,
             "safety_observation_source": if production_mode { "production_artifact" } else { "not_exercised_by_annotated_evidence_replay" }},
         "confidence_reliability": confidence, "error_taxonomy": taxonomy_json,
-        "model_free_sensitivity": {"status": "NOT_RUN_WITHOUT_MEETING_LEVEL_DEVELOPMENT_FINAL_SPLIT", "meeting_leakage_guard": "required", "pareto_frontier": []},
+        "model_free_sensitivity": {"status": if matches!(args.mode, BenchmarkMode::CounterfactualReplay) { "COUNTERFACTUAL_REPLAY_EXECUTED" } else { "NOT_RUN_WITHOUT_MEETING_LEVEL_DEVELOPMENT_FINAL_SPLIT" }, "meeting_leakage_guard": "required", "pareto_frontier": [], "original_artifact_immutable": true},
         "model_spike": {"executed": false, "reason": if decision == "INSUFFICIENT_REPRESENTATIVE_DATA" { "representative data gate failed; model selection forbidden" } else { "benchmark diagnosis requires review first" }}
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -1521,6 +1310,37 @@ mod tests {
         }
     }
 
+    fn row_at(
+        id: &str,
+        start_ms: i64,
+        end_ms: i64,
+        kind: SegmentKind,
+        speaker: Option<&str>,
+    ) -> ManifestRow {
+        let mut value = row("short_speech");
+        value.ground_truth_event_id = id.into();
+        value.start_ms = start_ms;
+        value.end_ms = end_ms;
+        value.duration_bucket = duration_bucket(end_ms - start_ms).into();
+        value.ground_truth_kind = kind;
+        value.ground_truth_speaker = speaker.map(str::to_owned);
+        value
+    }
+
+    fn prediction_at(
+        start_ms: i64,
+        end_ms: i64,
+        kind: SegmentKind,
+        speaker: Option<&str>,
+    ) -> Prediction {
+        let mut value = prediction(kind);
+        value.candidate.start_ms = start_ms;
+        value.candidate.end_ms = end_ms;
+        value.candidate.duration_ms = (end_ms - start_ms) as u64;
+        value.decision.speaker_key = speaker.map(str::to_owned);
+        value
+    }
+
     fn production_artifact() -> MeetingProductionArtifact {
         MeetingProductionArtifact {
             schema_version: ARTIFACT_SCHEMA_VERSION,
@@ -1555,6 +1375,20 @@ mod tests {
             visible_speakers: vec![],
             safety_observations: ProductionSafetyObservations::default(),
             production_metadata: serde_json::Value::Null,
+        }
+    }
+
+    fn run_with_predictions(predictions: Vec<Prediction>) -> MeetingRun {
+        MeetingRun {
+            artifact: production_artifact(),
+            replay_config: ProductionConfigSnapshot::default(),
+            prototype_speakers: BTreeSet::new(),
+            candidates: predictions
+                .iter()
+                .map(|prediction| prediction.candidate.clone())
+                .collect(),
+            predictions,
+            predicted_accepted: BTreeSet::new(),
         }
     }
 
@@ -1661,6 +1495,7 @@ mod tests {
                 .unwrap()
                 .remove("meeting-1")
                 .unwrap(),
+            None,
         );
         original[0].transcript_text = "ground truth mutation".into();
         original[0].start_ms = 3_000;
@@ -1670,8 +1505,141 @@ mod tests {
                 .unwrap()
                 .remove("meeting-1")
                 .unwrap(),
+            None,
         );
         assert_eq!(first.candidates, second.candidates);
         fs::remove_dir_all(dataset).unwrap();
+    }
+
+    #[test]
+    fn frozen_replay_uses_recorded_speaker_state_and_counterfactual_recomputes_it() {
+        let mut artifact = production_artifact();
+        artifact.raw_diarizer_turns.push(ArtifactDiarizerTurn {
+            start_ms: 0,
+            end_ms: 5_000,
+            speaker_key: "speaker_01".into(),
+            confidence: Some(0.95),
+            overlap: false,
+        });
+        artifact.accepted_speakers.clear();
+        let original = artifact.clone();
+
+        let frozen = run_meeting(
+            LoadedMeeting {
+                artifact: artifact.clone(),
+                provenance: None,
+            },
+            None,
+        );
+        assert!(frozen.predicted_accepted.contains("speaker_01"));
+        assert!(frozen.prototype_speakers.is_empty());
+
+        let counterfactual = run_meeting(
+            LoadedMeeting {
+                artifact,
+                provenance: None,
+            },
+            Some(&ProductionConfigSnapshot::default()),
+        );
+        assert!(counterfactual.prototype_speakers.contains("speaker_01"));
+        assert_eq!(original.accepted_speakers, Vec::<String>::new());
+        assert_eq!(
+            original.production_config,
+            ProductionConfigSnapshot::default()
+        );
+    }
+
+    #[test]
+    fn adversarial_matching_is_one_to_one_and_prefers_identity_evidence() {
+        // Adjacent events and speaker handoffs retain their own prediction.
+        let mut rows = vec![
+            row_at("left", 1_000, 1_200, SegmentKind::Backchannel, Some("a")),
+            row_at("right", 1_200, 1_400, SegmentKind::Backchannel, Some("b")),
+        ];
+        rows[0].tags.push("speaker_handoff".into());
+        rows[1].tags.push("speaker_handoff".into());
+        let run = run_with_predictions(vec![
+            prediction_at(1_195, 1_405, SegmentKind::Backchannel, Some("b")),
+            prediction_at(995, 1_205, SegmentKind::Backchannel, Some("a")),
+        ]);
+        let runs = BTreeMap::from([("meeting-1".into(), run)]);
+        let matched = match_predictions(&rows, &runs);
+        assert_eq!(
+            matched["left"].unwrap().decision.speaker_key.as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            matched["right"].unwrap().decision.speaker_key.as_deref(),
+            Some("b")
+        );
+
+        // One wide candidate cannot satisfy two annotations.
+        let rows = vec![
+            row_at("first", 1_000, 1_200, SegmentKind::Speech, None),
+            row_at("second", 1_200, 1_400, SegmentKind::Speech, None),
+        ];
+        let run = run_with_predictions(vec![prediction_at(950, 1_350, SegmentKind::Speech, None)]);
+        let runs = BTreeMap::from([("meeting-1".into(), run)]);
+        let matched = match_predictions(&rows, &runs);
+        assert_eq!(matched.values().filter(|value| value.is_some()).count(), 1);
+        assert!(matched["first"].is_some());
+        assert!(matched["second"].is_none());
+
+        // Two candidates cannot satisfy one annotation; the tighter boundary wins.
+        let rows = vec![row_at("single", 1_000, 1_200, SegmentKind::Speech, None)];
+        let run = run_with_predictions(vec![
+            prediction_at(900, 1_300, SegmentKind::Speech, None),
+            prediction_at(1_000, 1_200, SegmentKind::Speech, None),
+        ]);
+        let runs = BTreeMap::from([("meeting-1".into(), run)]);
+        let matched = match_predictions(&rows, &runs);
+        assert_eq!(matched["single"].unwrap().candidate.start_ms, 1_000);
+
+        // Same-time overlap rows are resolved by speaker identity, not input order.
+        let mut rows = vec![
+            row_at("speaker-a", 2_000, 2_300, SegmentKind::Speech, Some("a")),
+            row_at("speaker-b", 2_000, 2_300, SegmentKind::Speech, Some("b")),
+        ];
+        rows[0].tags.push("overlap".into());
+        rows[1].tags.push("overlap".into());
+        let run = run_with_predictions(vec![
+            prediction_at(2_000, 2_300, SegmentKind::Speech, Some("b")),
+            prediction_at(2_000, 2_300, SegmentKind::Speech, Some("a")),
+        ]);
+        let runs = BTreeMap::from([("meeting-1".into(), run)]);
+        let matched = match_predictions(&rows, &runs);
+        assert_eq!(
+            matched["speaker-a"]
+                .unwrap()
+                .decision
+                .speaker_key
+                .as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            matched["speaker-b"]
+                .unwrap()
+                .decision
+                .speaker_key
+                .as_deref(),
+            Some("b")
+        );
+
+        // A nearby noise control and true short speech prefer kind-consistent matches.
+        let rows = vec![
+            row_at("speech", 3_000, 3_250, SegmentKind::Speech, None),
+            row_at("noise", 3_050, 3_300, SegmentKind::Noise, None),
+        ];
+        let run = run_with_predictions(vec![
+            prediction_at(3_000, 3_250, SegmentKind::Noise, None),
+            prediction_at(3_050, 3_300, SegmentKind::Speech, None),
+        ]);
+        let runs = BTreeMap::from([("meeting-1".into(), run)]);
+        let matched = match_predictions(&rows, &runs);
+        assert_eq!(
+            matched["speech"].unwrap().decision.kind,
+            SegmentKind::Speech
+        );
+        assert_eq!(matched["noise"].unwrap().decision.kind, SegmentKind::Noise);
     }
 }
