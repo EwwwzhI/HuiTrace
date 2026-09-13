@@ -6,7 +6,7 @@
 [package]
 name = "eval-harness"
 version = "0.1.0"
-description = "Phase-0 transcription eval harness — runs Mityu's own STT engines"
+description = "Phase-0 transcription eval harness — runs HuiTrace's own STT engines"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -25,4 +25,4 @@ unicode-normalization = "0.1"
 
 # The app core (Tauri lib crate `app_lib`). Engines are consumed as a library;
 # no Tauri runtime / AppHandle is started.
-mityu = { path = "../frontend/src-tauri" }
+huitrace = { path = "../frontend/src-tauri" }

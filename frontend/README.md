@@ -97,12 +97,12 @@ pnpm lint
 在仓库根目录中：
 
 ```bash
-cargo test -p mityu --lib summary:: --no-default-features
-cargo clippy -p mityu --lib --no-default-features
+cargo test -p huitrace --lib summary:: --no-default-features
+cargo clippy -p huitrace --lib --no-default-features
 cargo fmt --all -- --check
 ```
 
-Rust 主包仍名为 `mityu`。运行涉及 `diarize-helper` 的 workspace 构建或测试前，同样需要先校验 sherpa-onnx 依赖并设置 `SHERPA_ONNX_ARCHIVE_DIR`。不同平台的原生依赖与既有检查告警应分别排查。
+Rust 主包及桌面可执行程序名为 `huitrace`。运行涉及 `diarize-helper` 的 workspace 构建或测试前，同样需要先校验 sherpa-onnx 依赖并设置 `SHERPA_ONNX_ARCHIVE_DIR`。不同平台的原生依赖与既有检查告警应分别排查。
 
 本轮摘要、模板和语言选择器的定向前端测试：
 

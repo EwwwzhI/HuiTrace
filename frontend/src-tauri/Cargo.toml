@@ -1,10 +1,11 @@
 [package]
-name = "mityu"
+name = "huitrace"
+default-run = "huitrace"
 version = "1.1.0"
 description = "HuiTrace — privacy-first, local-first meeting intelligence"
 authors = ["Sujith S"]
 license = "MIT"
-repository = "https://github.com/aydogandagidir/mityu"
+repository = "https://github.com/EwwwzhI/HuiTrace"
 edition = "2021"
 rust-version = "1.77"
 

@@ -9,7 +9,7 @@
 //! ```text
 //! cargo build -p diarize-helper
 //! set MITYU_DIARIZE_HELPER=target\debug\diarize-helper.exe
-//! cargo test -p mityu --test diarization_end_to_end -- --ignored --nocapture
+//! cargo test -p huitrace --test diarization_end_to_end -- --ignored --nocapture
 //! ```
 
 use app_lib::context::{AuthContext, RequestId, Role, TenantId, UserId};

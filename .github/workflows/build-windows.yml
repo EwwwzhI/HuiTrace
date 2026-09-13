@@ -33,6 +33,6 @@ jobs:
       target: "x86_64-pc-windows-msvc"
       build-args: ${{ inputs['build-type'] == 'debug' && '--debug' || '' }}
       sign-binaries: false
-      asset-prefix: "mityu"
+      asset-prefix: "huitrace"
       upload-artifacts: ${{ inputs['upload-artifacts'] }}
       is-debug-build: ${{ inputs['build-type'] == 'debug' }}

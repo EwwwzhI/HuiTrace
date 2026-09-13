@@ -4,7 +4,7 @@ Large or sensitive audio files are intentionally not committed. Put local files
 beside `manifest.jsonl` (or reference absolute paths), then run:
 
 ```text
-cargo run -p mityu --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset --mode evidence
+cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset --mode evidence
 ```
 
 Each JSONL row requires `meeting_id`, `start_ms`, `end_ms`,
@@ -30,7 +30,7 @@ from being mislabeled end-to-end.
 To create local clips for annotation:
 
 ```text
-cargo run -p mityu --bin short_turn_export -- --audio meeting.wav --output evaluation/short_turn_dataset/local
+cargo run -p huitrace --bin short_turn_export -- --audio meeting.wav --output evaluation/short_turn_dataset/local
 ```
 
 The local directory and WAV files are gitignored. Do not make a model decision

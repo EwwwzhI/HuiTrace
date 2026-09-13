@@ -590,7 +590,7 @@ mod tests {
     /// reasons unrelated to the code. Run it deliberately when the pins change:
     ///
     /// ```text
-    /// cargo test -p mityu --lib diarization -- --ignored --nocapture
+    /// cargo test -p huitrace --lib diarization -- --ignored --nocapture
     /// ```
     ///
     /// It is the only thing that proves the pins describe the bytes GitHub

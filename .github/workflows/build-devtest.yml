@@ -46,5 +46,5 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: false
-      asset-prefix: "mityu-devtest"
+      asset-prefix: "huitrace-devtest"
       upload-artifacts: ${{ inputs['upload-artifacts'] }}

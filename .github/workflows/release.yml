@@ -86,8 +86,8 @@ jobs:
           PACKAGE_VERSION=$(node -p "require('./frontend/package.json').version")
           CARGO_VERSION=$(awk -F'"' '/^version = "/ { print $2; exit }' frontend/src-tauri/Cargo.toml)
           LOCK_VERSION=$(awk '
-            $0 == "name = \"mityu\"" { in_mityu = 1; next }
-            in_mityu && /^version = "/ {
+            $0 == "name = \"huitrace\"" { in_huitrace = 1; next }
+            in_huitrace && /^version = "/ {
               gsub(/^version = "|"$/, "")
               print
               exit
@@ -101,7 +101,7 @@ jobs:
 
           if [[ -z "$TAURI_VERSION" || "$TAURI_VERSION" != "$PACKAGE_VERSION" || "$TAURI_VERSION" != "$CARGO_VERSION" || "$TAURI_VERSION" != "$LOCK_VERSION" ]]; then
             echo "ERROR: Application versions are not synchronized."
-            echo "Update frontend/package.json, frontend/src-tauri/tauri.conf.json, frontend/src-tauri/Cargo.toml and the mityu entry in Cargo.lock together."
+            echo "Update frontend/package.json, frontend/src-tauri/tauri.conf.json, frontend/src-tauri/Cargo.toml and the huitrace entry in Cargo.lock together."
             exit 1
           fi
 
@@ -152,7 +152,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Mityu v${{ steps.get-version.outputs.version }}`,
+              name: `HuiTrace v${{ steps.get-version.outputs.version }}`,
               target_commitish: context.sha,
               draft: true,
               prerelease: false,
@@ -180,7 +180,7 @@ jobs:
       # Ends up as latest.json `notes` = the changelog older versions show in
       # their update dialog. Empty here means build.yml falls back to a link.
       release-notes: ${{ inputs.release_notes }}
-      asset-prefix: "mityu"
+      asset-prefix: "huitrace"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
@@ -221,10 +221,10 @@ jobs:
           ASSET_NAMES=$(jq -r '.[].name' <<< "$ASSETS_JSON")
 
           required_assets=(
-            "Mityu_${VERSION}_x64-setup.exe"
-            "Mityu_${VERSION}_x64-setup.exe.sig"
-            "Mityu_${VERSION}_x64_en-US.msi"
-            "Mityu_${VERSION}_x64_en-US.msi.sig"
+            "HuiTrace_${VERSION}_x64-setup.exe"
+            "HuiTrace_${VERSION}_x64-setup.exe.sig"
+            "HuiTrace_${VERSION}_x64_en-US.msi"
+            "HuiTrace_${VERSION}_x64_en-US.msi.sig"
             "latest.json"
           )
 
@@ -255,10 +255,10 @@ jobs:
           echo "### latest.json content" >> $GITHUB_STEP_SUMMARY
           rm -f latest.json
           gh release download "v${VERSION}" --pattern "latest.json" --dir .
-          gh release download "v${VERSION}" --pattern "Mityu_${VERSION}_x64-setup.exe" --dir .
-          gh release download "v${VERSION}" --pattern "Mityu_${VERSION}_x64-setup.exe.sig" --dir .
+          gh release download "v${VERSION}" --pattern "HuiTrace_${VERSION}_x64-setup.exe" --dir .
+          gh release download "v${VERSION}" --pattern "HuiTrace_${VERSION}_x64-setup.exe.sig" --dir .
 
-          EXPECTED_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Mityu_${VERSION}_x64-setup.exe"
+          EXPECTED_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/HuiTrace_${VERSION}_x64-setup.exe"
           jq -e --arg version "$VERSION" --arg url "$EXPECTED_URL" '
             .version == $version
             and ((.platforms["windows-x86_64"].signature // "") | length > 0)
@@ -266,7 +266,7 @@ jobs:
           ' latest.json > /dev/null
 
           MANIFEST_SIGNATURE=$(jq -r '.platforms["windows-x86_64"].signature' latest.json | tr -d '\r\n')
-          ASSET_SIGNATURE=$(tr -d '\r\n' < "Mityu_${VERSION}_x64-setup.exe.sig")
+          ASSET_SIGNATURE=$(tr -d '\r\n' < "HuiTrace_${VERSION}_x64-setup.exe.sig")
           if [[ "$MANIFEST_SIGNATURE" != "$ASSET_SIGNATURE" ]]; then
             echo "ERROR: latest.json signature does not match the uploaded NSIS updater signature."
             exit 1
@@ -298,8 +298,8 @@ jobs:
           # the exact remotely downloaded artifact with the key baked into the
           # release commit, using Tauri's minisign-verify 0.2.5 algorithm.
           cargo run --locked --quiet -p updater-signature-verifier -- \
-            "Mityu_${VERSION}_x64-setup.exe" \
-            "Mityu_${VERSION}_x64-setup.exe.sig" \
+            "HuiTrace_${VERSION}_x64-setup.exe" \
+            "HuiTrace_${VERSION}_x64-setup.exe.sig" \
             frontend/src-tauri/tauri.conf.json
 
       # Any failure above makes cleanup-failed-draft delete the draft, which takes
@@ -314,7 +314,7 @@ jobs:
           name: release-summary-evidence-v${{ needs.create-release.outputs.version }}
           path: |
             latest.json
-            Mityu_*.sig
+            HuiTrace_*.sig
           if-no-files-found: ignore
           retention-days: 14
 

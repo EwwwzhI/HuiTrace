@@ -20,7 +20,7 @@ There is deliberately no signing option. Production Authenticode and Tauri updat
 | Ubuntu 22.04 | `x86_64-unknown-linux-gnu` | DEB |
 | Ubuntu 24.04 | `x86_64-unknown-linux-gnu` | AppImage/RPM |
 
-All jobs reuse `build.yml`, install with the frozen pnpm lockfile, use pinned GitHub Actions and Rust 1.95.0, and upload artifacts with the `mityu-devtest` prefix when requested.
+All jobs reuse `build.yml`, install with the frozen pnpm lockfile, use pinned GitHub Actions and Rust 1.95.0, and upload artifacts with the `huitrace-devtest` prefix when requested.
 
 ## Interpreting artifacts
 

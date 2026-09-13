@@ -73,6 +73,6 @@ jobs:
       target: "x86_64-unknown-linux-gnu"
       build-args: ${{ needs.prepare.outputs.build-args }}
       sign-binaries: false
-      asset-prefix: "mityu"
+      asset-prefix: "huitrace"
       upload-artifacts: ${{ inputs['upload-artifacts'] }}
       is-debug-build: ${{ inputs['build-type'] == 'debug' }}

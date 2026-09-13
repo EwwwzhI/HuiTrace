@@ -19,7 +19,7 @@ on:
       asset-prefix:
         required: false
         type: string
-        default: "mityu"
+        default: "huitrace"
       asset-name-pattern:
         required: false
         type: string
@@ -287,7 +287,7 @@ jobs:
           SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
         run: |
           # Decode and save client certificate using PowerShell
-          $certPath = Join-Path $env:RUNNER_TEMP "mityu-digicert-client.p12"
+          $certPath = Join-Path $env:RUNNER_TEMP "huitrace-digicert-client.p12"
           $certBytes = [System.Convert]::FromBase64String($env:SM_CLIENT_CERT_FILE_B64)
           [System.IO.File]::WriteAllBytes($certPath, $certBytes)
 
@@ -706,7 +706,7 @@ jobs:
           if [[ -n "${PROVIDED_NOTES//[[:space:]]/}" ]]; then
             body="$PROVIDED_NOTES"
           else
-            body="Mityu ${VERSION} — see https://github.com/${REPOSITORY}/releases/tag/v${VERSION} for what's new."
+            body="HuiTrace ${VERSION} — see https://github.com/${REPOSITORY}/releases/tag/v${VERSION} for what's new."
           fi
           {
             echo "body<<__MITYU_NOTES_EOF__"
@@ -783,7 +783,7 @@ jobs:
             }
           }
 
-          $smokeFile = Join-Path $env:RUNNER_TEMP "mityu-ffmpeg-smoke.mp4"
+          $smokeFile = Join-Path $env:RUNNER_TEMP "huitrace-ffmpeg-smoke.mp4"
           & $ffmpeg -hide_banner -loglevel error -f lavfi -i "anullsrc=r=48000:cl=mono" -t 1 -c:a aac -f mp4 -y $smokeFile
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $smokeFile) -or (Get-Item $smokeFile).Length -le 0) {
             Write-Error "FFmpeg AAC/MP4 encode smoke test failed"

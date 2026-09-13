@@ -29,6 +29,6 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: false
-      asset-prefix: "mityu-test"
+      asset-prefix: "huitrace-test"
       upload-artifacts: true
       is-debug-build: ${{ contains(matrix.args, '--debug') }}
