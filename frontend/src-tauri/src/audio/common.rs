@@ -318,6 +318,8 @@ mod tests {
             speaker_key: Some("speaker_02".into()),
             speaker_display_name: Some("Speaker 2".into()),
             speaker_confidence: Some(0.8),
+            automatic_speaker_key: Some("speaker_02".into()),
+            automatic_speaker_confidence: Some(0.8),
             candidate_sources: vec![
                 crate::diarization::short_turn::ShortTurnCandidateSource::Transcript,
             ],

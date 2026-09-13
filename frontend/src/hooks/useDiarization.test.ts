@@ -111,4 +111,22 @@ describe('useDiarization', () => {
     expect(result.current.state?.kind).toBe('ready');
     expect(result.current.busy).toBe(false);
   });
+
+  it('uses the restore command boundary for an automatic short-event assignment', async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'api_diarization_availability') return Promise.resolve({ status: 'done', diarized_at: 'now', turns: 1 });
+      if (cmd === 'api_get_speaker_turns') return Promise.resolve(TURNS);
+      return Promise.resolve([]);
+    });
+    const { result } = renderHook(() => useDiarization('m1'));
+    await waitFor(() => expect(result.current.state?.kind).toBe('done'));
+    invoke.mockClear();
+    await act(async () => {
+      await result.current.assignShortTurnEventSpeaker('event-1', null);
+    });
+    expect(invoke).toHaveBeenCalledWith('api_restore_short_turn_event_speaker', {
+      meetingId: 'm1',
+      eventId: 'event-1',
+    });
+  });
 });

@@ -204,6 +204,10 @@ pub struct ShortTurnCandidate {
     pub diarization_confidence: Option<f64>,
     #[serde(default)]
     pub diarization_coverage_ratio: Option<f64>,
+    /// Source-level diarizer observations retained so merged boundaries can be
+    /// recomputed without combining one turn's identity with another's coverage.
+    #[serde(default)]
+    pub direct_diarization_turns: Vec<ShortTurnDiarizationEvidence>,
     #[serde(default)]
     pub vad_confidence: Option<f64>,
     pub audio_source: AudioSource,
@@ -213,6 +217,14 @@ pub struct ShortTurnCandidate {
     pub next_speaker: Option<String>,
     pub previous_gap_ms: Option<u64>,
     pub next_gap_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShortTurnDiarizationEvidence {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub speaker_key: String,
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -325,6 +337,12 @@ impl ShortTurnCandidateExtractor {
                 candidate.diarization_speaker = Some(speaker.speaker_key.clone());
                 candidate.diarization_confidence = speaker.speaker_confidence;
                 candidate.diarization_coverage_ratio = Some(1.0);
+                candidate.direct_diarization_turns = vec![ShortTurnDiarizationEvidence {
+                    start_ms: speaker.start_ms,
+                    end_ms: speaker.end_ms,
+                    speaker_key: speaker.speaker_key.clone(),
+                    confidence: speaker.speaker_confidence,
+                }];
                 seeds.push(candidate);
             }
         }
@@ -356,7 +374,7 @@ impl ShortTurnCandidateExtractor {
                 ));
             }
         }
-        merge_candidates(seeds)
+        merge_candidates(seeds, speakers)
     }
 
     fn in_candidate_range(&self, duration_ms: u64) -> bool {
@@ -415,6 +433,7 @@ impl ShortTurnCandidateExtractor {
             diarization_speaker: dominant.map(|speaker| speaker.speaker_key.clone()),
             diarization_confidence: dominant.and_then(|speaker| speaker.speaker_confidence),
             diarization_coverage_ratio: coverage,
+            direct_diarization_turns: Vec::new(),
             vad_confidence,
             audio_source,
             overlaps_existing_turn: !overlapping.is_empty(),
@@ -445,7 +464,10 @@ fn should_merge(left: &ShortTurnCandidate, right: &ShortTurnCandidate) -> bool {
     intersection / union.max(1) as f64 >= 0.5 || intersection / shorter >= 0.8
 }
 
-pub fn merge_candidates(mut candidates: Vec<ShortTurnCandidate>) -> Vec<ShortTurnCandidate> {
+pub fn merge_candidates(
+    mut candidates: Vec<ShortTurnCandidate>,
+    speakers: &[SpeakerSegment],
+) -> Vec<ShortTurnCandidate> {
     candidates.sort_by_key(|candidate| (candidate.start_ms, candidate.end_ms));
     let mut merged: Vec<ShortTurnCandidate> = Vec::new();
     for candidate in candidates {
@@ -468,16 +490,9 @@ pub fn merge_candidates(mut candidates: Vec<ShortTurnCandidate>) -> Vec<ShortTur
             } else if current.asr_confidence.is_none() {
                 current.asr_confidence = candidate.asr_confidence;
             }
-            if candidate.diarization_confidence.unwrap_or(-1.0)
-                > current.diarization_confidence.unwrap_or(-1.0)
-            {
-                current.diarization_speaker = candidate.diarization_speaker;
-                current.diarization_confidence = candidate.diarization_confidence;
-            }
-            current.diarization_coverage_ratio = max_optional(
-                current.diarization_coverage_ratio,
-                candidate.diarization_coverage_ratio,
-            );
+            current
+                .direct_diarization_turns
+                .extend(candidate.direct_diarization_turns);
             current.vad_confidence = max_optional(current.vad_confidence, candidate.vad_confidence);
             current.overlaps_existing_turn |= candidate.overlaps_existing_turn;
             current.true_speaker_overlap |= candidate.true_speaker_overlap;
@@ -485,7 +500,125 @@ pub fn merge_candidates(mut candidates: Vec<ShortTurnCandidate>) -> Vec<ShortTur
             merged.push(candidate);
         }
     }
+    for candidate in &mut merged {
+        recompute_merged_context(candidate, speakers);
+    }
     merged
+}
+
+fn recompute_merged_context(candidate: &mut ShortTurnCandidate, speakers: &[SpeakerSegment]) {
+    let duration = candidate.end_ms.saturating_sub(candidate.start_ms).max(1);
+    let direct = candidate
+        .direct_diarization_turns
+        .iter()
+        .max_by(|left, right| {
+            overlap_ms(
+                candidate.start_ms,
+                candidate.end_ms,
+                left.start_ms,
+                left.end_ms,
+            )
+            .cmp(&overlap_ms(
+                candidate.start_ms,
+                candidate.end_ms,
+                right.start_ms,
+                right.end_ms,
+            ))
+            .then_with(|| {
+                left.confidence
+                    .unwrap_or(-1.0)
+                    .total_cmp(&right.confidence.unwrap_or(-1.0))
+            })
+            .then_with(|| right.speaker_key.cmp(&left.speaker_key))
+        });
+    let timeline = speakers.iter().max_by(|left, right| {
+        overlap_ms(
+            candidate.start_ms,
+            candidate.end_ms,
+            left.start_ms,
+            left.end_ms,
+        )
+        .cmp(&overlap_ms(
+            candidate.start_ms,
+            candidate.end_ms,
+            right.start_ms,
+            right.end_ms,
+        ))
+        .then_with(|| right.speaker_key.cmp(&left.speaker_key))
+    });
+    if let Some(evidence) = direct {
+        candidate.diarization_speaker = Some(evidence.speaker_key.clone());
+        candidate.diarization_confidence = evidence.confidence;
+        candidate.diarization_coverage_ratio = Some(
+            overlap_ms(
+                candidate.start_ms,
+                candidate.end_ms,
+                evidence.start_ms,
+                evidence.end_ms,
+            ) as f64
+                / duration as f64,
+        );
+    } else if let Some(evidence) = timeline.filter(|speaker| {
+        windows_intersect(
+            candidate.start_ms,
+            candidate.end_ms,
+            speaker.start_ms,
+            speaker.end_ms,
+        )
+    }) {
+        candidate.diarization_speaker = Some(evidence.speaker_key.clone());
+        candidate.diarization_confidence = evidence.speaker_confidence;
+        candidate.diarization_coverage_ratio = Some(
+            overlap_ms(
+                candidate.start_ms,
+                candidate.end_ms,
+                evidence.start_ms,
+                evidence.end_ms,
+            ) as f64
+                / duration as f64,
+        );
+    } else {
+        candidate.diarization_speaker = None;
+        candidate.diarization_confidence = None;
+        candidate.diarization_coverage_ratio = None;
+    }
+    let overlapping: Vec<_> = speakers
+        .iter()
+        .filter(|speaker| {
+            windows_intersect(
+                candidate.start_ms,
+                candidate.end_ms,
+                speaker.start_ms,
+                speaker.end_ms,
+            )
+        })
+        .collect();
+    candidate.overlaps_existing_turn = !overlapping.is_empty();
+    candidate.true_speaker_overlap = overlapping.iter().enumerate().any(|(index, left)| {
+        overlapping[index + 1..].iter().any(|right| {
+            left.speaker_key != right.speaker_key
+                && windows_intersect(
+                    candidate.start_ms.max(left.start_ms),
+                    candidate.end_ms.min(left.end_ms),
+                    right.start_ms,
+                    right.end_ms,
+                )
+        })
+    });
+    let previous = speakers
+        .iter()
+        .filter(|speaker| speaker.end_ms <= candidate.start_ms)
+        .max_by_key(|speaker| speaker.end_ms);
+    let next = speakers
+        .iter()
+        .filter(|speaker| speaker.start_ms >= candidate.end_ms)
+        .min_by_key(|speaker| speaker.start_ms);
+    candidate.previous_speaker = previous.map(|speaker| speaker.speaker_key.clone());
+    candidate.next_speaker = next.map(|speaker| speaker.speaker_key.clone());
+    candidate.previous_gap_ms =
+        previous.map(|speaker| candidate.start_ms.saturating_sub(speaker.end_ms) as u64);
+    candidate.next_gap_ms =
+        next.map(|speaker| speaker.start_ms.saturating_sub(candidate.end_ms) as u64);
 }
 
 fn max_optional(left: Option<f64>, right: Option<f64>) -> Option<f64> {
@@ -828,6 +961,7 @@ pub fn refine_timeline_assignment(
         diarization_speaker: assignment.speaker_key.clone(),
         diarization_confidence: assignment.speaker_confidence,
         diarization_coverage_ratio: Some(1.0),
+        direct_diarization_turns: Vec::new(),
         vad_confidence: None,
         audio_source: timing.audio_source.clone(),
         overlaps_existing_turn: !overlapping.is_empty(),
@@ -1291,6 +1425,7 @@ mod tests {
             diarization_speaker: speaker.map(str::to_string),
             diarization_confidence: Some(confidence),
             diarization_coverage_ratio: Some(1.0),
+            direct_diarization_turns: Vec::new(),
             vad_confidence: None,
             audio_source: AudioSource::Mixed,
             overlaps_existing_turn: speaker.is_some(),
@@ -1364,6 +1499,22 @@ mod tests {
         assert!(store.can_update_prototype(1_500, 0.9, false, &SegmentKind::Speech, &config));
         assert!(!store.can_update_prototype(1_200, 0.9, false, &SegmentKind::Speech, &config));
         assert!(!store.can_update_prototype(2_000, 0.9, false, &SegmentKind::Backchannel, &config));
+    }
+
+    #[test]
+    fn merged_direct_diarization_keeps_identity_confidence_and_coverage_coherent() {
+        let mut speaker_a = speaker(0, 400, "speaker_a");
+        speaker_a.speaker_confidence = Some(0.60);
+        let mut speaker_b = speaker(100, 300, "speaker_b");
+        speaker_b.speaker_confidence = Some(0.99);
+        let candidates =
+            ShortTurnCandidateExtractor::default().extract(&[], &[speaker_a, speaker_b], &[]);
+        assert_eq!(candidates.len(), 1);
+        let merged = &candidates[0];
+        assert_eq!(merged.diarization_speaker.as_deref(), Some("speaker_a"));
+        assert_eq!(merged.diarization_confidence, Some(0.60));
+        assert_eq!(merged.diarization_coverage_ratio, Some(1.0));
+        assert!(merged.true_speaker_overlap);
     }
 
     #[test]
@@ -1505,7 +1656,7 @@ mod tests {
         second.start_ms = 250;
         second.end_ms = 450;
         second.candidate_sources = vec![ShortTurnCandidateSource::VadEvent];
-        assert_eq!(merge_candidates(vec![first, second]).len(), 2);
+        assert_eq!(merge_candidates(vec![first, second], &[]).len(), 2);
     }
 
     #[test]

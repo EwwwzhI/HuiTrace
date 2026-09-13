@@ -1,43 +1,41 @@
 # Short-turn real-audio benchmark
 
-Large or sensitive audio files are intentionally not committed. Put local files
-beside `manifest.jsonl` (or reference absolute paths), then run:
+Private audio and local artifacts stay under the gitignored `local/` directory.
+Create candidate-independent, overlapping review windows with:
+
+```text
+cargo run -p huitrace --bin short_turn_export -- --audio meeting.wav --meeting-id MEETING_ID --production-artifact app-run.json --output evaluation/short_turn_dataset/local
+```
+
+`annotation_windows.jsonl` covers the complete meeting timeline. Candidate
+suggestions are hints only. Annotators review every window and create a separate
+`manifest.jsonl` with one `ground_truth_event` row per true short event, noise
+trigger, ordinary non-short control, overlap, or handoff. A missed event is
+added even when `candidate_suggestions` is empty.
+
+Rows require a unique `id`, `record_type=ground_truth_event`,
+`recall_eligible=true`, non-empty `meeting_id`, valid timing, a duration bucket
+derived from timing, and `ground_truth_kind` (`short_speech`, `backchannel`,
+`noise`, `non_speech_vocalization`, or `ordinary_speech_control`). `speech` is
+a read alias; new short-event data uses `short_speech`. Non-short controls use
+`duration_bucket=non_short_control`. Unknown confidence is `null`/omitted,
+never a constant.
+
+Each row carries real meeting evidence: transcript timing/text/confidence where
+applicable, complete raw diarizer turns, VAD events, accepted speakers,
+expected visible speakers, and overlap/handoff tags. Suggestions, production
+evidence, ground truth, and replay predictions remain distinct.
 
 ```text
 cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset --mode evidence
 ```
 
-Each JSONL row requires `meeting_id`, `start_ms`, `end_ms`,
-`duration_bucket`, `ground_truth_kind`, `ground_truth_speaker`,
-`transcript_text`, and `notes`. Optional production evidence fields are
-`transcript_start_ms`, `transcript_end_ms`, `asr_confidence`,
-`ground_truth_accepted_speakers`, `vad_events`, and `diarizer_turns` (`start_ms`, `end_ms`,
-`speaker_key`, optional `confidence`). The legacy `accepted_speakers` key is
-accepted as an alias. `expected_visible_speakers` enables the
-visible-meeting-speaker false-new-speaker metric. Missing confidence must be omitted or
-`null`; never insert a neutral placeholder.
+Use `--mode production-artifact-replay` to require
+`evidence_origin=production_artifact`. Neither replay mode runs ASR or
+diarization. `--mode pipeline` explicitly fails because directly wiring the
+desktop lifecycle into this CLI would duplicate model/inference orchestration.
 
-The report includes overall and duration-bucket classification metrics plus
-candidate recall for Transcript, DiarizerTurn, VadEvent, and their union.
-Candidate matching requires meaningful IoU or coverage; any overlap is not a
-hit. The report also includes materialization precision/recall, false embedded
-event rate, and embedded speaker accuracy.
-
-Pipeline Mode is an explicit interface but currently refuses to run because the
-CLI is not wired to the desktop model lifecycle. This prevents Evidence Mode
-from being mislabeled end-to-end.
-
-To create local clips for annotation:
-
-```text
-cargo run -p huitrace --bin short_turn_export -- --audio meeting.wav --output evaluation/short_turn_dataset/local
-```
-
-The local directory and WAV files are gitignored. Do not make a model decision
-until the dataset has at least 100 events from at least three meetings with
-duration, kind, noise, overlap, and handoff coverage. Smaller datasets report
-`INSUFFICIENT_DATA`.
-Use `tags` for required scenario coverage, including `overlap` and
-`speaker_handoff`. Each Evidence Mode row should carry the meeting's complete
-raw diarizer-turn evidence so the shared acceptance policy sees production-like
-speaker history rather than only the labelled clip.
+The gate requires 100 annotated event/control rows, three meetings, two
+speaker/meeting scenarios, all four buckets, short speech, backchannel, noise,
+overlap, and handoff. Below it the decision is
+`INSUFFICIENT_DATA_FOR_PHASE_2D`.

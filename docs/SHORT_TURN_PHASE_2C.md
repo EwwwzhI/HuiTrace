@@ -62,7 +62,7 @@ No model is selected merely because an aggregate metric is low.
 
 ## Local annotation helper
 
-Run `short_turn_export` against meeting audio to export candidate WAV clips with
-400 ms context and a `manifest.template.jsonl`. Use a gitignored destination,
-for example `evaluation/short_turn_dataset/local`. Ground truth fields are left
-`null` for human annotation.
+Run `short_turn_export` against meeting audio to export overlapping unbiased
+timeline windows. Candidate detections are suggestions only and never define
+the annotation population. See `SHORT_TURN_PHASE_2C_VALIDATION.md` for the
+Phase 2C.1 manifest contract and decision gate.

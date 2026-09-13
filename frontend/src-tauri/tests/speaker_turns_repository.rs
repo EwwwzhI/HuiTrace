@@ -5,8 +5,10 @@ use app_lib::context::{AuthContext, RequestId, Role, TenantId, UserId};
 use app_lib::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use app_lib::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
 use app_lib::diarization::short_turn::{
-    refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnRefiner,
+    refine_timeline_assignment, MeetingSpeakerPrototypeStore, ShortTurnCandidateSource,
+    ShortTurnRefiner,
 };
+use app_lib::diarization::short_turn_event::ShortTurnEvent;
 use app_lib::diarization::timeline::reconcile_transcript;
 use app_lib::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
@@ -85,6 +87,29 @@ fn confident_turn(start_ms: i64, end_ms: i64, label: &str, confidence: f64) -> S
     SpeakerTurn {
         confidence: Some(confidence),
         ..turn(start_ms, end_ms, label)
+    }
+}
+
+fn short_event(id: &str, meeting_id: &str, start_ms: i64, speaker: &str) -> ShortTurnEvent {
+    ShortTurnEvent {
+        id: id.into(),
+        meeting_id: meeting_id.into(),
+        start_ms,
+        end_ms: start_ms + 300,
+        transcript_id: Some("t-long".into()),
+        kind: SegmentKind::Backchannel,
+        kind_confidence: 0.91,
+        speaker_key: Some(speaker.into()),
+        speaker_display_name: None,
+        speaker_confidence: Some(0.82),
+        automatic_speaker_key: Some(speaker.into()),
+        automatic_speaker_confidence: Some(0.82),
+        candidate_sources: vec![ShortTurnCandidateSource::DiarizerTurn],
+        audio_source: AudioSource::Mixed,
+        revision: 1,
+        assignment_method: AssignmentMethod::ShortTurnRefinement,
+        transcript_aligned: false,
+        user_visible: true,
     }
 }
 
@@ -704,4 +729,126 @@ async fn manual_event_assignment_survives_rerun_and_transcript_manual_is_indepen
             .await
             .expect("transcript method");
     assert_eq!(transcript_method, "manual");
+}
+
+#[tokio::test]
+async fn event_manual_override_tracks_latest_automatic_result_and_reconciles_jitter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = db(&dir.path().join("event-semantics.db")).await;
+    let local = ctx_for("local");
+    let foreign = ctx_for("foreign");
+    seed_meeting(&pool, "m-1", "local").await;
+    seed_transcript(&pool, "t-long", "m-1", "long row", 0.0, 5.0).await;
+    SpeakerTurnsRepository::replace_for_meeting(
+        &pool,
+        &local,
+        "m-1",
+        &[
+            confident_turn(0, 5_000, "Speaker A", 0.99),
+            confident_turn(6_000, 8_000, "Speaker B", 0.95),
+            confident_turn(9_000, 11_000, "Speaker C", 0.95),
+        ],
+    )
+    .await
+    .expect("speakers");
+    let accepted = SpeakerTurnsRepository::list_for_meeting(&pool, &local, "m-1")
+        .await
+        .expect("speakers");
+    let key = |label: &str| {
+        accepted
+            .iter()
+            .find(|turn| turn.speaker_label == label)
+            .expect("label")
+            .speaker_key
+            .clone()
+    };
+    let speaker_a = key("Speaker A");
+    let speaker_b = key("Speaker B");
+    let speaker_c = key("Speaker C");
+
+    // Refiner/direct evidence says B even though maximum temporal overlap says A.
+    let original = short_event("physical-event", "m-1", 2_100, &speaker_b);
+    ShortTurnEventsRepository::replace_for_meeting(&pool, &local, "m-1", &[original])
+        .await
+        .expect("automatic B");
+    let overlap_guess: String = sqlx::query_scalar(
+        "SELECT speaker_key FROM speaker_turns WHERE meeting_id='m-1' AND start_ms < 2400 AND end_ms > 2100 ORDER BY (MIN(end_ms, 2400) - MAX(start_ms, 2100)) DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("maximum-overlap guess");
+    assert_eq!(overlap_guess, speaker_a);
+    assert_ne!(overlap_guess, speaker_b);
+    ShortTurnEventsRepository::assign_speaker(&pool, &local, "m-1", "physical-event", &speaker_a)
+        .await
+        .expect("manual A");
+    seed_transcript(&pool, "retranscribed-split", "m-1", "split row", 2.0, 2.5).await;
+
+    for jitter in [20, 40, 60] {
+        let mut rerun = short_event(
+            &format!("new-hash-{jitter}"),
+            "m-1",
+            2_100 + jitter,
+            &speaker_c,
+        );
+        rerun.transcript_id = if jitter == 20 {
+            Some("retranscribed-split".into())
+        } else {
+            None
+        };
+        rerun.candidate_sources = if jitter == 40 {
+            vec![
+                ShortTurnCandidateSource::DiarizerTurn,
+                ShortTurnCandidateSource::VadEvent,
+            ]
+        } else {
+            vec![
+                ShortTurnCandidateSource::Transcript,
+                ShortTurnCandidateSource::DiarizerTurn,
+            ]
+        };
+        ShortTurnEventsRepository::replace_for_meeting(&pool, &local, "m-1", &[rerun])
+            .await
+            .expect("automatic rerun");
+        let stored = ShortTurnEventsRepository::list_for_meeting(&pool, &local, "m-1")
+            .await
+            .expect("stored");
+        assert_eq!(stored.len(), 1, "no duplicate at {jitter} ms jitter");
+        assert_eq!(stored[0].id, "physical-event");
+        assert_eq!(stored[0].speaker_key.as_deref(), Some(speaker_a.as_str()));
+        assert_eq!(
+            stored[0].automatic_speaker_key.as_deref(),
+            Some(speaker_c.as_str())
+        );
+        assert_eq!(stored[0].assignment_method, AssignmentMethod::Manual);
+    }
+
+    assert!(
+        ShortTurnEventsRepository::restore_automatic(&pool, &foreign, "m-1", "physical-event")
+            .await
+            .is_err()
+    );
+    ShortTurnEventsRepository::restore_automatic(&pool, &local, "m-1", "physical-event")
+        .await
+        .expect("restore latest automatic");
+    let once = ShortTurnEventsRepository::list_for_meeting(&pool, &local, "m-1")
+        .await
+        .expect("restored")
+        .remove(0);
+    assert_eq!(once.speaker_key.as_deref(), Some(speaker_c.as_str()));
+    assert_eq!(once.kind, SegmentKind::Backchannel);
+    assert_eq!(once.kind_confidence, 0.91);
+    assert_eq!(
+        once.assignment_method,
+        AssignmentMethod::ShortTurnRefinement
+    );
+    ShortTurnEventsRepository::restore_automatic(&pool, &local, "m-1", "physical-event")
+        .await
+        .expect("idempotent restore");
+    let twice = ShortTurnEventsRepository::list_for_meeting(&pool, &local, "m-1")
+        .await
+        .expect("restored twice")
+        .remove(0);
+    assert_eq!(twice.revision, once.revision);
+    assert_eq!(twice, once);
 }

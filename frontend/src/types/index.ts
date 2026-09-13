@@ -167,6 +167,8 @@ export interface ShortTurnEvent {
   speaker_key?: string | null;
   speaker_display_name?: string | null;
   speaker_confidence?: number | null;
+  automatic_speaker_key?: string | null;
+  automatic_speaker_confidence?: number | null;
   candidate_sources: ShortTurnCandidateSource[];
   audio_source: 'microphone' | 'system' | 'imported' | 'mixed';
   revision: number;

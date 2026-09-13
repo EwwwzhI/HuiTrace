@@ -8,7 +8,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::context::AuthContext;
 use crate::diarization::short_turn::ShortTurnCandidateSource;
-use crate::diarization::short_turn_event::ShortTurnEvent;
+use crate::diarization::short_turn_event::{reconcile_event_ids, ShortTurnEvent};
 use crate::diarization::types::{AssignmentMethod, AudioSource, SegmentKind};
 
 pub struct ShortTurnEventsRepository;
@@ -16,7 +16,7 @@ pub struct ShortTurnEventsRepository;
 macro_rules! event_query {
     ($suffix:literal) => {
         sqlx::query(concat!(
-            "SELECT e.id, e.meeting_id, e.transcript_id, e.start_ms, e.end_ms, e.segment_kind, e.kind_confidence, e.speaker_key, s.display_name AS speaker_display_name, e.speaker_confidence, e.candidate_sources, e.audio_source, e.assignment_method, e.revision, e.transcript_aligned, e.user_visible FROM short_turn_events e LEFT JOIN speakers s ON s.meeting_id = e.meeting_id AND s.workspace_id = e.workspace_id AND s.speaker_key = e.speaker_key ",
+            "SELECT e.id, e.meeting_id, e.transcript_id, e.start_ms, e.end_ms, e.segment_kind, e.kind_confidence, e.speaker_key, s.display_name AS speaker_display_name, e.speaker_confidence, e.automatic_speaker_key, e.automatic_speaker_confidence, e.candidate_sources, e.audio_source, e.assignment_method, e.revision, e.transcript_aligned, e.user_visible FROM short_turn_events e LEFT JOIN speakers s ON s.meeting_id = e.meeting_id AND s.workspace_id = e.workspace_id AND s.speaker_key = e.speaker_key ",
             $suffix
         ))
     };
@@ -30,16 +30,12 @@ impl ShortTurnEventsRepository {
         events: &[ShortTurnEvent],
     ) -> Result<usize> {
         let existing = Self::list_for_meeting_tx(tx, ctx, meeting_id).await?;
+        let mut reconciled = events.to_vec();
+        reconcile_event_ids(&mut reconciled, &existing);
         let previous_by_id: HashMap<_, _> = existing
             .iter()
             .map(|event| (event.id.as_str(), event))
             .collect();
-        let manual_ids: std::collections::HashSet<_> = existing
-            .iter()
-            .filter(|event| event.assignment_method == AssignmentMethod::Manual)
-            .map(|event| event.id.as_str())
-            .collect();
-
         sqlx::query("DELETE FROM short_turn_events WHERE meeting_id = ? AND workspace_id = ? AND assignment_method != 'manual'")
             .bind(meeting_id)
             .bind(ctx.tenant_id.as_str())
@@ -48,18 +44,22 @@ impl ShortTurnEventsRepository {
 
         let now = Utc::now().to_rfc3339();
         let mut written = 0;
-        for event in events {
+        for event in &reconciled {
             if event.meeting_id != meeting_id {
                 bail!("short-turn event belongs to another meeting");
             }
             if event.end_ms <= event.start_ms {
                 bail!("short-turn event has invalid timing");
             }
-            if manual_ids.contains(event.id.as_str()) {
-                continue;
-            }
             let mut event = event.clone();
+            event.automatic_speaker_key = event.speaker_key.clone();
+            event.automatic_speaker_confidence = event.speaker_confidence;
             if let Some(previous) = previous_by_id.get(event.id.as_str()) {
+                if previous.assignment_method == AssignmentMethod::Manual {
+                    event.speaker_key = previous.speaker_key.clone();
+                    event.speaker_confidence = previous.speaker_confidence;
+                    event.assignment_method = AssignmentMethod::Manual;
+                }
                 event.revision = if same_automatic_result(previous, &event) {
                     previous.revision
                 } else {
@@ -67,8 +67,8 @@ impl ShortTurnEventsRepository {
                 };
             }
             let sources = serde_json::to_string(&event.candidate_sources)?;
-            sqlx::query(
-                "INSERT INTO short_turn_events (id, meeting_id, workspace_id, transcript_id, start_ms, end_ms, segment_kind, kind_confidence, speaker_key, speaker_confidence, candidate_sources, audio_source, assignment_method, revision, transcript_aligned, user_visible, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            let result = sqlx::query(
+                "INSERT INTO short_turn_events (id, meeting_id, workspace_id, transcript_id, start_ms, end_ms, segment_kind, kind_confidence, speaker_key, speaker_confidence, automatic_speaker_key, automatic_speaker_confidence, candidate_sources, audio_source, assignment_method, revision, transcript_aligned, user_visible, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET transcript_id=excluded.transcript_id, start_ms=excluded.start_ms, end_ms=excluded.end_ms, segment_kind=excluded.segment_kind, kind_confidence=excluded.kind_confidence, speaker_key=excluded.speaker_key, speaker_confidence=excluded.speaker_confidence, automatic_speaker_key=excluded.automatic_speaker_key, automatic_speaker_confidence=excluded.automatic_speaker_confidence, candidate_sources=excluded.candidate_sources, audio_source=excluded.audio_source, assignment_method=excluded.assignment_method, revision=excluded.revision, transcript_aligned=excluded.transcript_aligned, user_visible=excluded.user_visible, updated_at=excluded.updated_at WHERE short_turn_events.meeting_id=excluded.meeting_id AND short_turn_events.workspace_id=excluded.workspace_id",
             )
             .bind(&event.id)
             .bind(meeting_id)
@@ -80,6 +80,8 @@ impl ShortTurnEventsRepository {
             .bind(event.kind_confidence)
             .bind(&event.speaker_key)
             .bind(event.speaker_confidence)
+            .bind(&event.automatic_speaker_key)
+            .bind(event.automatic_speaker_confidence)
             .bind(sources)
             .bind(event.audio_source.as_str())
             .bind(event.assignment_method.as_str())
@@ -90,6 +92,9 @@ impl ShortTurnEventsRepository {
             .bind(&now)
             .execute(&mut **tx)
             .await?;
+            if result.rows_affected() != 1 {
+                bail!("short-turn event id collides outside this meeting/workspace");
+            }
             written += 1;
         }
         Ok(written)
@@ -213,33 +218,18 @@ impl ShortTurnEventsRepository {
         meeting_id: &str,
         event_id: &str,
     ) -> Result<()> {
-        let event: Option<(i64, i64)> = sqlx::query_as(
-            "SELECT start_ms, end_ms FROM short_turn_events WHERE id = ? AND meeting_id = ? AND workspace_id = ?",
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM short_turn_events WHERE id = ? AND meeting_id = ? AND workspace_id = ?",
         )
         .bind(event_id)
         .bind(meeting_id.to_string())
         .bind(ctx.tenant_id.as_str().to_string())
         .fetch_optional(pool)
         .await?;
-        let (start_ms, end_ms) = event
-            .ok_or_else(|| anyhow::anyhow!("short-turn event does not belong to this meeting"))?;
-        let automatic_speaker: Option<(String, Option<f64>)> = sqlx::query_as(
-            "SELECT st.speaker_key, st.confidence FROM speaker_turns st INNER JOIN speakers s ON s.meeting_id = st.meeting_id AND s.workspace_id = st.workspace_id AND s.speaker_key = st.speaker_key WHERE st.meeting_id = ? AND st.workspace_id = ? AND st.start_ms < ? AND st.end_ms > ? ORDER BY (MIN(st.end_ms, ?) - MAX(st.start_ms, ?)) DESC, st.speaker_key LIMIT 1",
-        )
-        .bind(meeting_id)
-        .bind(ctx.tenant_id.as_str())
-        .bind(end_ms)
-        .bind(start_ms)
-        .bind(end_ms)
-        .bind(start_ms)
-        .fetch_optional(pool)
-        .await?;
-        let (speaker_key, confidence) = automatic_speaker
-            .map(|(key, confidence)| (Some(key), confidence))
-            .unwrap_or((None, None));
-        sqlx::query("UPDATE short_turn_events SET speaker_key = ?, speaker_confidence = ?, assignment_method = 'short_turn_refinement', revision = revision + 1, updated_at = ? WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
-            .bind(speaker_key)
-            .bind(confidence)
+        if exists.is_none() {
+            bail!("short-turn event does not belong to this meeting");
+        }
+        sqlx::query("UPDATE short_turn_events SET speaker_key = automatic_speaker_key, speaker_confidence = automatic_speaker_confidence, assignment_method = 'short_turn_refinement', revision = revision + CASE WHEN assignment_method = 'manual' THEN 1 ELSE 0 END, updated_at = CASE WHEN assignment_method = 'manual' THEN ? ELSE updated_at END WHERE id = ? AND meeting_id = ? AND workspace_id = ?")
             .bind(Utc::now().to_rfc3339())
             .bind(event_id)
             .bind(meeting_id)
@@ -278,6 +268,8 @@ fn event_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ShortTurnEvent> {
         speaker_key: row.get("speaker_key"),
         speaker_display_name: row.get("speaker_display_name"),
         speaker_confidence: row.get("speaker_confidence"),
+        automatic_speaker_key: row.get("automatic_speaker_key"),
+        automatic_speaker_confidence: row.get("automatic_speaker_confidence"),
         candidate_sources: serde_json::from_str::<Vec<ShortTurnCandidateSource>>(&sources)?,
         audio_source: source_from_db(&row.get::<String, _>("audio_source")),
         revision: row.get("revision"),
@@ -293,8 +285,11 @@ fn same_automatic_result(left: &ShortTurnEvent, right: &ShortTurnEvent) -> bool 
         && left.end_ms == right.end_ms
         && left.kind == right.kind
         && (left.kind_confidence - right.kind_confidence).abs() < 1e-9
-        && left.speaker_key == right.speaker_key
-        && option_f64_eq(left.speaker_confidence, right.speaker_confidence)
+        && left.automatic_speaker_key == right.automatic_speaker_key
+        && option_f64_eq(
+            left.automatic_speaker_confidence,
+            right.automatic_speaker_confidence,
+        )
         && left.candidate_sources == right.candidate_sources
         && left.audio_source == right.audio_source
         && left.transcript_aligned == right.transcript_aligned

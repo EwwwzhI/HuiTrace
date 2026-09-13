@@ -22,6 +22,11 @@ pub struct ShortTurnEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_display_name: Option<String>,
     pub speaker_confidence: Option<f64>,
+    /// Latest ShortTurnRefiner result, even while a manual override is effective.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_speaker_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_speaker_confidence: Option<f64>,
     pub candidate_sources: Vec<ShortTurnCandidateSource>,
     pub audio_source: AudioSource,
     pub revision: i64,
@@ -99,6 +104,8 @@ impl ShortTurnMaterializationPolicy {
                 speaker_key: decision.speaker_key.clone(),
                 speaker_display_name: None,
                 speaker_confidence: decision.speaker_confidence,
+                automatic_speaker_key: decision.speaker_key.clone(),
+                automatic_speaker_confidence: decision.speaker_confidence,
                 candidate_sources: sorted_sources(&candidate.candidate_sources),
                 audio_source: candidate.audio_source.clone(),
                 revision: 1,
@@ -118,14 +125,63 @@ pub fn stable_event_id(meeting_id: &str, candidate: &ShortTurnCandidate) -> Stri
     // backend jitter while still keeping neighbouring real events distinct.
     hasher.update(quantize_ms(candidate.start_ms).to_le_bytes());
     hasher.update(quantize_ms(candidate.end_ms).to_le_bytes());
-    let mut transcript_ids = candidate.transcript_ids.clone();
-    transcript_ids.sort();
-    transcript_ids.dedup();
-    for transcript_id in transcript_ids {
-        hasher.update(transcript_id.as_bytes());
-    }
+    // Transcript segmentation is not physical-event identity. Retranscription,
+    // split, and merge operations must not manufacture a new event id.
     let digest = format!("{:x}", hasher.finalize());
     format!("short_turn_{}", &digest[..24])
+}
+
+/// Reconcile inferred events with the prior physical events. Stable hashes are
+/// useful for exact reruns, but cannot cover boundary jitter without eventually
+/// colliding adjacent events. This deterministic one-to-one match is the
+/// durability layer for manual annotations.
+pub fn reconcile_event_ids(inferred: &mut [ShortTurnEvent], previous: &[ShortTurnEvent]) {
+    let mut edges = Vec::new();
+    for (new_index, new) in inferred.iter().enumerate() {
+        for (old_index, old) in previous.iter().enumerate() {
+            if new.meeting_id != old.meeting_id || !compatible_kind(&new.kind, &old.kind) {
+                continue;
+            }
+            let overlap = overlap_ms(new.start_ms, new.end_ms, old.start_ms, old.end_ms);
+            let shorter = (new.end_ms - new.start_ms)
+                .min(old.end_ms - old.start_ms)
+                .max(1);
+            let new_center = new.start_ms + (new.end_ms - new.start_ms) / 2;
+            let old_center = old.start_ms + (old.end_ms - old.start_ms) / 2;
+            let center_distance = (new_center - old_center).abs();
+            if overlap * 2 < shorter || center_distance > 200 {
+                continue;
+            }
+            let union = new.end_ms.max(old.end_ms) - new.start_ms.min(old.start_ms);
+            let iou_millionths = overlap * 1_000_000 / union.max(1);
+            let transcript_bonus =
+                i64::from(new.transcript_id.is_some() && new.transcript_id == old.transcript_id);
+            edges.push((
+                std::cmp::Reverse((iou_millionths, -center_distance, transcript_bonus)),
+                new_index,
+                old_index,
+            ));
+        }
+    }
+    edges.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut used_new = std::collections::HashSet::new();
+    let mut used_old = std::collections::HashSet::new();
+    for (_, new_index, old_index) in edges {
+        if used_new.insert(new_index) && used_old.insert(old_index) {
+            inferred[new_index].id = previous[old_index].id.clone();
+        }
+    }
+}
+
+fn compatible_kind(left: &SegmentKind, right: &SegmentKind) -> bool {
+    left == right
+        || matches!(
+            left,
+            SegmentKind::Speech | SegmentKind::Backchannel | SegmentKind::Unknown
+        ) && matches!(
+            right,
+            SegmentKind::Speech | SegmentKind::Backchannel | SegmentKind::Unknown
+        )
 }
 
 fn quantize_ms(value: i64) -> i64 {
@@ -191,6 +247,7 @@ mod tests {
             diarization_speaker: Some("speaker_02".into()),
             diarization_confidence: Some(0.92),
             diarization_coverage_ratio: Some(1.0),
+            direct_diarization_turns: Vec::new(),
             vad_confidence: None,
             audio_source: AudioSource::Mixed,
             overlaps_existing_turn: true,
@@ -262,5 +319,77 @@ mod tests {
             .expect("event");
         assert!(!event.transcript_aligned);
         assert_eq!(event.transcript_id.as_deref(), Some("t-1"));
+    }
+
+    #[test]
+    fn identity_ignores_provenance_and_transcript_segmentation() {
+        let first = candidate(1_000, 1_300, vec![ShortTurnCandidateSource::DiarizerTurn]);
+        let mut retranscribed = candidate(
+            1_000,
+            1_300,
+            vec![
+                ShortTurnCandidateSource::DiarizerTurn,
+                ShortTurnCandidateSource::VadEvent,
+            ],
+        );
+        retranscribed.transcript_ids = vec!["split-a".into(), "split-b".into()];
+        assert_eq!(
+            stable_event_id("m-1", &first),
+            stable_event_id("m-1", &retranscribed)
+        );
+    }
+
+    #[test]
+    fn reconciliation_survives_sixty_ms_jitter_without_colliding_adjacent_events() {
+        let policy = ShortTurnMaterializationPolicy::default();
+        let old_a = policy
+            .materialize(
+                "m-1",
+                &candidate(1_000, 1_300, vec![ShortTurnCandidateSource::DiarizerTurn]),
+                &decision(SegmentKind::Backchannel),
+                &[],
+            )
+            .event
+            .unwrap();
+        let old_b = policy
+            .materialize(
+                "m-1",
+                &candidate(1_400, 1_700, vec![ShortTurnCandidateSource::DiarizerTurn]),
+                &decision(SegmentKind::Backchannel),
+                &[],
+            )
+            .event
+            .unwrap();
+        let mut next = vec![
+            policy
+                .materialize(
+                    "m-1",
+                    &candidate(
+                        1_060,
+                        1_360,
+                        vec![
+                            ShortTurnCandidateSource::Transcript,
+                            ShortTurnCandidateSource::VadEvent,
+                        ],
+                    ),
+                    &decision(SegmentKind::Speech),
+                    &[],
+                )
+                .event
+                .unwrap(),
+            policy
+                .materialize(
+                    "m-1",
+                    &candidate(1_460, 1_760, vec![ShortTurnCandidateSource::VadEvent]),
+                    &decision(SegmentKind::Backchannel),
+                    &[],
+                )
+                .event
+                .unwrap(),
+        ];
+        reconcile_event_ids(&mut next, &[old_a.clone(), old_b.clone()]);
+        assert_eq!(next[0].id, old_a.id);
+        assert_eq!(next[1].id, old_b.id);
+        assert_ne!(next[0].id, next[1].id);
     }
 }
