@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "artifact_id": "meeting-example-run-20260914",
+  "meeting_id": "meeting-example",
+  "source_audio": {"path_hint":"private meeting audio","duration_ms":5000,"sha256":null},
+  "created_at": "2026-09-14T00:00:00Z",
+  "app_commit_sha": "7b34d7b7d422deeafeb21f07449f8a3ca8c5f60a",
+  "asr": {"backend":"whisper.cpp","model":"large-v3","version_or_hash":"64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"},
+  "diarization": {"backend":"sherpa-onnx-1.13.4","model":"pyannote-segmentation-3.0+3D-Speaker-CAM++","version_or_hash":"segmentation:220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079;embedding:f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11"},
+  "production_config": {
+    "short_turn": {"min_candidate_ms":100,"very_short_ms":500,"max_short_turn_ms":1200,"prototype_min_duration_ms":1500,"duration_weight_20_until_ms":299,"duration_weight_35_until_ms":499,"duration_weight_55_until_ms":799,"high_confidence_threshold":0.75,"weak_confidence_threshold":0.4,"nearby_gap_ms":350,"lexical_backchannel_enabled":true},
+    "short_candidate_vad": {"min_speech_ms":100,"redemption_ms":250,"max_candidate_ms":1200},
+    "speaker_acceptance": {"config":{"min_candidate_ms":100,"very_short_ms":500,"max_short_turn_ms":1200,"prototype_min_duration_ms":1500,"duration_weight_20_until_ms":299,"duration_weight_35_until_ms":499,"duration_weight_55_until_ms":799,"high_confidence_threshold":0.75,"weak_confidence_threshold":0.4,"nearby_gap_ms":350,"lexical_backchannel_enabled":true},"max_overlap_ratio":0.5,"confident_min_longest_turn_ms":1200,"missing_confidence_min_total_ms":4000,"missing_confidence_min_turns":2},
+    "candidate_match": {"min_iou":0.3,"min_ground_truth_coverage":0.75,"center_tolerance_ms":200},
+    "materialization": {"aligned_min_iou":0.75,"strong_internal_evidence":0.75},
+    "vad_implementation": "silero_rs::ContinuousVadProcessor",
+    "vad_runtime_config": {"sample_rate_hz":16000,"positive_speech_threshold":0.5,"negative_speech_threshold":0.35}
+  },
+  "transcripts": [{"id":"transcript-1","start_ms":900,"end_ms":1500,"text":"嗯","asr_confidence":0.87}],
+  "raw_diarizer_turns": [{"start_ms":0,"end_ms":3000,"speaker_key":"speaker_01","confidence":0.91,"overlap":false},{"start_ms":1010,"end_ms":1290,"speaker_key":"speaker_02","confidence":0.91,"overlap":true},{"start_ms":3000,"end_ms":5000,"speaker_key":"speaker_02","confidence":0.91,"overlap":false}],
+  "vad_events": [{"start_ms":990,"end_ms":1300,"confidence":null}],
+  "accepted_speakers": ["speaker_01","speaker_02"],
+  "visible_speakers": ["speaker_01","speaker_02"],
+  "safety_observations": {"long_transcript_speaker_corruption_count":0,"manual_override_violation_count":0},
+  "production_metadata": {"platform":"Windows","note":"example only"}
+}

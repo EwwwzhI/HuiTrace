@@ -42,8 +42,10 @@ fn main() -> Result<()> {
     let decoded = app_lib::audio::decoder::decode_audio_file(&args.audio)?;
     let samples = decoded.to_whisper_format();
     let audio_end_ms = samples.len() as i64 * 1_000 / 16_000;
-    let manifest_path = args.output.join("annotation_windows.jsonl");
-    let mut manifest = BufWriter::new(File::create(&manifest_path)?);
+    let blind_manifest_path = args.output.join("annotation_windows.blind.jsonl");
+    let review_manifest_path = args.output.join("annotation_windows.review.jsonl");
+    let mut blind_manifest = BufWriter::new(File::create(&blind_manifest_path)?);
+    let mut review_manifest = BufWriter::new(File::create(&review_manifest_path)?);
     let artifact = args
         .production_artifact
         .as_ref()
@@ -73,10 +75,7 @@ fn main() -> Result<()> {
                 })
             })
             .collect::<Vec<_>>();
-        writeln!(
-            manifest,
-            "{}",
-            serde_json::to_string(&serde_json::json!({
+        let common = serde_json::json!({
                 "record_type": "annotation_window",
                 "window_id": format!("{}-window-{index:04}", args.meeting_id),
                 "meeting_id": args.meeting_id,
@@ -84,20 +83,30 @@ fn main() -> Result<()> {
                 "source_start_ms": window_start,
                 "source_end_ms": window_end,
                 "production_artifact_path": artifact,
-                "candidate_suggestions": suggestions,
-                "instructions": "Annotate every event, including missed speech, noise, ordinary non-short controls, overlap, and handoff. Write separate ground_truth_event rows to manifest.jsonl."
-            }))?
-        )?;
+                "instructions": "Annotate every event on the source meeting timeline, including missed speech, noise, ordinary non-short controls, overlap, handoff, and uncertain cases. Write separate ground_truth_event rows to manifest.jsonl."
+        });
+        writeln!(blind_manifest, "{}", serde_json::to_string(&common)?)?;
+        let mut review = common;
+        review
+            .as_object_mut()
+            .expect("annotation window object")
+            .insert(
+                "candidate_suggestions".into(),
+                serde_json::json!(suggestions),
+            );
+        writeln!(review_manifest, "{}", serde_json::to_string(&review)?)?;
         if window_end == audio_end_ms {
             break;
         }
         window_start += args.stride_ms;
         index += 1;
     }
-    manifest.flush()?;
+    blind_manifest.flush()?;
+    review_manifest.flush()?;
     eprintln!(
-        "exported {index} unbiased overlapping windows to {}; {} candidate suggestions are hints only",
-        manifest_path.display(),
+        "exported {index} blind windows to {} and suggestion-assisted review windows to {}; {} candidate suggestions are review hints only",
+        blind_manifest_path.display(),
+        review_manifest_path.display(),
         candidates.len()
     );
     Ok(())

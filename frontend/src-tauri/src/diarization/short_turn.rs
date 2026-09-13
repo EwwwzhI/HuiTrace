@@ -21,7 +21,7 @@ pub enum ShortTurnCandidateSource {
     VadEvent,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShortCandidateVadConfig {
     /// Engineering baseline; benchmark results, not model assumptions, tune it.
     pub min_speech_ms: u64,
@@ -39,7 +39,7 @@ impl Default for ShortCandidateVadConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShortTurnConfig {
     /// Engineering initial values, kept together so evaluation can tune them.
     pub min_candidate_ms: u64,
@@ -93,7 +93,7 @@ pub struct SpeakerAcceptanceEvidence {
 
 /// Pure production policy shared by persistence and the benchmark. Unknown
 /// confidence is never promoted to perfect confidence.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeakerAcceptancePolicy {
     pub config: ShortTurnConfig,
     pub max_overlap_ratio: f64,
@@ -1260,7 +1260,7 @@ pub fn compute_candidate_recall(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateMatchConfig {
     /// Engineering evaluation values. These are intentionally stricter than
     /// "any overlap" so a 5 ms boundary touch cannot inflate recall.

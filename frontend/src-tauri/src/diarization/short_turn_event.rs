@@ -40,7 +40,7 @@ pub struct MaterializedShortTurnDecision {
     pub event: Option<ShortTurnEvent>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShortTurnMaterializationPolicy {
     /// Engineering value: short ASR rows own rendering when the merged event
     /// still overlaps at least this much of the row.
