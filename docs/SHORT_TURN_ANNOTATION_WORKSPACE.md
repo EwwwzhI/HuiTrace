@@ -59,6 +59,37 @@ B/S/N/V/C select kind; 1–9 select a speaker; O/H/E/U toggle flags; Enter marks
 the window complete; Delete removes an event; Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z
 undo/redo. Shortcuts are ignored when a text field has focus.
 
+## Localization
+
+The workspace uses HuiTrace's existing `UiLanguageProvider`, `useUiTranslation`
+hook, and shared `en` / `zh-CN` catalogs. It follows the global UI Language
+setting immediately, without reloading the route or reopening an annotation
+project. A compact Chinese / English control in the workspace header updates
+that same global preference; it does not create annotation-specific language
+state.
+
+Localization applies only to interface chrome, labels, help, status messages,
+and controls. Meeting IDs, event IDs, speaker keys and descriptions, ASR text,
+paths, filenames, JSON values, enum values, and Ground Truth data are never
+translated or rewritten.
+
+## Theme support
+
+The workspace uses HuiTrace's existing `next-themes` provider and semantic CSS
+tokens for its page, cards, borders, text, inputs, and controls. It supports
+Light and Dark directly. When the global preference is System, the workspace
+renders according to `resolvedTheme`; choosing Light or Dark from the compact
+header control updates the same global theme preference.
+
+WaveSurfer updates only its visual wave, progress, cursor, and projected region
+colors when the resolved theme changes. Canonical annotation events remain
+parent-owned, and the controlled projection guard prevents visual region
+updates from creating events. The multi-tier timeline uses paired Light/Dark
+data colors for Ground Truth, system suggestions, ASR, diarizer, VAD, pending,
+and playhead states. Language and theme changes do not alter Ground Truth,
+schema values, speaker identities, time boundaries, window status, autosave,
+manifests, or benchmark behavior.
+
 ## Save, QA and export
 
 Edits debounce to local atomic temporary-file writes. Reopening restores draft,

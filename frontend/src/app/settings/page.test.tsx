@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest';
 import SettingsPage from './page';
 import { invoke } from '@tauri-apps/api/core';
+import { uiI18n } from '@/i18n';
 
 const mocks = vi.hoisted(() => ({ mounted: vi.fn(), setConfig: vi.fn(), push: vi.fn(), back: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ back: mocks.back, push: mocks.push }) }));
@@ -16,7 +17,7 @@ vi.mock('@/components/TranscriptSettings', () => ({ TranscriptSettings: () => {
   React.useEffect(() => { mocks.mounted(); }, []);
   return <input aria-label="Model draft" defaultValue="small" />;
 } }));
-afterEach(() => { cleanup(); vi.unstubAllEnvs(); mocks.push.mockReset(); });
+afterEach(async () => { cleanup(); vi.unstubAllEnvs(); mocks.push.mockReset(); await uiI18n.changeLanguage('en'); });
 
 it('mounts a tab only when visited and retains its draft when switching back', async () => {
   render(<SettingsPage />);
@@ -55,4 +56,13 @@ it('does not render evaluation tools without the production opt-in', () => {
   render(<SettingsPage />);
   expect(screen.queryByRole('tab', { name: 'Evaluation Tools' })).toBeNull();
   expect(screen.queryByText('Short-Turn Annotation Workspace')).toBeNull();
+});
+
+it('localizes the evaluation tools entry with the shared UI language', async () => {
+  vi.stubEnv('NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION', 'true');
+  await uiI18n.changeLanguage('zh-CN');
+  render(<SettingsPage />);
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '评测工具' }), { button: 0 });
+  expect(await screen.findByText('短会话标注工作台')).toBeTruthy();
+  expect(screen.getByRole('button', { name: '打开标注工作台' })).toBeTruthy();
 });

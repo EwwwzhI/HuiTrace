@@ -34,7 +34,7 @@ export default function SettingsPage() {
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
   const annotationWorkspaceEnabled = isShortTurnAnnotationEnabled();
   const tabs = annotationWorkspaceEnabled
-    ? [...TABS, { value: 'evaluation', label: 'Evaluation Tools', icon: FlaskConical }]
+    ? [...TABS, { value: 'evaluation', label: translateUI('Evaluation Tools'), icon: FlaskConical }]
     : TABS;
 
   // Animation state for tabs
@@ -115,12 +115,12 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
                   <div className="max-w-2xl">
                     <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><FlaskConical aria-hidden="true" className="h-5 w-5" /></div>
-                    <h2 id="short-turn-workspace-title" className="font-heading text-xl font-semibold">Short-Turn Annotation Workspace</h2>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">Build and review local ground truth for short-turn speaker diarization evaluation.</p>
-                    <p className="mt-3 text-xs font-medium tracking-wide text-muted-foreground">Blind Annotation · Review · QA · Benchmark Manifest</p>
+                    <h2 id="short-turn-workspace-title" className="font-heading text-xl font-semibold">{translateUI('Short-Turn Annotation Workspace')}</h2>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{translateUI('Build and review local Ground Truth for short-turn speaker diarization evaluation.')}</p>
+                    <p className="mt-3 text-xs font-medium tracking-wide text-muted-foreground">{translateUI('Blind annotation · Review · Quality assurance · Benchmark Manifest')}</p>
                   </div>
                   <Button onClick={() => router.push('/dev/short-turn-annotation')} className="shrink-0 gap-2">
-                    Open Annotation Workspace
+                    {translateUI('Open annotation workspace')}
                     <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </Button>
                 </div>

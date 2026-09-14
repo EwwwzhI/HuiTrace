@@ -50,8 +50,11 @@ export function UiLanguageProvider({ children }: { children: React.ReactNode }) 
   }, [choice]);
   return <Context.Provider value={{ choice, setChoice }}>{children}</Context.Provider>;
 }
+export function useUiLanguage() {
+  return useContext(Context);
+}
 export function UiLanguageSetting() {
-  const { choice, setChoice } = useContext(Context);
+  const { choice, setChoice } = useUiLanguage();
   const { t } = useUiTranslation();
   return <div className="rounded-lg border border-border bg-card p-6">
     <label htmlFor="ui-language" className="block text-lg font-semibold">{t('Interface language')}</label>
