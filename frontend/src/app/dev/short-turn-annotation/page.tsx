@@ -6,7 +6,7 @@ import {
   useMemo, useRef, useState,
 } from 'react';
 import { toast } from 'sonner';
-import { Check, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Redo2, Sun, Undo2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Plus, Redo2, Sun, Trash2, Undo2 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { isTauri } from '@/lib/isTauri';
 import { WaveformTimeline } from '@/components/short-turn-annotation/WaveformTimeline';
@@ -189,6 +189,22 @@ export default function ShortTurnAnnotationPage() {
   }, [annotationPass, commit, meetingId, updateSession]);
   const updateSelected = useCallback((patch: Partial<AnnotationEvent>) => { if (!selectedId) return; commit(current => ({ ...current, events: current.events.map(event => event.event_id === selectedId ? { ...event, ...patch } : event) })); }, [commit, selectedId]);
   const deleteSelected = useCallback(() => { if (!selectedId) return; commit(current => ({ ...current, events: current.events.filter(event => event.event_id !== selectedId) })); setSelectedId(null); }, [commit, selectedId]);
+  const addSpeaker = useCallback(() => {
+    updateSession(current => {
+      const usedKeys = new Set(current.speaker_map.map(speaker => speaker.key));
+      let number = 1;
+      while (usedKeys.has(`gt_speaker_${String(number).padStart(2, '0')}`)) number += 1;
+      return { ...current, speaker_map: [...current.speaker_map, { key: `gt_speaker_${String(number).padStart(2, '0')}`, description: '' }] };
+    });
+  }, [updateSession]);
+  const removeSpeaker = useCallback((key: string) => {
+    const referenceCount = draft.events.filter(event => event.speaker === key).length;
+    if (referenceCount > 0) {
+      toast.error(t('Cannot remove this speaker because {{count}} annotation events use it. Reassign those events first.', { count: referenceCount }));
+      return;
+    }
+    updateSession(current => ({ ...current, speaker_map: current.speaker_map.filter(speaker => speaker.key !== key) }));
+  }, [draft.events, t, updateSession]);
   const undo = useCallback(() => { setHistory(items => { const prior = items.at(-1); if (!prior) return items; setFuture(items2 => [draft, ...items2].slice(0, 50)); setDraft(prior); markDirty(); return items.slice(0, -1); }); }, [draft, markDirty]);
   const redo = useCallback(() => { setFuture(items => { const next = items[0]; if (!next) return items; setHistory(previous => [...previous, draft]); setDraft(next); markDirty(); return items.slice(1); }); }, [draft, markDirty]);
 
@@ -299,7 +315,23 @@ export default function ShortTurnAnnotationPage() {
           <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Source media')}</p>
           {video ? <video ref={audioRef as React.RefObject<HTMLVideoElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={onLoadedMetadata} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="aspect-video w-full rounded bg-black" /> : <div className="rounded bg-muted p-5"><audio ref={audioRef as React.RefObject<HTMLAudioElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={onLoadedMetadata} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="w-full" /><p className="mt-4 text-sm text-muted-foreground">{t('Audio-only source. Speaker map descriptions remain local-only.')}</p></div>}
           <div className="mt-3 flex flex-wrap gap-2"><button onClick={togglePlay} className="inline-flex items-center gap-1 rounded bg-secondary px-3 py-2 text-sm text-secondary-foreground">{isPlaying ? <Pause size={16} /> : <Play size={16} />}{isPlaying ? t('Pause') : t('Play')}</button>{[250, 500, 1000].map(padding => <button key={padding} onClick={() => playSelection(padding)} disabled={!selected} className="rounded border border-border bg-background px-2 py-1 text-xs hover:bg-accent disabled:opacity-40">{t('Event')} ±{padding} ms</button>)}<button onClick={() => setLoop(value => !value)} disabled={!selected} aria-pressed={loop} className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${loop ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background'}`}>{t('Loop')}</button></div>
-          <div className="mt-5 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Speaker map — local only')}</p>{session.speaker_map.map((speaker, index) => <div className="mb-2 grid grid-cols-[8rem_1fr] gap-2" key={speaker.key}><span className="rounded bg-muted p-1 text-center font-mono text-xs">{speaker.key}</span><input value={speaker.description} placeholder={t('Local description')} aria-label={t('Speaker local description', { number: index + 1 })} onChange={event => updateSession(current => ({ ...current, speaker_map: current.speaker_map.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item) }))} className="min-w-0 rounded border border-input bg-background px-2 text-sm text-foreground" /></div>)}<button onClick={() => updateSession(current => ({ ...current, speaker_map: [...current.speaker_map, { key: `gt_speaker_${String(current.speaker_map.length + 1).padStart(2, '0')}`, description: '' }] }))} className="text-sm text-primary underline">{t('Add speaker')}</button></div>
+          <div className="mt-5 border-t border-border pt-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Speaker map — local only')}</p>
+              <button type="button" onClick={addSpeaker} aria-label={t('Add speaker')} title={t('Add speaker')} className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-primary shadow-sm transition-colors hover:border-primary/50 hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card">
+                <Plus size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {session.speaker_map.map((speaker, index) => <div className="grid grid-cols-[8rem_minmax(0,1fr)_2rem] items-center gap-2" key={speaker.key}>
+                <span className="rounded bg-muted px-2 py-1.5 text-center font-mono text-xs">{speaker.key}</span>
+                <input value={speaker.description} placeholder={t('Local description')} aria-label={t('Speaker local description', { number: index + 1 })} onChange={event => updateSession(current => ({ ...current, speaker_map: current.speaker_map.map(item => item.key === speaker.key ? { ...item, description: event.target.value } : item) }))} className="min-w-0 rounded border border-input bg-background px-2 py-1.5 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+                <button type="button" onClick={() => removeSpeaker(speaker.key)} aria-label={t('Remove speaker {{speaker}}', { speaker: speaker.key })} title={t('Remove speaker {{speaker}}', { speaker: speaker.key })} className="inline-flex size-8 items-center justify-center rounded border border-transparent text-muted-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive">
+                  <Trash2 size={15} aria-hidden="true" />
+                </button>
+              </div>)}
+            </div>
+          </div>
         </aside>
         <section className="rounded-xl border border-border bg-card p-3"><div className="mb-3 flex items-center justify-between"><div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Canonical events')}</p><p className="text-sm text-muted-foreground">{t('Window')} {windows.length ? `${windowIndex + 1} / ${windows.length}` : '—'} · {t('Current time range')} {fmt(viewportStart)}–{fmt(viewportEnd)}</p></div><div className="flex gap-1"><button aria-label={t('Previous window')} onClick={() => goToWindow(windowIndex - 1)} disabled={!windowIndex} className="rounded p-2 hover:bg-accent disabled:opacity-30"><ChevronLeft /></button><button aria-label={t('Next window')} onClick={() => goToWindow(windowIndex + 1)} disabled={windowIndex >= windows.length - 1} className="rounded p-2 hover:bg-accent disabled:opacity-30"><ChevronRight /></button></div></div>
           <div className="space-y-2 overflow-y-auto pr-1 xl:max-h-[490px]">{displayedEvents.length === 0 ? <p className="rounded border border-dashed border-border p-5 text-sm text-muted-foreground">{t('Drag a region in the source timeline to create one canonical event.')}</p> : displayedEvents.map(event => <button key={event.event_id} onClick={() => setSelectedId(event.event_id)} className={`w-full rounded-lg border p-3 text-left transition ${selectedId === event.event_id ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}><div className="flex justify-between gap-2"><span className="font-mono text-xs text-muted-foreground">{event.event_id}</span><span className="rounded bg-muted px-1.5 text-xs">{durationBucket(event.end_ms - event.start_ms)}</span></div><p className="mt-1 font-medium">{t(kindKeys.find(kind => kind.value === event.kind)?.label ?? event.kind)} <span className="font-normal text-muted-foreground">· {event.speaker ?? t('No speaker')}</span></p><p className="mt-1 font-mono text-xs text-muted-foreground">{fmt(event.start_ms)}–{fmt(event.end_ms)} · {event.end_ms - event.start_ms} ms {event.overlap && `· ${t('Overlap')}`} {event.speaker_handoff && `· ${t('Speaker handoff')}`} {event.embedded && `· ${t('Embedded')}`} {event.annotation_uncertain && `· ${t('Annotation uncertain')}`}</p></button>)}</div>

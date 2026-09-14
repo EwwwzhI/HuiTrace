@@ -1100,6 +1100,8 @@
   "Local description": "本地备注",
   "Speaker local description": "说话人 {{number}} 的本地备注",
   "Add speaker": "添加说话人",
+  "Remove speaker {{speaker}}": "删除说话人 {{speaker}}",
+  "Cannot remove this speaker because {{count}} annotation events use it. Reassign those events first.": "无法删除该说话人，因为有 {{count}} 个标注事件正在使用。请先重新分配这些事件。",
   "Canonical events": "标准事件",
   "Window": "窗口",
   "Current time range": "当前时间范围",

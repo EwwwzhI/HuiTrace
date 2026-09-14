@@ -131,6 +131,30 @@ it('refuses Blind completion until the annotator explicitly confirms the event',
   expect(mocks.toastError).not.toHaveBeenCalled();
 });
 
+it('adds and removes unused speakers with unique keys', async () => {
+  const speakers = structuredClone(snapshot);
+  speakers.session.speaker_map.push({ key: 'gt_speaker_03', description: 'Guest' });
+  mocks.invoke.mockImplementation((command: string) => command === 'load_workspace' ? Promise.resolve(speakers) : Promise.resolve(null));
+  render(<ShortTurnAnnotationPage />);
+  await loadWorkspace();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Add speaker' }));
+  expect(screen.getAllByText('gt_speaker_02').length).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Remove speaker gt_speaker_02' }));
+  expect(screen.queryByRole('button', { name: 'Remove speaker gt_speaker_02' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove speaker gt_speaker_03' })).toBeTruthy();
+});
+
+it('prevents deleting a speaker that is still assigned to annotation events', async () => {
+  render(<ShortTurnAnnotationPage />);
+  await loadWorkspace();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Remove speaker gt_speaker_01' }));
+  expect(mocks.toastError).toHaveBeenCalledWith('Cannot remove this speaker because 1 annotation events use it. Reassign those events first.');
+  expect(screen.getByRole('button', { name: 'Remove speaker gt_speaker_01' })).toBeTruthy();
+});
+
 it('keeps export disabled after successful QA when Review is only partial', async () => {
   const partial = structuredClone(snapshot);
   partial.mode = 'review';

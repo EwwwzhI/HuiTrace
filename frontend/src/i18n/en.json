@@ -1078,6 +1078,8 @@
   "Local description": "Local description",
   "Speaker local description": "Speaker {{number}} local description",
   "Add speaker": "Add speaker",
+  "Remove speaker {{speaker}}": "Remove speaker {{speaker}}",
+  "Cannot remove this speaker because {{count}} annotation events use it. Reassign those events first.": "Cannot remove this speaker because {{count}} annotation events use it. Reassign those events first.",
   "Canonical events": "Canonical events",
   "Window": "Window",
   "Current time range": "current time range",
