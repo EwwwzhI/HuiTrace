@@ -128,3 +128,28 @@ experimental path against both the frozen and tuned model-free baselines.
 - Pipeline mode remains unsupported to avoid duplicating inference lifecycle.
 - Materialization safety counters must be captured by production artifacts;
   annotated evidence replay explicitly reports them as not exercised.
+
+## Phase 2D.2 local annotation workspace
+
+`/dev/short-turn-annotation` is an unlinked development/evaluation route. It
+is available in development builds, or when
+`NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION=true` is supplied to an evaluation
+build. It stores a meeting-local `annotation_session.json` and
+`annotations.draft.json` next to the already-exported windows and artifact.
+Neither source media paths nor speaker-map descriptions are emitted to a
+benchmark manifest.
+
+The first pass reads only `annotation_windows.blind.jsonl`; the Tauri boundary
+clears all suggestion fields before returning its viewport. Review is locked
+until every blind viewport has `reviewed_blind` status and then reads only the
+review window suggestions. Production artifacts are validated but never used to
+run inference from this workspace.
+
+Use **Run QA** before **Export Benchmark Manifest**. Export replaces the current
+meeting's rows in the dataset-root `manifest.jsonl`, also writes a convenient
+per-meeting copy, and invokes the existing `evaluation::dataset::check_dataset`
+logic. Continue frozen replay with the existing command:
+
+```text
+cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset/local --mode production-artifact-replay
+```

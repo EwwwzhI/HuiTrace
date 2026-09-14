@@ -306,6 +306,16 @@ pub fn possible_duplicates<T: GateSample>(rows: &[T]) -> Vec<DuplicateCandidate>
             );
             let center_distance =
                 ((left.start_ms() + left.end_ms()) - (right.start_ms() + right.end_ms())).abs() / 2;
+            // Concurrent speakers can truthfully occupy the same source-time
+            // interval.  Do not flag that Phase 2D.1a ambiguity as a duplicate.
+            if left.tags().iter().any(|tag| tag == "overlap")
+                && right.tags().iter().any(|tag| tag == "overlap")
+                && left.ground_truth_speaker().is_some()
+                && right.ground_truth_speaker().is_some()
+                && left.ground_truth_speaker() != right.ground_truth_speaker()
+            {
+                continue;
+            }
             if iou >= 0.80 || (iou >= 0.60 && center_distance <= 75) {
                 duplicates.push(DuplicateCandidate {
                     meeting_id: left.meeting_id().to_string(),
@@ -469,5 +479,15 @@ mod tests {
         assert_eq!(duplicates.len(), 1);
         assert_eq!(duplicates[0].first_event_id, "one");
         assert_eq!(duplicates[0].second_event_id, "two");
+    }
+
+    #[test]
+    fn same_time_different_speaker_overlap_is_not_a_duplicate() {
+        let mut first = sample("one");
+        first.tags = vec!["overlap".into()];
+        let mut second = sample("two");
+        second.tags = vec!["overlap".into()];
+        second.ground_truth_speaker = Some("speaker_02".into());
+        assert!(possible_duplicates(&[first, second]).is_empty());
     }
 }
