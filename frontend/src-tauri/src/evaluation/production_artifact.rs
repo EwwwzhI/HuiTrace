@@ -221,27 +221,55 @@ pub fn validate_artifact(
             ARTIFACT_SCHEMA_VERSION
         );
     }
-    if artifact.artifact_id.trim().is_empty()
-        || artifact.transcription_run_id.trim().is_empty()
-        || artifact.meeting_id.trim().is_empty()
-        || expected_meeting.is_some_and(|meeting| artifact.meeting_id != meeting)
-        || artifact.created_at.trim().is_empty()
-        || !valid_commit_sha(&artifact.app_commit_sha)
-        || artifact.source_audio.duration_ms <= 0
-        || artifact.asr.backend.trim().is_empty()
-        || artifact.asr.model.trim().is_empty()
-        || !valid_version_or_hash(artifact.asr.version_or_hash.as_deref())
-        || artifact.diarization.backend.trim().is_empty()
+    if artifact.artifact_id.trim().is_empty() {
+        bail!("artifact id is missing");
+    }
+    if artifact.transcription_run_id.trim().is_empty() {
+        bail!("artifact transcription run id is missing");
+    }
+    if artifact.meeting_id.trim().is_empty() {
+        bail!("artifact meeting id is missing");
+    }
+    if let Some(expected) = expected_meeting {
+        if artifact.meeting_id != expected {
+            bail!(
+                "production artifact belongs to meeting '{}', but the requested Meeting ID is '{}'",
+                artifact.meeting_id,
+                expected
+            );
+        }
+    }
+    if artifact.created_at.trim().is_empty() {
+        bail!("artifact creation timestamp is missing");
+    }
+    if !valid_commit_sha(&artifact.app_commit_sha) {
+        bail!("artifact app commit SHA is missing or invalid");
+    }
+    if artifact.source_audio.duration_ms <= 0 {
+        bail!("artifact source audio duration must be greater than zero");
+    }
+    if artifact.asr.backend.trim().is_empty() || artifact.asr.model.trim().is_empty() {
+        bail!("artifact ASR backend or model is missing");
+    }
+    if !valid_version_or_hash(artifact.asr.version_or_hash.as_deref()) {
+        bail!("artifact ASR version or hash is invalid");
+    }
+    if artifact.diarization.backend.trim().is_empty()
         || artifact.diarization.model.trim().is_empty()
-        || !valid_version_or_hash(artifact.diarization.version_or_hash.as_deref())
-        || artifact
-            .production_config
-            .vad_implementation
-            .trim()
-            .is_empty()
+    {
+        bail!("artifact diarization backend or model is missing");
+    }
+    if !valid_version_or_hash(artifact.diarization.version_or_hash.as_deref()) {
+        bail!("artifact diarization version or hash is invalid");
+    }
+    if artifact
+        .production_config
+        .vad_implementation
+        .trim()
+        .is_empty()
         || !artifact.production_config.vad_runtime_config.is_object()
     {
-        bail!("artifact identity, backend, source duration, or config snapshot is incomplete");
+        bail!("artifact VAD implementation or runtime config snapshot is missing");
     }
     validate_production_config(&artifact.production_config)?;
     let duration = artifact.source_audio.duration_ms;
@@ -641,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_timing_confidence_and_meeting_mismatch_are_rejected() {
+    fn invalid_timing_and_confidence_are_rejected() {
         let mut timing = artifact();
         timing.transcripts[0].end_ms = 3_000;
         assert!(validate_artifact(&timing, Some("meeting-1")).is_err());
@@ -649,8 +677,17 @@ mod tests {
         let mut confidence = artifact();
         confidence.raw_diarizer_turns[0].confidence = Some(1.1);
         assert!(validate_artifact(&confidence, Some("meeting-1")).is_err());
+    }
 
-        assert!(validate_artifact(&artifact(), Some("meeting-2")).is_err());
+    #[test]
+    fn meeting_mismatch_reports_both_ids() {
+        let error = validate_artifact(&artifact(), Some("meeting-2"))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "production artifact belongs to meeting 'meeting-1', but the requested Meeting ID is 'meeting-2'"
+        );
     }
 
     #[test]

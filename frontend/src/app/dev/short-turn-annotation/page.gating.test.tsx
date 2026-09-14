@@ -6,7 +6,11 @@ import ShortTurnAnnotationPage from './page';
 
 vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path, invoke: vi.fn() }));
 
-afterEach(() => { cleanup(); vi.unstubAllEnvs(); });
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs();
+  window.history.replaceState({}, '', '/');
+});
 
 it('retains route-level protection in production', () => {
   vi.stubEnv('NODE_ENV', 'production');
@@ -14,4 +18,11 @@ it('retains route-level protection in production', () => {
   render(<ShortTurnAnnotationPage />);
   expect(screen.getByText('Development evaluation route is disabled')).toBeTruthy();
   expect(screen.queryByText('Initialize annotation project')).toBeNull();
+});
+
+it('prefills the real meeting id supplied by Meeting Details', () => {
+  vi.stubEnv('NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION', 'true');
+  window.history.replaceState({}, '', '/dev/short-turn-annotation?meetingId=meeting-real-001');
+  render(<ShortTurnAnnotationPage />);
+  expect((screen.getByLabelText('Meeting ID') as HTMLInputElement).value).toBe('meeting-real-001');
 });

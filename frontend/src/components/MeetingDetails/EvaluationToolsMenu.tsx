@@ -118,7 +118,11 @@ export function EvaluationToolsMenu({
           </span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          onSelect={() => router.push('/dev/short-turn-annotation')}
+          onSelect={() => router.push(
+            meetingId
+              ? `/dev/short-turn-annotation?meetingId=${encodeURIComponent(meetingId)}`
+              : '/dev/short-turn-annotation',
+          )}
           className="items-start py-2"
         >
           <ExternalLink aria-hidden="true" className="mt-0.5" />

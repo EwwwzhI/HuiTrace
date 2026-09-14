@@ -52,6 +52,11 @@ const defaultSession = (meeting = ''): Session => ({ schema_version: 1, meeting_
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const fmt = (value: number) => `${(value / 1000).toFixed(3)}s`;
 
+function meetingIdFromLocation() {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get('meetingId')?.trim() ?? '';
+}
+
 function mediaUrl(path: string) {
   if (!path) return '';
   return isTauri() ? convertFileSrc(path) : path;
@@ -69,7 +74,7 @@ export default function ShortTurnAnnotationPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const [themeMounted, setThemeMounted] = useState(false);
   const [datasetDir, setDatasetDir] = useState('evaluation/short_turn_dataset/local');
-  const [meetingId, setMeetingId] = useState('');
+  const [meetingId, setMeetingId] = useState(meetingIdFromLocation);
   const [annotationPass, setAnnotationPass] = useState<AnnotationPass>('blind');
   const [panel, setPanel] = useState<WorkspacePanel>('annotation');
   const [initialized, setInitialized] = useState(false);

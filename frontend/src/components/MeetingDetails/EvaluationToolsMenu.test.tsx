@@ -148,7 +148,7 @@ describe('EvaluationToolsMenu', () => {
     renderMenu(done());
     openMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /Open Annotation Workspace/ }));
-    expect(mocks.push).toHaveBeenCalledWith('/dev/short-turn-annotation');
+    expect(mocks.push).toHaveBeenCalledWith('/dev/short-turn-annotation?meetingId=meeting-1');
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
