@@ -80,15 +80,18 @@ command; it does not rerun ASR, diarization, VAD, or ShortTurn inference.
 
 Use this end-to-end workflow for a real meeting:
 
-1. Record or import a real meeting in HuiTrace.
-2. Complete transcription.
-3. Run **Identify Speakers** and wait for it to complete.
-4. Open **Evaluation Tools** in Meeting Details and choose **Export Production Artifact**.
-5. Run `short_turn_export` with the meeting media and exported artifact to create Blind and Review windows.
-6. Choose **Open Annotation Workspace** and initialize the generated project.
-7. Complete Blind, then Review, run QA, save, and export the benchmark manifest.
-8. Run `short_turn_dataset_check` against the local dataset root.
-9. Run `short_turn_benchmark --mode production-artifact-replay` for frozen replay.
+1. Finish recording/import and transcription in the normal meeting UI.
+2. Finish **Identify Speakers**.
+3. Export the Production Artifact from Meeting Details.
+4. Open the Annotation Workspace.
+5. Select Dataset Root.
+6. Select Source Media.
+7. Select the Production Artifact.
+8. Verify the Meeting ID read automatically from the validated artifact.
+9. Choose **Prepare annotation data**. HuiTrace creates `<dataset-root>/<meeting-id>/`, copies the artifact into that controlled directory with SHA-256 verification, and creates 5 s Blind and Review windows at a 4 s stride.
+10. Check the artifact and generated-window summary.
+11. Choose **Initialize and start Blind annotation**. Source media is copied into the application audio directory only during this initialization step.
+12. Complete Blind → Review → QA → Export, then use `short_turn_dataset_check` and frozen Production Artifact replay for dataset-level validation.
 
 Cancelling the native export dialog makes no change. A missing completed snapshot
 means the meeting must finish normal production speaker analysis before retrying.
@@ -131,15 +134,15 @@ does not rerun ASR, VAD, diarization or short-turn inference.
 
 ## Known limits
 
-The desktop UI accepts local source paths rather than copying media. Browser
-container support is platform-dependent; WAV and MP4 are the supported baseline.
+The desktop UI accepts native picker selections or manually entered local paths.
+Browser container support is platform-dependent; WAV and MP4 are the supported baseline.
 The first UI exposes existing frozen replay through the documented CLI, rather
 than bundling a second benchmark binary launcher.
 # Phase 2D.2a integrity model
 
 ## Project initialization and media boundary
 
-An exported meeting is not an annotation project until **Initialize Project** succeeds. The backend validates the dataset/meeting identifiers, both Blind and Review window files, their `production_artifact_path`, the schema-v2 Production Artifact, and the source-media type. It then creates `annotation_project.json`, `annotation_session.json`, and `annotations.draft.json` as one backend-owned workflow and opens Blind mode. Source WAV/MP3/M4A/MP4/WebM media is copied beneath the application audio directory (`mityu-recordings/huitrace-annotation/<meeting_id>`), which is already inside the narrow Tauri asset-protocol scope; arbitrary filesystem access is not enabled.
+An exported meeting is not an annotation project until **Initialize and start Blind annotation** succeeds. Preparation first validates Dataset Root, source media, Production Artifact schema and identity, and the derived Meeting ID. It refuses to replace existing windows or an initialized project. An identical controlled artifact may be reused; different content at the controlled path is rejected. Initialization then validates both Blind and Review window files, their `production_artifact_path`, schema-v2 artifact, and source-media type. It creates `annotation_project.json`, `annotation_session.json`, and `annotations.draft.json` as one backend-owned workflow and opens Blind mode. Source WAV/MP3/M4A/MP4/WebM media is copied beneath the application audio directory (`mityu-recordings/huitrace-annotation/<meeting_id>`), which is already inside the narrow Tauri asset-protocol scope; arbitrary filesystem access is not enabled.
 
 The project binds the artifact ID, SHA-256, schema version, transcription run ID, and dataset-relative path. Load, Review, save, QA, and export revalidate that identity. Replacing or modifying the artifact is a hard failure.
 
@@ -161,7 +164,17 @@ Blind exposes only media, waveform, manual GT, local speaker helpers, progress, 
 
 ## Operational smoke workflow
 
-For one 10–15 minute, 2–4 speaker meeting: run production processing; export Production Artifact v2; run `short_turn_export`; initialize the project without editing JSON; annotate and close/reopen midway through Blind; finish all Blind windows; repeat the close/reopen check midway through Review; run QA; export `manifest.jsonl`; run `short_turn_dataset_check`; then run `short_turn_benchmark --mode production-artifact-replay`. With only one meeting, `INSUFFICIENT_REPRESENTATIVE_DATA` is the expected gate result. The workspace never invokes ASR, diarization, VAD, or ShortTurn inference.
+For one 10–15 minute, 2–4 speaker meeting: run production processing; export Production Artifact v2; open the workspace and select Dataset Root, source media, and the artifact; prepare annotation data; initialize without editing JSON; annotate and close/reopen midway through Blind; finish all Blind windows; repeat the close/reopen check midway through Review; run QA; export `manifest.jsonl`; run `short_turn_dataset_check`; then run `short_turn_benchmark --mode production-artifact-replay`. With only one meeting, `INSUFFICIENT_REPRESENTATIVE_DATA` is the expected gate result. The workspace preparation service only replays the existing frozen short-turn candidate extractor over the exported evidence; it does not invoke ASR, diarization, or VAD.
+
+### CLI fallback
+
+For automation or recovery, `short_turn_export` remains compatible and calls the same shared Rust export service as the UI:
+
+```powershell
+cargo run -p huitrace --bin short_turn_export -- --audio C:\path\meeting.wav --meeting-id meeting-1 --output C:\dataset\meeting-1 --production-artifact C:\path\meeting-1.production.json
+```
+
+The CLI writes window files directly to `--output`; operators must still place the Production Artifact at the controlled meeting path expected by initialization. The UI preparation path is preferred because it validates, copies, verifies, and binds that artifact before generating windows.
 
 
 ## Phase 2D.2a-final: Blind Completion Integrity

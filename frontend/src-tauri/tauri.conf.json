@@ -58,6 +58,7 @@
                         "core:menu:default",
                         "core:tray:default",
                         "core:window:allow-set-title",
+                        "dialog:allow-open",
                         "store:default",
                         "notification:default",
                         "notification:allow-is-permission-granted",

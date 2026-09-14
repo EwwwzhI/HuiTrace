@@ -10,9 +10,11 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   setTheme: vi.fn(),
   toastError: vi.fn(),
+  open: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path, invoke: mocks.invoke }));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: vi.fn() } }));
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light', setTheme: mocks.setTheme }) }));
 vi.mock('@/components/short-turn-annotation/WaveformTimeline', () => ({ WaveformTimeline: () => <div>controlled waveform</div> }));
@@ -41,7 +43,8 @@ const snapshot = {
 };
 
 async function loadWorkspace(pass: 'blind' | 'review' = 'blind') {
-  fireEvent.change(screen.getByLabelText(/Meeting ID|会议 ID/), { target: { value: 'meeting-demo-001' } });
+  fireEvent.click(screen.getByText(/Open existing annotation project|打开已有标注项目/));
+  fireEvent.change(screen.getByLabelText(/Existing Meeting ID|已有项目 Meeting ID/), { target: { value: 'meeting-demo-001' } });
   fireEvent.click(screen.getByRole('button', { name: pass === 'blind' ? /Open blind pass|打开盲标阶段/ : /Review|复核/ }));
   await screen.findByText('meeting-demo-001-event-0001');
 }
@@ -57,6 +60,7 @@ afterEach(async () => {
   mocks.invoke.mockReset();
   mocks.setTheme.mockReset();
   mocks.toastError.mockReset();
+  mocks.open.mockReset();
   localStorage.clear();
   await uiI18n.changeLanguage('en');
 });
@@ -66,7 +70,7 @@ it('renders the complete core workflow in Chinese', async () => {
   render(<ShortTurnAnnotationPage />);
   expect(screen.getByText('短会话标注工作台')).toBeTruthy();
   expect(screen.getByText('初始化标注项目')).toBeTruthy();
-  expect(screen.getByText('盲标阶段')).toBeTruthy();
+  expect(screen.getAllByText('盲标阶段').length).toBeGreaterThan(0);
   await loadWorkspace();
   expect(screen.getByRole('button', { name: '运行质量检查' })).toBeTruthy();
 });
@@ -133,4 +137,40 @@ it('keeps export disabled after successful QA when Review is only partial', asyn
   await screen.findByText('Review progress 1 / 2', { exact: false });
   expect((screen.getByRole('button', { name: 'Export benchmark manifest' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText('Complete all Review windows before exporting the Benchmark Manifest.', { exact: false })).toBeTruthy();
+});
+
+it('enters Blind immediately after the prepared project is initialized', async () => {
+  mocks.open.mockImplementation((options: { directory?: boolean; title?: string }) => {
+    if (options.directory) return Promise.resolve('C:\\dataset');
+    if (options.title?.includes('Source')) return Promise.resolve('C:\\meeting.wav');
+    return Promise.resolve('C:\\meeting.production.json');
+  });
+  mocks.invoke.mockImplementation((command: string) => {
+    if (command === 'api_inspect_short_turn_production_artifact') return Promise.resolve({
+      meetingId: 'meeting-demo-001', artifactId: 'artifact-1', schemaVersion: 2,
+      transcriptionRunId: 'run-1', durationMs: 5_000,
+      asrBackend: 'whisper.cpp', asrModel: 'large-v3',
+      diarizationBackend: 'sherpa-onnx', diarizationModel: 'campplus',
+      transcriptCount: 1, diarizerTurnCount: 1, vadEventCount: 1,
+    });
+    if (command === 'api_prepare_short_turn_annotation_windows') return Promise.resolve({
+      meetingId: 'meeting-demo-001', blindWindowCount: 1, reviewWindowCount: 1,
+      candidateCount: 1, controlledProductionArtifact: 'C:\\dataset\\meeting-demo-001\\meeting-demo-001.production.json',
+      blindManifest: 'blind.jsonl', reviewManifest: 'review.jsonl',
+    });
+    if (command === 'initialize_annotation_project') return Promise.resolve(snapshot);
+    return Promise.resolve(null);
+  });
+
+  render(<ShortTurnAnnotationPage />);
+  fireEvent.click(screen.getByRole('button', { name: 'Select folder' }));
+  const fileButtons = screen.getAllByRole('button', { name: 'Select file' });
+  fireEvent.click(fileButtons[0]);
+  fireEvent.click(fileButtons[1]);
+  await waitFor(() => expect((screen.getByLabelText(/^Meeting ID/) as HTMLInputElement).value).toBe('meeting-demo-001'));
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare annotation data' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Initialize and start Blind annotation' }));
+
+  expect(await screen.findByText('meeting-demo-001-event-0001')).toBeTruthy();
+  expect(screen.getAllByText('Blind annotation').length).toBeGreaterThan(0);
 });

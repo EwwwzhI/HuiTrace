@@ -147,12 +147,25 @@ diarization lifecycle is `done`; a completed zero-turn result is still valid.
 The bridge consumes the existing lifecycle and export command and never launches
 inference or builds an artifact in the browser.
 
-The operator sequence is: record/import a real meeting → complete transcription
-→ Identify Speakers → export Production Artifact from Meeting Details → run
-`short_turn_export` → open and initialize the annotation workspace → Blind →
-Review → QA → save/export → `short_turn_dataset_check` → frozen Production
-Artifact replay. This is the supported UI entry path for the real-meeting human
-annotation smoke workflow.
+The recommended real-meeting workflow is:
+
+1. Finish recording/import and transcription in the normal meeting UI.
+2. Finish **Identify Speakers**.
+3. Export the Production Artifact from Meeting Details.
+4. Open the Annotation Workspace.
+5. Select Dataset Root.
+6. Select Source Media.
+7. Select the Production Artifact.
+8. Verify the Meeting ID read automatically from the validated artifact.
+9. Choose **Prepare annotation data**.
+10. Check the Blind/Review window and candidate summary.
+11. Choose **Initialize and start Blind annotation**.
+12. Complete Blind → Review → QA → Export.
+
+The backend creates `dataset_root/meeting_id`, copies and SHA-verifies the
+controlled artifact, and uses the shared 5 s window / 4 s stride export service.
+Prepare and Initialize remain separate operations; only Initialize copies source
+media to HuiTrace's controlled application directory.
 
 The first pass reads only `annotation_windows.blind.jsonl`; the Tauri boundary
 clears all suggestion fields before returning its viewport. Review is locked
@@ -168,6 +181,11 @@ logic. Continue frozen replay with the existing command:
 ```text
 cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset/local --mode production-artifact-replay
 ```
+
+`short_turn_export` remains available for automation, debugging, and
+reproducibility. It parses CLI arguments and calls the same Rust export service
+used by the Tauri preparation command; it does not contain a second candidate or
+audio-slicing implementation.
 
 
 ## Phase 2D.2a-final: Blind Completion Integrity

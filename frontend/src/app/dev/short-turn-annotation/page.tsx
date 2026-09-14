@@ -6,10 +6,11 @@ import {
   useMemo, useRef, useState,
 } from 'react';
 import { toast } from 'sonner';
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Redo2, Sun, Undo2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Redo2, Sun, Undo2 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { isTauri } from '@/lib/isTauri';
 import { WaveformTimeline } from '@/components/short-turn-annotation/WaveformTimeline';
+import { AnnotationProjectSetup } from '@/components/short-turn-annotation/AnnotationProjectSetup';
 import { durationBucket, pendingInWindow, reviewCompletion } from '@/lib/annotationIntegrity';
 import { isShortTurnAnnotationEnabled } from '@/lib/shortTurnAnnotationFeature';
 import { useUiTranslation } from '@/i18n/client';
@@ -201,11 +202,19 @@ export default function ShortTurnAnnotationPage() {
   const goToWindow = useCallback((index: number) => { const next = clamp(index, 0, Math.max(0, windows.length - 1)); setWindowIndex(next); const row=windows[next]; if (row) { seek(row.source_start_ms); updateSession(current => ({ ...current, [annotationPass === 'blind' ? 'last_blind_window_id' : 'last_review_window_id']: row.window_id })); } }, [annotationPass, seek, updateSession, windows]);
   const completeWindow = useCallback(() => { if (!currentWindow) return; const pending = pendingInWindow(draft.events, currentWindow, annotationPass === 'review'); if (pending) { toast.error(t('This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.', { count: pending })); return; } const status = annotationPass === 'blind' ? 'reviewed_blind' : 'reviewed_second_pass'; updateSession(current => ({ ...current, window_status: { ...current.window_status, [currentWindow.window_id]: status } })); const next = windows.findIndex((row, index) => index > windowIndex && session.window_status[row.window_id] !== status); if (next >= 0) goToWindow(next); }, [annotationPass, currentWindow, draft.events, goToWindow, session.window_status, t, updateSession, windowIndex, windows]);
   const initializeProject = useCallback(async (sourceMediaPath: string, productionArtifactPath: string) => {
-    if (!datasetDir.trim() || !meetingId.trim()) return toast.error(t('Dataset folder and Meeting ID are required'));
+    if (!datasetDir.trim() || !meetingId.trim()) {
+      toast.error(t('Dataset folder and Meeting ID are required'));
+      return false;
+    }
     try {
       const result = await invoke<Snapshot>('initialize_annotation_project', { request: { datasetDir, meetingId, sourceMediaPath, productionArtifactPath } });
       setDraft(result.draft); setSession(result.session); draftRef.current=result.draft; sessionRef.current=result.session; allocatorRef.current=result.session.next_event_sequence; setWindows(result.windows); setReviewEvidence(null); setInitialized(true); setAnnotationPass('blind'); setPanel('annotation'); setWindowIndex(0); setEditRevision(0); setSavedRevision(0); toast.success(t('Annotation project initialized'));
-    } catch (error) { toast.error(String(error)); }
+      return true;
+    } catch (error) {
+      console.error('initialize_annotation_project failed', error);
+      toast.error(`${t('Initialize failed')}: ${String(error)}`);
+      return false;
+    }
   }, [datasetDir, meetingId, t]);
 
   useEffect(() => {
@@ -259,13 +268,24 @@ export default function ShortTurnAnnotationPage() {
         <span aria-live="polite" className={saveFailed ? 'text-destructive' : editRevision === savedRevision && savingRevision === null ? 'text-success' : 'text-warning'}>{saveStatus}</span>
       </div>
     </header>
-    <section className="mb-3 grid gap-2 rounded-xl border border-border bg-card/70 p-3 md:grid-cols-[minmax(220px,1.3fr)_minmax(180px,1fr)_auto_auto]">
-      <label className="text-xs text-muted-foreground">{t('Dataset directory')}<input value={datasetDir} onChange={event => setDatasetDir(event.target.value)} className="mt-1 w-full rounded border border-input bg-background px-2 py-1.5 font-mono text-sm text-foreground" /></label>
-      <label className="text-xs text-muted-foreground">{t('Meeting ID')}<input value={meetingId} onChange={event => setMeetingId(event.target.value)} className="mt-1 w-full rounded border border-input bg-background px-2 py-1.5 font-mono text-sm text-foreground" /></label>
-      <div className="flex items-end gap-2"><button onClick={() => load('blind')} className="whitespace-nowrap rounded bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground">{t('Open blind pass')}</button><button onClick={() => load('review')} className="whitespace-nowrap rounded border border-border bg-background px-3 py-2 text-sm text-foreground hover:bg-accent">{t('Review')}</button></div>
-      <p className="self-end text-xs text-muted-foreground">{t('Local files only · no telemetry · no upload')}</p>
-    </section>
-    {!initialized ? <Setup initialize={initializeProject} /> : <>
+    {!initialized ? <>
+      <AnnotationProjectSetup datasetRoot={datasetDir} setDatasetRoot={setDatasetDir} meetingId={meetingId} setMeetingId={setMeetingId} initialize={initializeProject} />
+      <details className="mx-auto mt-3 max-w-3xl rounded-xl border border-border bg-card">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold">{t('Open existing annotation project')}</summary>
+        <section className="grid gap-2 border-t border-border p-3 md:grid-cols-[minmax(220px,1.3fr)_minmax(180px,1fr)_auto_auto]">
+          <label className="text-xs text-muted-foreground">{t('Dataset Root')}<input value={datasetDir} onChange={event => setDatasetDir(event.target.value)} className="mt-1 w-full rounded border border-input bg-background px-2 py-1.5 font-mono text-sm text-foreground" /></label>
+          <label className="text-xs text-muted-foreground">{t('Existing Meeting ID')}<input value={meetingId} onChange={event => setMeetingId(event.target.value)} className="mt-1 w-full rounded border border-input bg-background px-2 py-1.5 font-mono text-sm text-foreground" /></label>
+          <div className="flex items-end gap-2"><button onClick={() => load('blind')} className="whitespace-nowrap rounded bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground">{t('Open blind pass')}</button><button onClick={() => load('review')} className="whitespace-nowrap rounded border border-border bg-background px-3 py-2 text-sm text-foreground hover:bg-accent">{t('Review')}</button></div>
+          <p className="self-end text-xs text-muted-foreground">{t('Local files only · no telemetry · no upload')}</p>
+        </section>
+      </details>
+    </> : <>
+      <section className="mb-3 grid gap-2 rounded-xl border border-border bg-card/70 p-3 md:grid-cols-[minmax(220px,1.3fr)_minmax(180px,1fr)_auto_auto]">
+        <label className="text-xs text-muted-foreground">{t('Dataset Root')}<input readOnly value={datasetDir} className="mt-1 w-full rounded border border-input bg-muted/50 px-2 py-1.5 font-mono text-sm text-foreground" /></label>
+        <label className="text-xs text-muted-foreground">{t('Meeting ID')}<input readOnly value={meetingId} className="mt-1 w-full rounded border border-input bg-muted/50 px-2 py-1.5 font-mono text-sm text-foreground" /></label>
+        <div className="flex items-end gap-2"><button onClick={() => load('blind')} className="whitespace-nowrap rounded bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground">{t('Open blind pass')}</button><button onClick={() => load('review')} className="whitespace-nowrap rounded border border-border bg-background px-3 py-2 text-sm text-foreground hover:bg-accent">{t('Review')}</button></div>
+        <p className="self-end text-xs text-muted-foreground">{t('Local files only · no telemetry · no upload')}</p>
+      </section>
       <section className="grid min-h-[560px] gap-3 xl:grid-cols-[minmax(280px,1.1fr)_minmax(300px,1fr)_minmax(300px,1fr)]">
         <aside className="rounded-xl border border-border bg-card p-3">
           <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Source media')}</p>
@@ -293,12 +313,6 @@ export default function ShortTurnAnnotationPage() {
     </>}
     <ShortcutHelp />
   </main>;
-}
-
-function Setup({ initialize }: { initialize: (source: string, artifact: string) => void }) {
-  const { t } = useUiTranslation();
-  const [source, setSource] = useState(''); const [artifact, setArtifact] = useState('');
-  return <section className="mx-auto max-w-2xl rounded-xl border border-primary/40 bg-card p-6"><h2 className="text-lg font-semibold">{t('Initialize annotation project')}</h2><p className="mt-1 text-sm text-muted-foreground">{t('Initialization validates the Blind and Review windows and the immutable Production Artifact, then copies media into HuiTrace’s controlled local directory.')}</p><label className="mt-4 block text-sm">{t('Source media (WAV, MP3, M4A, MP4, or WebM)')}<input value={source} onChange={event => setSource(event.target.value)} className="mt-1 w-full rounded border border-input bg-background p-2 font-mono text-sm text-foreground" /></label><label className="mt-3 block text-sm">{t('Production Artifact file')}<input value={artifact} onChange={event => setArtifact(event.target.value)} className="mt-1 w-full rounded border border-input bg-background p-2 font-mono text-sm text-foreground" /></label><button disabled={!source.trim() || !artifact.trim()} onClick={() => initialize(source, artifact)} className="mt-4 rounded bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-40">{t('Initialize project')}</button><p className="mt-4 rounded bg-warning/10 p-3 text-sm text-warning"><AlertTriangle className="mr-1 inline" size={16} />{t('Review stays locked until every expected Blind window is complete.')}</p></section>;
 }
 
 function Region({ event, selected, start, duration, onSelect, onEdge }: { event: AnnotationEvent; selected: boolean; start: number; duration: number; onSelect: () => void; onEdge: (event: PointerEvent<HTMLButtonElement>, edge: 'start' | 'end', item: AnnotationEvent) => void }) {

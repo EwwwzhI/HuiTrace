@@ -5,7 +5,7 @@
 //! artifact cannot create a second inference architecture.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -133,6 +133,23 @@ pub struct MeetingProductionArtifact {
     pub safety_observations: ProductionSafetyObservations,
     #[serde(default)]
     pub production_metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionArtifactInspection {
+    pub meeting_id: String,
+    pub artifact_id: String,
+    pub schema_version: u32,
+    pub transcription_run_id: String,
+    pub duration_ms: i64,
+    pub asr_backend: String,
+    pub asr_model: String,
+    pub diarization_backend: String,
+    pub diarization_model: String,
+    pub transcript_count: usize,
+    pub diarizer_turn_count: usize,
+    pub vad_event_count: usize,
 }
 
 fn valid_confidence(value: Option<f64>) -> bool {
@@ -331,6 +348,28 @@ pub fn read_and_validate_artifact(
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     validate_artifact(&artifact, expected_meeting)?;
     Ok(artifact)
+}
+
+#[tauri::command]
+pub fn api_inspect_short_turn_production_artifact(
+    path: PathBuf,
+) -> Result<ProductionArtifactInspection, String> {
+    let artifact = read_and_validate_artifact(&path, None)
+        .map_err(|error| format!("inspect Production Artifact: {error:#}"))?;
+    Ok(ProductionArtifactInspection {
+        meeting_id: artifact.meeting_id,
+        artifact_id: artifact.artifact_id,
+        schema_version: artifact.schema_version,
+        transcription_run_id: artifact.transcription_run_id,
+        duration_ms: artifact.source_audio.duration_ms,
+        asr_backend: artifact.asr.backend,
+        asr_model: artifact.asr.model,
+        diarization_backend: artifact.diarization.backend,
+        diarization_model: artifact.diarization.model,
+        transcript_count: artifact.transcripts.len(),
+        diarizer_turn_count: artifact.raw_diarizer_turns.len(),
+        vad_event_count: artifact.vad_events.len(),
+    })
 }
 
 /// Persist exactly the VAD/config/speaker state used by a successful run.
@@ -721,5 +760,70 @@ mod tests {
         let mut unknown = artifact();
         unknown.visible_speakers = vec!["speaker_02".into()];
         assert!(validate_artifact(&unknown, None).is_err());
+    }
+
+    #[test]
+    fn inspection_returns_only_validated_summary_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("artifact.json");
+        write_artifact(&path, &artifact()).unwrap();
+
+        let summary = api_inspect_short_turn_production_artifact(path).unwrap();
+        assert_eq!(summary.meeting_id, "meeting-1");
+        assert_eq!(summary.artifact_id, "artifact-1");
+        assert_eq!(summary.duration_ms, 2_000);
+        assert_eq!(summary.transcript_count, 1);
+        assert_eq!(summary.diarizer_turn_count, 1);
+        assert_eq!(summary.vad_event_count, 1);
+    }
+
+    #[test]
+    fn inspection_rejects_malformed_and_future_schema_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let malformed = directory.path().join("malformed.json");
+        std::fs::write(&malformed, b"{not-json").unwrap();
+        assert!(api_inspect_short_turn_production_artifact(malformed)
+            .unwrap_err()
+            .contains("parse"));
+
+        let future = directory.path().join("future.json");
+        let mut value = artifact();
+        value.schema_version += 1;
+        std::fs::write(&future, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(api_inspect_short_turn_production_artifact(future)
+            .unwrap_err()
+            .contains("is unsupported"));
+    }
+
+    #[test]
+    fn inspection_rejects_incomplete_identity_backend_duration_and_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let invalid_artifacts = [
+            {
+                let mut value = artifact();
+                value.artifact_id.clear();
+                value
+            },
+            {
+                let mut value = artifact();
+                value.source_audio.duration_ms = 0;
+                value
+            },
+            {
+                let mut value = artifact();
+                value.asr.backend.clear();
+                value
+            },
+            {
+                let mut value = artifact();
+                value.production_config.vad_implementation.clear();
+                value
+            },
+        ];
+        for (index, value) in invalid_artifacts.into_iter().enumerate() {
+            let path = directory.path().join(format!("invalid-{index}.json"));
+            std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(api_inspect_short_turn_production_artifact(path).is_err());
+        }
     }
 }

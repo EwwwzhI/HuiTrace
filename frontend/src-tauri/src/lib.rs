@@ -722,6 +722,8 @@ pub fn run() {
             diarization::commands::api_restore_transcript_speaker_assignment,
             diarization::commands::api_assign_short_turn_event_speaker,
             diarization::commands::api_restore_short_turn_event_speaker,
+            evaluation::production_artifact::api_inspect_short_turn_production_artifact,
+            evaluation::short_turn_export::api_prepare_short_turn_annotation_windows,
             evaluation::annotation_workspace::load_workspace,
             evaluation::annotation_workspace::initialize_annotation_project,
             evaluation::annotation_workspace::save_workspace,

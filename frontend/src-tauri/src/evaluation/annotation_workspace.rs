@@ -263,7 +263,7 @@ pub struct LocalQaReport {
     pub source_duration_ms: Option<i64>,
 }
 
-fn meeting_dir(root: &Path, meeting_id: &str) -> Result<PathBuf> {
+pub(super) fn meeting_dir(root: &Path, meeting_id: &str) -> Result<PathBuf> {
     if meeting_id.trim().is_empty() || meeting_id.contains(['/', '\\']) || meeting_id.contains("..")
     {
         bail!("meeting_id must be a simple local meeting identifier");

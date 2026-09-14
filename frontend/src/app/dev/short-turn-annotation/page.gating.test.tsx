@@ -24,5 +24,5 @@ it('prefills the real meeting id supplied by Meeting Details', () => {
   vi.stubEnv('NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION', 'true');
   window.history.replaceState({}, '', '/dev/short-turn-annotation?meetingId=meeting-real-001');
   render(<ShortTurnAnnotationPage />);
-  expect((screen.getByLabelText('Meeting ID') as HTMLInputElement).value).toBe('meeting-real-001');
+  expect((screen.getByLabelText(/^Meeting ID/) as HTMLInputElement).value).toBe('meeting-real-001');
 });
