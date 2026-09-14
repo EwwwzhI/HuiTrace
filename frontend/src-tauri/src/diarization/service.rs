@@ -307,6 +307,28 @@ fn extract_short_candidate_vad_events_with_config(
         .collect())
 }
 
+async fn run_short_candidate_vad_blocking<F>(work: F) -> Result<Vec<VadEventCandidateInput>>
+where
+    F: FnOnce() -> Result<Vec<VadEventCandidateInput>> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .context("short-candidate VAD task panicked")?
+}
+
+async fn extract_short_candidate_vad_events_guarded(
+    audio: &Path,
+    source: AudioSource,
+    config: &ShortCandidateVadConfig,
+) -> Result<Vec<VadEventCandidateInput>> {
+    let audio = audio.to_path_buf();
+    let config = config.clone();
+    run_short_candidate_vad_blocking(move || {
+        extract_short_candidate_vad_events_with_config(&audio, source, &config)
+    })
+    .await
+}
+
 /// Run one diarization pass and persist it.
 ///
 /// Persists even when the pass separated nothing: the stamp is what
@@ -337,11 +359,12 @@ pub async fn diarize_meeting(
         .collect();
     let production_config =
         crate::evaluation::production_artifact::ProductionConfigSnapshot::default();
-    let vad_events = extract_short_candidate_vad_events_with_config(
+    let vad_events = extract_short_candidate_vad_events_guarded(
         &audio,
         AudioSource::Mixed,
         &production_config.short_candidate_vad,
     )
+    .await
     .unwrap_or_else(|error| {
         log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
         Vec::new()
@@ -541,11 +564,12 @@ pub fn request_offline_diarization<R: Runtime>(
                     .collect();
                 let production_config =
                     crate::evaluation::production_artifact::ProductionConfigSnapshot::default();
-                let vad_events = extract_short_candidate_vad_events_with_config(
+                let vad_events = extract_short_candidate_vad_events_guarded(
                     &audio,
                     source.clone(),
                     &production_config.short_candidate_vad,
                 )
+                .await
                 .unwrap_or_else(|error| {
                     log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
                     Vec::new()
@@ -854,6 +878,18 @@ mod tests {
         let audio = dir.path().join("audio.mp4");
         std::fs::write(&audio, b"not really audio, but the probe is by name").expect("write");
         assert_eq!(meeting_audio(dir.path().to_str()), Some(audio));
+    }
+
+    #[tokio::test]
+    async fn short_candidate_vad_panic_becomes_a_recoverable_error() {
+        let error = run_short_candidate_vad_blocking(|| {
+            panic!("synthetic VAD panic");
+        })
+        .await
+        .expect_err("panic must cross the task boundary as an error");
+        assert!(error
+            .to_string()
+            .contains("short-candidate VAD task panicked"));
     }
 
     #[tokio::test]

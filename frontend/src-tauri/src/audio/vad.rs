@@ -45,26 +45,7 @@ impl ContinuousVadProcessor {
         const VAD_SAMPLE_RATE: u32 = 16000;
 
         // Use STRICT settings to prevent silence from reaching Whisper
-        let mut config = VadConfig::default();
-        config.sample_rate = VAD_SAMPLE_RATE as usize;
-
-        // CONTINUOUS SPEECH FIX: Tuned for capturing complete 5+ second utterances
-        // Previous: 0.55/0.40 with 400ms redemption was fragmenting speech into 40ms segments
-        // New: More lenient thresholds + longer redemption for continuous speech
-        config.positive_speech_threshold = 0.50; // Silero default - good for continuous speech
-        config.negative_speech_threshold = 0.35; // Silero default - allows natural pauses
-
-        // CRITICAL FIX: Removed redemption_time capping to support long continuous speech
-        // Previous: capped at 400ms, causing VAD to fragment 5-second speech into 40ms segments
-        // New: Use full redemption_time from pipeline (2000ms) to bridge natural pauses
-        config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
-        config.pre_speech_pad = Duration::from_millis(300); // Pre-speech padding for context
-        config.post_speech_pad = Duration::from_millis(400); // Increased: more context at end
-
-        // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
-        // Previous: 100ms allowed too-short segments that Whisper rejects
-        // New: 250ms ensures segments are substantial enough for Whisper (>100ms requirement)
-        config.min_speech_time = Duration::from_millis(min_speech_time_ms);
+        let config = continuous_vad_config(redemption_time_ms, min_speech_time_ms)?;
 
         debug!("Creating VAD session with: sample_rate={}Hz, redemption={}ms, min_speech={}ms, input_rate={}Hz",
                VAD_SAMPLE_RATE, redemption_time_ms, min_speech_time_ms, input_sample_rate);
@@ -325,6 +306,23 @@ impl ContinuousVadProcessor {
     }
 }
 
+fn continuous_vad_config(redemption_time_ms: u32, min_speech_time_ms: u64) -> Result<VadConfig> {
+    let mut config = VadConfig::default();
+    config.sample_rate = 16_000;
+    config.positive_speech_threshold = 0.50;
+    config.negative_speech_threshold = 0.35;
+    config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
+    config.pre_speech_pad = Duration::from_millis(300);
+    // silero-rs reads through speech_end + post pad as soon as redemption
+    // elapses. A longer post pad can point beyond the buffered audio and panic.
+    config.post_speech_pad = Duration::from_millis(redemption_time_ms.min(400) as u64);
+    config.min_speech_time = Duration::from_millis(min_speech_time_ms);
+    config
+        .validate_config()
+        .map_err(|error| anyhow!("Invalid VAD configuration: {error}"))?;
+    Ok(config)
+}
+
 /// Legacy function for backward compatibility - now uses the optimized approach
 pub fn extract_speech_16k(samples_mono_16k: &[f32]) -> Result<Vec<f32>> {
     let mut processor = ContinuousVadProcessor::new(16000, 400)?;
@@ -535,6 +533,36 @@ mod tests {
         }
 
         samples
+    }
+
+    #[test]
+    fn short_candidate_post_pad_never_exceeds_redemption() {
+        let short = continuous_vad_config(250, 100).expect("short candidate config");
+        assert_eq!(short.redemption_time, Duration::from_millis(250));
+        assert_eq!(short.post_speech_pad, Duration::from_millis(250));
+        short.validate_config().expect("valid short config");
+
+        let continuous = continuous_vad_config(2_000, 250).expect("continuous config");
+        assert_eq!(continuous.redemption_time, Duration::from_millis(2_000));
+        assert_eq!(continuous.post_speech_pad, Duration::from_millis(400));
+        continuous
+            .validate_config()
+            .expect("valid continuous config");
+    }
+
+    #[test]
+    fn short_candidate_redemption_processes_a_speech_end_without_panicking() {
+        let audio = generate_test_audio_with_speech(12.0, 16_000);
+        let mut processor = ContinuousVadProcessor::new_with_min_speech(16_000, 250, 100)
+            .expect("short candidate processor");
+        let mut segments = processor.process_audio(&audio).expect("process audio");
+        segments.extend(processor.flush().expect("flush audio"));
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.end_timestamp_ms > segment.start_timestamp_ms),
+            "all emitted segments must have positive duration"
+        );
     }
 
     #[test]
