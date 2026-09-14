@@ -734,6 +734,122 @@ fn prediction_tie_key(prediction: &Prediction) -> String {
     )
 }
 
+fn maximum_weight_assignment(weights: &[Vec<i64>]) -> Vec<Option<usize>> {
+    fn solve(
+        index: usize,
+        mask: u64,
+        weights: &[Vec<i64>],
+        memo: &mut HashMap<(usize, u64), (i64, Vec<Option<usize>>)>,
+    ) -> (i64, Vec<Option<usize>>) {
+        if index == weights.len() {
+            return (0, Vec::new());
+        }
+        if let Some(value) = memo.get(&(index, mask)) {
+            return value.clone();
+        }
+        let (mut best_score, mut best_tail) = solve(index + 1, mask, weights, memo);
+        best_tail.insert(0, None);
+        for cluster in 0..weights[index].len() {
+            if mask & (1 << cluster) != 0 {
+                continue;
+            }
+            let (tail_score, mut tail) = solve(index + 1, mask | (1 << cluster), weights, memo);
+            let score = weights[index][cluster] + tail_score;
+            if score > best_score {
+                best_score = score;
+                tail.insert(0, Some(cluster));
+                best_tail = tail;
+            }
+        }
+        let result = (best_score, best_tail);
+        memo.insert((index, mask), result.clone());
+        result
+    }
+    solve(0, 0, weights, &mut HashMap::new()).1
+}
+
+fn align_ground_truth_speakers(rows: &mut [ManifestRow], runs: &BTreeMap<String, MeetingRun>) {
+    for (meeting_id, run) in runs {
+        let gt = rows
+            .iter()
+            .filter(|row| &row.meeting_id == meeting_id)
+            .filter_map(|row| row.ground_truth_speaker.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let production = run
+            .artifact
+            .raw_diarizer_turns
+            .iter()
+            .map(|turn| turn.speaker_key.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if gt.is_empty() || production.is_empty() || production.len() > 20 {
+            continue;
+        }
+        let weights = gt
+            .iter()
+            .map(|speaker| {
+                production
+                    .iter()
+                    .map(|cluster| {
+                        rows.iter()
+                            .filter(|row| {
+                                &row.meeting_id == meeting_id
+                                    && row.ground_truth_speaker.as_ref() == Some(speaker)
+                            })
+                            .map(|row| {
+                                run.artifact
+                                    .raw_diarizer_turns
+                                    .iter()
+                                    .filter(|turn| &turn.speaker_key == cluster)
+                                    .map(|turn| {
+                                        (row.end_ms.min(turn.end_ms)
+                                            - row.start_ms.max(turn.start_ms))
+                                        .max(0)
+                                    })
+                                    .sum::<i64>()
+                            })
+                            .sum::<i64>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let assignment = maximum_weight_assignment(&weights);
+        let mapping = gt
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| {
+                assignment
+                    .get(index)
+                    .and_then(|value| *value)
+                    .filter(|cluster| weights[index][*cluster] > 0)
+                    .map(|cluster| (key.clone(), production[cluster].clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        for row in rows.iter_mut().filter(|row| &row.meeting_id == meeting_id) {
+            if let Some(key) = row
+                .ground_truth_speaker
+                .as_ref()
+                .and_then(|key| mapping.get(key))
+            {
+                row.ground_truth_speaker = Some(key.clone());
+            }
+            for key in &mut row.ground_truth_accepted_speakers {
+                if let Some(mapped) = mapping.get(key) {
+                    *key = mapped.clone();
+                }
+            }
+            for key in &mut row.expected_visible_speakers {
+                if let Some(mapped) = mapping.get(key) {
+                    *key = mapped.clone();
+                }
+            }
+        }
+    }
+}
+
 fn match_predictions<'a>(
     rows: &[ManifestRow],
     runs: &'a BTreeMap<String, MeetingRun>,
@@ -1209,7 +1325,7 @@ fn main() -> Result<()> {
     if matches!(args.mode, BenchmarkMode::Pipeline) {
         bail!("Pipeline Mode remains unsupported until the desktop application service layer can be reused directly");
     }
-    let rows = read_manifest(&args.dataset)?;
+    let mut rows = read_manifest(&args.dataset)?;
     let production_mode = matches!(
         args.mode,
         BenchmarkMode::ProductionArtifactReplay | BenchmarkMode::CounterfactualReplay
@@ -1245,6 +1361,7 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|(id, meeting)| (id, run_meeting(meeting, experiment_config.as_ref())))
         .collect::<BTreeMap<_, _>>();
+    align_ground_truth_speakers(&mut rows, &runs);
     let matching = match_predictions(&rows, &runs);
     let matched = &matching.predictions;
     let scorable = rows
@@ -2036,6 +2153,14 @@ mod tests {
                 &after_mutation.predictions
             )
             .0
+        );
+    }
+
+    #[test]
+    fn maximum_weight_alignment_recovers_swapped_speaker_clusters() {
+        assert_eq!(
+            maximum_weight_assignment(&[vec![0, 2_000], vec![1_500, 0]]),
+            vec![Some(1), Some(0)]
         );
     }
 }

@@ -723,6 +723,7 @@ pub fn run() {
             diarization::commands::api_assign_short_turn_event_speaker,
             diarization::commands::api_restore_short_turn_event_speaker,
             evaluation::annotation_workspace::load_workspace,
+            evaluation::annotation_workspace::initialize_annotation_project,
             evaluation::annotation_workspace::save_workspace,
             evaluation::annotation_workspace::qa_workspace_command,
             evaluation::annotation_workspace::export_manifest_command,

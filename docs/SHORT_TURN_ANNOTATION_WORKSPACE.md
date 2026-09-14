@@ -79,3 +79,30 @@ The desktop UI accepts local source paths rather than copying media. Browser
 container support is platform-dependent; WAV and MP4 are the supported baseline.
 The first UI exposes existing frozen replay through the documented CLI, rather
 than bundling a second benchmark binary launcher.
+# Phase 2D.2a integrity model
+
+## Project initialization and media boundary
+
+An exported meeting is not an annotation project until **Initialize Project** succeeds. The backend validates the dataset/meeting identifiers, both Blind and Review window files, their `production_artifact_path`, the schema-v2 Production Artifact, and the source-media type. It then creates `annotation_project.json`, `annotation_session.json`, and `annotations.draft.json` as one backend-owned workflow and opens Blind mode. Source WAV/MP3/M4A/MP4/WebM media is copied beneath the application audio directory (`mityu-recordings/huitrace-annotation/<meeting_id>`), which is already inside the narrow Tauri asset-protocol scope; arbitrary filesystem access is not enabled.
+
+The project binds the artifact ID, SHA-256, schema version, transcription run ID, and dataset-relative path. Load, Review, save, QA, and export revalidate that identity. Replacing or modifying the artifact is a hard failure.
+
+## Exact pass state machine
+
+Blind is complete only when every ID in `annotation_windows.blind.jsonl` is `reviewed_blind` or `reviewed_second_pass`. Review is complete only when every ID in `annotation_windows.review.jsonl` is `reviewed_second_pass`. Partial Review can therefore be reopened. The current annotation pass is separate from the QA/dataset panel, so running QA cannot turn a Blind completion into a second-pass completion. Last Blind and Review window IDs are persisted and restored; navigation seeks source media to the window start and completion advances to the next unfinished window.
+
+## Ground-truth semantics
+
+`expected_materialized` is tri-state: Auto (`null`/`None`) applies the benchmark default, while Yes and No are explicit overrides. New annotations always start at Auto and in a pending state; QA blocks export until each is explicitly confirmed. Meeting-local speaker keys are generated as immutable `gt_speaker_XX` identifiers, while descriptions remain editable and local-only. QA rejects empty/duplicate keys, missing event membership, and `ordinary_speech_control` intervals at or below 1200 ms.
+
+The benchmark aligns meeting-local GT identities to production diarizer clusters from temporal overlap using a maximum-weight one-to-one assignment before speaker metrics are computed. Production cluster labels are never exposed during Blind annotation.
+
+## Persistence, visualization, and visibility
+
+Autosave uses monotonically increasing edit/saving/saved revisions and a serialized single-flight queue. An older save completing cannot mark a newer edit Saved. Backend atomic writes use per-process unique temporary names. Any malformed root-manifest line aborts export instead of being silently dropped.
+
+Blind exposes only media, waveform, manual GT, local speaker helpers, progress, and structural QA. Dataset quotas, representative-data gates, suggestions, ASR, diarizer, and VAD evidence remain hidden. Review renders viewport-scaled ASR text, diarizer speaker/overlap, VAD confidence, system suggestions, and GT as visually separate tiers. Export is available only in Review after current-revision QA passes and the same revision has been saved.
+
+## Operational smoke workflow
+
+For one 10–15 minute, 2–4 speaker meeting: run production processing; export Production Artifact v2; run `short_turn_export`; initialize the project without editing JSON; annotate and close/reopen midway through Blind; finish all Blind windows; repeat the close/reopen check midway through Review; run QA; export `manifest.jsonl`; run `short_turn_dataset_check`; then run `short_turn_benchmark --mode production-artifact-replay`. With only one meeting, `INSUFFICIENT_REPRESENTATIVE_DATA` is the expected gate result. The workspace never invokes ASR, diarization, VAD, or ShortTurn inference.

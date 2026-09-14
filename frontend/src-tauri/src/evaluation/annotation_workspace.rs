@@ -9,10 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tauri::Manager;
 
 use super::dataset::{self, duration_bucket, GateSample};
 use super::production_artifact::read_and_validate_artifact;
@@ -50,17 +52,14 @@ pub struct AnnotationEvent {
     pub embedded: bool,
     #[serde(default)]
     pub annotation_uncertain: bool,
-    #[serde(default = "default_expected_materialized")]
-    pub expected_materialized: bool,
+    #[serde(default)]
+    pub expected_materialized: Option<bool>,
     #[serde(default)]
     pub notes: String,
     #[serde(default = "default_annotation_status")]
     pub annotation_status: String,
 }
 
-fn default_expected_materialized() -> bool {
-    true
-}
 fn default_annotation_status() -> String {
     "blind_confirmed".into()
 }
@@ -109,6 +108,18 @@ pub struct AnnotationSession {
     pub speaker_map: Vec<SpeakerMapEntry>,
     #[serde(default)]
     pub window_status: BTreeMap<String, String>,
+    #[serde(default = "default_next_event_sequence")]
+    pub next_event_sequence: u64,
+    #[serde(default)]
+    pub last_blind_window_id: Option<String>,
+    #[serde(default)]
+    pub last_review_window_id: Option<String>,
+    #[serde(default)]
+    pub artifact_identity: Option<ProductionArtifactIdentity>,
+}
+
+fn default_next_event_sequence() -> u64 {
+    1
 }
 
 impl AnnotationSession {
@@ -121,8 +132,21 @@ impl AnnotationSession {
             production_artifact_path: String::new(),
             speaker_map: Vec::new(),
             window_status: BTreeMap::new(),
+            next_event_sequence: 1,
+            last_blind_window_id: None,
+            last_review_window_id: None,
+            artifact_identity: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProductionArtifactIdentity {
+    pub artifact_id: String,
+    pub sha256: String,
+    pub schema_version: u32,
+    pub transcription_run_id: String,
+    pub relative_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +157,8 @@ pub struct AnnotationWindow {
     pub source_end_ms: i64,
     #[serde(default)]
     pub audio_path: String,
+    #[serde(default)]
+    pub production_artifact_path: String,
     #[serde(default)]
     pub candidate_suggestions: Vec<SystemSuggestion>,
 }
@@ -195,6 +221,7 @@ pub struct WorkspaceSnapshot {
     pub mode: AnnotationMode,
     /// `None` in blind mode by construction, not merely hidden by the client.
     pub review_evidence: Option<ReviewEvidence>,
+    pub initialized: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +235,16 @@ pub struct AnnotationProject {
     pub review_windows: &'static str,
     pub blind_completed: bool,
     pub review_completed: bool,
+    pub production_artifact_identity: ProductionArtifactIdentity,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeProjectRequest {
+    pub dataset_dir: PathBuf,
+    pub meeting_id: String,
+    pub source_media_path: PathBuf,
+    pub production_artifact_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -243,20 +280,53 @@ fn read_json_or<T: for<'a> Deserialize<'a>>(path: &Path, default: T) -> Result<T
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
     let parent = path
         .parent()
         .context("annotation workspace path has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let temporary = parent.join(format!(
-        ".{}.tmp",
+        ".{}.tmp.{}.{}",
         path.file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("annotation")
+            .unwrap_or("annotation"),
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
     fs::rename(&temporary, path)
         .with_context(|| format!("atomically replace {}", path.display()))?;
     Ok(())
+}
+
+fn expected_window_ids(windows: &[AnnotationWindow]) -> BTreeSet<&str> {
+    windows
+        .iter()
+        .map(|window| window.window_id.as_str())
+        .collect()
+}
+
+fn all_blind_windows_complete(
+    windows: &[AnnotationWindow],
+    statuses: &BTreeMap<String, String>,
+) -> bool {
+    !windows.is_empty()
+        && expected_window_ids(windows).into_iter().all(|id| {
+            matches!(
+                statuses.get(id).map(String::as_str),
+                Some("reviewed_blind" | "reviewed_second_pass")
+            )
+        })
+}
+
+fn all_review_windows_complete(
+    windows: &[AnnotationWindow],
+    statuses: &BTreeMap<String, String>,
+) -> bool {
+    !windows.is_empty()
+        && expected_window_ids(windows)
+            .into_iter()
+            .all(|id| statuses.get(id).map(String::as_str) == Some("reviewed_second_pass"))
 }
 
 fn read_windows(path: &Path, mode: &AnnotationMode) -> Result<Vec<AnnotationWindow>> {
@@ -295,6 +365,160 @@ fn configured_path(dataset_dir: &Path, configured: &str) -> PathBuf {
     } else {
         dataset_dir.join(path)
     }
+}
+
+fn validate_artifact_identity(dataset_dir: &Path, session: &AnnotationSession) -> Result<PathBuf> {
+    let identity = session
+        .artifact_identity
+        .as_ref()
+        .context("annotation project has no production artifact identity")?;
+    if session.production_artifact_path != identity.relative_path {
+        bail!("session production artifact path differs from the bound artifact identity");
+    }
+    let path = configured_path(dataset_dir, &identity.relative_path);
+    let sha = artifact_sha256(&path)
+        .with_context(|| format!("hash bound artifact {}", path.display()))?;
+    if sha != identity.sha256 {
+        bail!("bound production artifact changed (SHA-256 mismatch)");
+    }
+    let artifact = read_and_validate_artifact(&path, Some(&session.meeting_id))?;
+    if artifact.artifact_id != identity.artifact_id
+        || artifact.schema_version != identity.schema_version
+        || artifact.transcription_run_id != identity.transcription_run_id
+    {
+        bail!("bound production artifact identity changed");
+    }
+    Ok(path)
+}
+
+fn validate_window_provenance(
+    windows: &[AnnotationWindow],
+    meeting_id: &str,
+    artifact_path: &Path,
+) -> Result<()> {
+    let expected = artifact_path.canonicalize()?;
+    let mut ids = BTreeSet::new();
+    for window in windows {
+        if window.meeting_id != meeting_id {
+            bail!("window {} belongs to a different meeting", window.window_id);
+        }
+        if window.window_id.trim().is_empty() || !ids.insert(window.window_id.as_str()) {
+            bail!("window ids must be nonempty and unique");
+        }
+        if window.source_start_ms < 0 || window.source_end_ms <= window.source_start_ms {
+            bail!("window {} has invalid timing", window.window_id);
+        }
+        if window.production_artifact_path.trim().is_empty() {
+            bail!(
+                "window {} has no production_artifact_path",
+                window.window_id
+            );
+        }
+        let actual = PathBuf::from(&window.production_artifact_path)
+            .canonicalize()
+            .with_context(|| format!("open window artifact for {}", window.window_id))?;
+        if actual != expected {
+            bail!(
+                "window {} was exported from a different production artifact",
+                window.window_id
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn initialize_annotation_project_inner(
+    request: InitializeProjectRequest,
+    controlled_media_root: &Path,
+) -> Result<WorkspaceSnapshot> {
+    let directory = meeting_dir(&request.dataset_dir, &request.meeting_id)?;
+    if !request.dataset_dir.is_dir() {
+        bail!("dataset directory does not exist");
+    }
+    if !request.source_media_path.is_file() {
+        bail!("source media does not exist");
+    }
+    let extension = request
+        .source_media_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "wav" | "mp3" | "m4a" | "mp4" | "webm") {
+        bail!("unsupported source media type");
+    }
+    let artifact_path = request
+        .production_artifact_path
+        .canonicalize()
+        .context("open production artifact")?;
+    let artifact = read_and_validate_artifact(&artifact_path, Some(&request.meeting_id))?;
+    let blind = read_windows(
+        &directory.join("annotation_windows.blind.jsonl"),
+        &AnnotationMode::Blind,
+    )?;
+    let review = read_windows(
+        &directory.join("annotation_windows.review.jsonl"),
+        &AnnotationMode::Review,
+    )?;
+    if blind.is_empty() || review.is_empty() {
+        bail!("blind and review window exports are required");
+    }
+    validate_window_provenance(&blind, &request.meeting_id, &artifact_path)?;
+    validate_window_provenance(&review, &request.meeting_id, &artifact_path)?;
+    let relative = artifact_path
+        .strip_prefix(request.dataset_dir.canonicalize()?)
+        .map_err(|_| {
+            anyhow::anyhow!("production artifact must live below the dataset directory")
+        })?;
+    let identity = ProductionArtifactIdentity {
+        artifact_id: artifact.artifact_id,
+        sha256: artifact_sha256(&artifact_path)?,
+        schema_version: artifact.schema_version,
+        transcription_run_id: artifact.transcription_run_id,
+        relative_path: relative.to_string_lossy().replace('\\', "/"),
+    };
+    let media_directory = controlled_media_root
+        .join("mityu-recordings")
+        .join("huitrace-annotation")
+        .join(&request.meeting_id);
+    fs::create_dir_all(&media_directory)?;
+    let media_path = media_directory.join(format!("source.{extension}"));
+    fs::copy(&request.source_media_path, &media_path)
+        .with_context(|| format!("copy source media to {}", media_path.display()))?;
+    let mut session = AnnotationSession::empty(request.meeting_id.clone());
+    session.source_media_path = media_path.to_string_lossy().into_owned();
+    session.production_artifact_path = identity.relative_path.clone();
+    session.artifact_identity = Some(identity.clone());
+    let draft = AnnotationDraft::empty(request.meeting_id.clone());
+    atomic_write(
+        &directory.join("annotation_session.json"),
+        &serde_json::to_vec_pretty(&session)?,
+    )?;
+    atomic_write(
+        &directory.join("annotations.draft.json"),
+        &serde_json::to_vec_pretty(&draft)?,
+    )?;
+    let project = AnnotationProject {
+        schema_version: DRAFT_SCHEMA_VERSION,
+        meeting_id: request.meeting_id.clone(),
+        source_media: session.source_media_path.clone(),
+        production_artifact: identity.relative_path.clone(),
+        annotation_draft: "annotations.draft.json",
+        blind_windows: "annotation_windows.blind.jsonl",
+        review_windows: "annotation_windows.review.jsonl",
+        blind_completed: false,
+        review_completed: false,
+        production_artifact_identity: identity,
+    };
+    atomic_write(
+        &directory.join("annotation_project.json"),
+        &serde_json::to_vec_pretty(&project)?,
+    )?;
+    load_workspace_inner(WorkspaceLoadRequest {
+        dataset_dir: request.dataset_dir,
+        meeting_id: request.meeting_id,
+        mode: AnnotationMode::Blind,
+    })
 }
 
 fn load_review_evidence(
@@ -343,36 +567,47 @@ fn load_review_evidence(
 
 pub fn load_workspace_inner(request: WorkspaceLoadRequest) -> Result<WorkspaceSnapshot> {
     let directory = meeting_dir(&request.dataset_dir, &request.meeting_id)?;
+    let initialized = directory.join("annotation_project.json").is_file()
+        && directory.join("annotation_session.json").is_file()
+        && directory.join("annotations.draft.json").is_file();
     let draft = read_json_or(
         &directory.join("annotations.draft.json"),
         AnnotationDraft::empty(request.meeting_id.clone()),
     )?;
-    let session = read_json_or(
+    let mut session = read_json_or(
         &directory.join("annotation_session.json"),
         AnnotationSession::empty(request.meeting_id.clone()),
     )?;
     if draft.meeting_id != request.meeting_id || session.meeting_id != request.meeting_id {
         bail!("annotation draft/session belongs to a different meeting");
     }
+    let next_from_events = draft
+        .events
+        .iter()
+        .filter_map(|event| event.event_id.rsplit('-').next()?.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    session.next_event_sequence = session.next_event_sequence.max(next_from_events);
     let filename = match request.mode {
         AnnotationMode::Blind => "annotation_windows.blind.jsonl",
         AnnotationMode::Review | AnnotationMode::Qa => "annotation_windows.review.jsonl",
     };
     let windows = read_windows(&directory.join(filename), &request.mode)?;
+    if matches!(request.mode, AnnotationMode::Review | AnnotationMode::Qa) && !initialized {
+        bail!("initialize the annotation project before opening review or QA");
+    }
     if request.mode == AnnotationMode::Review && !windows.is_empty() {
-        let blind_count = read_windows(
+        let blind_windows = read_windows(
             &directory.join("annotation_windows.blind.jsonl"),
             &AnnotationMode::Blind,
-        )?
-        .len();
-        let done = session
-            .window_status
-            .values()
-            .filter(|status| status.as_str() == "reviewed_blind")
-            .count();
-        if done < blind_count {
+        )?;
+        if !all_blind_windows_complete(&blind_windows, &session.window_status) {
             bail!("complete every blind window before opening review mode");
         }
+    }
+    if initialized {
+        validate_artifact_identity(&request.dataset_dir, &session)?;
     }
     let review_evidence = match request.mode {
         AnnotationMode::Blind => None,
@@ -388,6 +623,7 @@ pub fn load_workspace_inner(request: WorkspaceLoadRequest) -> Result<WorkspaceSn
         windows,
         mode: request.mode,
         review_evidence,
+        initialized,
     })
 }
 
@@ -401,6 +637,15 @@ fn validate_draft_shape(draft: &AnnotationDraft, session: &AnnotationSession) ->
         bail!("draft and session meeting_id differ");
     }
     let mut ids = BTreeSet::new();
+    let mut speaker_keys = BTreeSet::new();
+    for speaker in &session.speaker_map {
+        if speaker.key.trim().is_empty() || !speaker_keys.insert(speaker.key.as_str()) {
+            bail!("speaker map keys must be nonempty and unique");
+        }
+        if !speaker.key.starts_with("gt_speaker_") {
+            bail!("ground-truth speaker keys must use the gt_speaker_ namespace");
+        }
+    }
     for event in &draft.events {
         if event.event_id.trim().is_empty() || !ids.insert(event.event_id.as_str()) {
             bail!("event ids must be nonempty and unique");
@@ -415,6 +660,12 @@ fn validate_draft_shape(draft: &AnnotationDraft, session: &AnnotationSession) ->
             if speaker.trim().is_empty() {
                 bail!("{} has an empty speaker key", event.event_id);
             }
+            if !speaker_keys.contains(speaker.as_str()) {
+                bail!(
+                    "{} references speaker not present in meeting-local speaker map",
+                    event.event_id
+                );
+            }
         }
     }
     Ok(())
@@ -423,6 +674,10 @@ fn validate_draft_shape(draft: &AnnotationDraft, session: &AnnotationSession) ->
 pub fn save_workspace_inner(request: WorkspaceSaveRequest) -> Result<()> {
     validate_draft_shape(&request.draft, &request.session)?;
     let directory = meeting_dir(&request.dataset_dir, &request.draft.meeting_id)?;
+    if !directory.join("annotation_project.json").is_file() {
+        bail!("annotation project is not initialized");
+    }
+    validate_artifact_identity(&request.dataset_dir, &request.session)?;
     atomic_write(
         &directory.join("annotations.draft.json"),
         &serde_json::to_vec_pretty(&request.draft)?,
@@ -431,26 +686,33 @@ pub fn save_workspace_inner(request: WorkspaceSaveRequest) -> Result<()> {
         &directory.join("annotation_session.json"),
         &serde_json::to_vec_pretty(&request.session)?,
     )?;
-    let statuses = request.session.window_status.values();
-    let has_statuses = !request.session.window_status.is_empty();
+    let blind_windows = read_windows(
+        &directory.join("annotation_windows.blind.jsonl"),
+        &AnnotationMode::Blind,
+    )?;
+    let review_windows = read_windows(
+        &directory.join("annotation_windows.review.jsonl"),
+        &AnnotationMode::Review,
+    )?;
+    let identity = request
+        .session
+        .artifact_identity
+        .clone()
+        .context("missing artifact identity")?;
     let project = AnnotationProject {
         schema_version: DRAFT_SCHEMA_VERSION,
         meeting_id: request.draft.meeting_id.clone(),
         source_media: request.session.source_media_path.clone(),
-        production_artifact: request.session.production_artifact_path.clone(),
+        production_artifact: identity.relative_path.clone(),
         annotation_draft: "annotations.draft.json",
         blind_windows: "annotation_windows.blind.jsonl",
         review_windows: "annotation_windows.review.jsonl",
-        blind_completed: has_statuses
-            && statuses
-                .clone()
-                .all(|value| value == "reviewed_blind" || value == "reviewed_second_pass"),
-        review_completed: has_statuses
-            && request
-                .session
-                .window_status
-                .values()
-                .all(|value| value == "reviewed_second_pass"),
+        blind_completed: all_blind_windows_complete(&blind_windows, &request.session.window_status),
+        review_completed: all_review_windows_complete(
+            &review_windows,
+            &request.session.window_status,
+        ),
+        production_artifact_identity: identity,
     };
     atomic_write(
         &directory.join("annotation_project.json"),
@@ -529,6 +791,9 @@ pub fn qa_workspace(
     if let Err(error) = validate_draft_shape(draft, session) {
         errors.push(error.to_string());
     }
+    if let Err(error) = validate_artifact_identity(dataset_dir, session) {
+        errors.push(format!("production artifact identity: {error:#}"));
+    }
     let mut source_duration_ms = None;
     if !session.production_artifact_path.trim().is_empty() {
         let path = configured_path(dataset_dir, &session.production_artifact_path);
@@ -564,6 +829,21 @@ pub fn qa_workspace(
         if event.kind == "noise" && event.speaker.is_some() {
             errors.push(format!(
                 "{} noise should not have a speaker",
+                event.event_id
+            ));
+        }
+        if event.kind == "ordinary_speech_control" && event.end_ms - event.start_ms <= 1_200 {
+            errors.push(format!(
+                "{} ordinary_speech_control must be longer than 1200 ms",
+                event.event_id
+            ));
+        }
+        if !matches!(
+            event.annotation_status.as_str(),
+            "blind_confirmed" | "reviewed"
+        ) {
+            errors.push(format!(
+                "{} requires explicit annotation confirmation",
                 event.event_id
             ));
         }
@@ -663,6 +943,7 @@ pub fn export_manifest(
     if !qa.errors.is_empty() {
         bail!("QA must pass before export: {}", qa.errors.join("; "));
     }
+    validate_artifact_identity(dataset_dir, session)?;
     let artifact = relative_artifact_path(dataset_dir, &session.production_artifact_path)?;
     let artifact_sha = artifact_sha256(&dataset_dir.join(&artifact))?;
     let visible_speakers = session
@@ -690,12 +971,22 @@ pub fn export_manifest(
     // meetings and replace only this meeting's canonical event collection.
     let root_manifest = dataset_dir.join("manifest.jsonl");
     let mut rows = if root_manifest.exists() {
-        BufReader::new(fs::File::open(&root_manifest)?)
+        let mut parsed = Vec::new();
+        for (index, line) in BufReader::new(fs::File::open(&root_manifest)?)
             .lines()
-            .filter_map(Result::ok)
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str::<serde_json::Value>(&line))
-            .collect::<Result<Vec<_>, _>>()?
+            .enumerate()
+        {
+            let line = line
+                .with_context(|| format!("read {} line {}", root_manifest.display(), index + 1))?;
+            if !line.trim().is_empty() {
+                parsed.push(
+                    serde_json::from_str::<serde_json::Value>(&line).with_context(|| {
+                        format!("parse {} line {}", root_manifest.display(), index + 1)
+                    })?,
+                );
+            }
+        }
+        parsed
     } else {
         Vec::new()
     };
@@ -740,9 +1031,28 @@ pub fn save_workspace(request: WorkspaceSaveRequest) -> Result<(), String> {
     save_workspace_inner(request).map_err(|error| format!("save annotation workspace: {error:#}"))
 }
 
+#[tauri::command]
+pub fn initialize_annotation_project(
+    app: tauri::AppHandle,
+    request: InitializeProjectRequest,
+) -> Result<WorkspaceSnapshot, String> {
+    let audio_dir = app
+        .path()
+        .audio_dir()
+        .map_err(|error| format!("resolve controlled audio directory: {error}"))?;
+    initialize_annotation_project_inner(request, &audio_dir)
+        .map_err(|error| format!("initialize annotation project: {error:#}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluation::production_artifact::{
+        write_artifact, ArtifactBackend, ArtifactDiarizerTurn, ArtifactTranscript,
+        ArtifactVadEvent, MeetingProductionArtifact, ProductionConfigSnapshot,
+        ProductionSafetyObservations, SourceAudioMetadata, ARTIFACT_SCHEMA_VERSION,
+        PHASE_2C1_FROZEN_BASELINE_COMMIT,
+    };
 
     fn event(id: &str, start: i64, end: i64, speaker: Option<&str>) -> AnnotationEvent {
         AnnotationEvent {
@@ -755,7 +1065,7 @@ mod tests {
             speaker_handoff: false,
             embedded: false,
             annotation_uncertain: false,
-            expected_materialized: true,
+            expected_materialized: None,
             notes: String::new(),
             annotation_status: "blind_confirmed".into(),
         }
@@ -816,5 +1126,167 @@ mod tests {
         assert_eq!(row["tags"], serde_json::json!([]));
         assert!(row.get("speaker_description").is_none());
         assert_eq!(row["production_artifact_sha256"], "a".repeat(64));
+        assert_eq!(row["expected_materialized"], serde_json::Value::Null);
+    }
+
+    fn window(id: &str) -> AnnotationWindow {
+        AnnotationWindow {
+            window_id: id.into(),
+            meeting_id: "meeting".into(),
+            source_start_ms: 0,
+            source_end_ms: 1_000,
+            audio_path: String::new(),
+            production_artifact_path: String::new(),
+            candidate_suggestions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn expected_materialized_preserves_auto_yes_and_no() {
+        let mut item = event("id", 0, 100, None);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap()["expected_materialized"],
+            serde_json::Value::Null
+        );
+        item.expected_materialized = Some(true);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap()["expected_materialized"],
+            true
+        );
+        item.expected_materialized = Some(false);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap()["expected_materialized"],
+            false
+        );
+    }
+
+    #[test]
+    fn completion_uses_every_expected_window_id() {
+        let windows = vec![window("w1"), window("w2"), window("w3")];
+        let mut statuses = BTreeMap::from([("w1".into(), "reviewed_blind".into())]);
+        assert!(!all_blind_windows_complete(&windows, &statuses));
+        statuses.insert("w2".into(), "reviewed_second_pass".into());
+        statuses.insert("w3".into(), "reviewed_blind".into());
+        assert!(all_blind_windows_complete(&windows, &statuses));
+        assert!(!all_review_windows_complete(&windows, &statuses));
+        statuses.insert("w1".into(), "reviewed_second_pass".into());
+        statuses.insert("w3".into(), "reviewed_second_pass".into());
+        assert!(all_review_windows_complete(&windows, &statuses));
+    }
+
+    #[test]
+    fn short_ordinary_control_is_rejected_by_qa() {
+        let mut draft = AnnotationDraft {
+            schema_version: 1,
+            meeting_id: "meeting".into(),
+            events: vec![event("control", 0, 1_200, None)],
+        };
+        draft.events[0].kind = "ordinary_speech_control".into();
+        let report = qa_workspace(
+            Path::new("."),
+            &draft,
+            &AnnotationSession::empty("meeting".into()),
+        )
+        .unwrap();
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("longer than 1200")));
+    }
+
+    fn production_artifact(meeting_id: &str) -> MeetingProductionArtifact {
+        MeetingProductionArtifact {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            artifact_id: "artifact-1".into(),
+            transcription_run_id: "run-1".into(),
+            meeting_id: meeting_id.into(),
+            source_audio: SourceAudioMetadata {
+                path_hint: None,
+                duration_ms: 2_000,
+                sha256: None,
+            },
+            created_at: "2026-09-14T00:00:00Z".into(),
+            app_commit_sha: PHASE_2C1_FROZEN_BASELINE_COMMIT.into(),
+            asr: ArtifactBackend {
+                backend: "test".into(),
+                model: "test".into(),
+                version_or_hash: None,
+            },
+            diarization: ArtifactBackend {
+                backend: "test".into(),
+                model: "test".into(),
+                version_or_hash: None,
+            },
+            production_config: ProductionConfigSnapshot::default(),
+            transcripts: vec![ArtifactTranscript {
+                id: "t1".into(),
+                start_ms: 100,
+                end_ms: 300,
+                text: "ok".into(),
+                asr_confidence: None,
+            }],
+            raw_diarizer_turns: vec![ArtifactDiarizerTurn {
+                start_ms: 0,
+                end_ms: 1_000,
+                speaker_key: "speaker_01".into(),
+                confidence: None,
+                overlap: false,
+            }],
+            vad_events: vec![ArtifactVadEvent {
+                start_ms: 100,
+                end_ms: 300,
+                confidence: None,
+            }],
+            accepted_speakers: vec!["speaker_01".into()],
+            visible_speakers: vec!["speaker_01".into()],
+            safety_observations: ProductionSafetyObservations::default(),
+            production_metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn initializes_project_and_binds_artifact_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let media_root = tempfile::tempdir().unwrap();
+        let meeting_id = "meeting-1";
+        let directory = root.path().join(meeting_id);
+        fs::create_dir_all(&directory).unwrap();
+        let artifact_path = directory.join("production.json");
+        write_artifact(&artifact_path, &production_artifact(meeting_id)).unwrap();
+        let media_path = root.path().join("source.wav");
+        fs::write(&media_path, b"RIFF-test").unwrap();
+        let row = serde_json::json!({"window_id":"w1","meeting_id":meeting_id,"source_start_ms":0,"source_end_ms":1000,"audio_path":"w1.wav","production_artifact_path":artifact_path});
+        let line = format!("{}\n", serde_json::to_string(&row).unwrap());
+        fs::write(directory.join("annotation_windows.blind.jsonl"), &line).unwrap();
+        fs::write(directory.join("annotation_windows.review.jsonl"), &line).unwrap();
+        let snapshot = initialize_annotation_project_inner(
+            InitializeProjectRequest {
+                dataset_dir: root.path().to_path_buf(),
+                meeting_id: meeting_id.into(),
+                source_media_path: media_path,
+                production_artifact_path: artifact_path.clone(),
+            },
+            media_root.path(),
+        )
+        .unwrap();
+        assert!(snapshot.initialized);
+        assert!(directory.join("annotation_project.json").is_file());
+        assert!(snapshot
+            .session
+            .source_media_path
+            .contains("mityu-recordings"));
+        assert_eq!(
+            snapshot.session.artifact_identity.unwrap().artifact_id,
+            "artifact-1"
+        );
+        fs::write(&artifact_path, b"replaced").unwrap();
+        assert!(load_workspace_inner(WorkspaceLoadRequest {
+            dataset_dir: root.path().to_path_buf(),
+            meeting_id: meeting_id.into(),
+            mode: AnnotationMode::Blind,
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("SHA-256 mismatch"));
     }
 }

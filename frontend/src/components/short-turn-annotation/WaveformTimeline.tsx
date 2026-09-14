@@ -5,6 +5,7 @@ import MinimapPlugin from 'wavesurfer.js/dist/plugins/minimap.esm.js';
 import TimelinePlugin from 'wavesurfer.js/dist/plugins/timeline.esm.js';
 import WaveSurfer from 'wavesurfer.js';
 import { useEffect, useRef, useState } from 'react';
+import { shouldCreateRegion } from '@/lib/annotationIntegrity';
 
 export type WaveformEvent = { event_id: string; start_ms: number; end_ms: number; kind: string };
 
@@ -29,7 +30,19 @@ export function WaveformTimeline({ media, sourceUrl, events, selectedId, current
   const timeline = useRef<HTMLDivElement>(null);
   const instance = useRef<WaveSurfer | null>(null);
   const regions = useRef<RegionsPlugin | null>(null);
+  const syncingRegionsRef = useRef(false);
+  const eventsRef = useRef(events);
+  const onCreateRef = useRef(onCreate);
+  const onSelectRef = useRef(onSelect);
+  const onBoundsChangeRef = useRef(onBoundsChange);
+  const onSeekRef = useRef(onSeek);
   const [zoom, setZoom] = useState(80);
+
+  eventsRef.current = events;
+  onCreateRef.current = onCreate;
+  onSelectRef.current = onSelect;
+  onBoundsChangeRef.current = onBoundsChange;
+  onSeekRef.current = onSeek;
 
   useEffect(() => {
     if (!waveform.current || !timeline.current || !media || !sourceUrl) return;
@@ -55,15 +68,15 @@ export function WaveformTimeline({ media, sourceUrl, events, selectedId, current
     instance.current = ws;
     regionPlugin.enableDragSelection({ color: 'rgba(45, 212, 191, 0.28)', minLength: 0.03 });
     regionPlugin.on('region-created', region => {
-      if (events.some(event => event.event_id === region.id)) return;
-      onCreate(Math.round(region.start * 1000), Math.round(region.end * 1000));
+      if (!shouldCreateRegion(syncingRegionsRef.current, eventsRef.current.map(event => event.event_id), region.id)) return;
+      onCreateRef.current(Math.round(region.start * 1000), Math.round(region.end * 1000));
       region.remove();
     });
-    regionPlugin.on('region-clicked', region => onSelect(region.id));
+    regionPlugin.on('region-clicked', region => onSelectRef.current(region.id));
     regionPlugin.on('region-updated', region => {
-      if (events.some(event => event.event_id === region.id)) onBoundsChange(region.id, Math.round(region.start * 1000), Math.round(region.end * 1000));
+      if (!syncingRegionsRef.current && eventsRef.current.some(event => event.event_id === region.id)) onBoundsChangeRef.current(region.id, Math.round(region.start * 1000), Math.round(region.end * 1000));
     });
-    ws.on('interaction', () => onSeek(Math.round(ws.getCurrentTime() * 1000)));
+    ws.on('interaction', () => onSeekRef.current(Math.round(ws.getCurrentTime() * 1000)));
     return () => { ws.destroy(); instance.current = null; regions.current = null; };
   // The media/source change is the only lifecycle reset; callback changes are
   // intentionally read through the current render because regions are rebuilt below.
@@ -74,9 +87,14 @@ export function WaveformTimeline({ media, sourceUrl, events, selectedId, current
   useEffect(() => { if (Math.abs((instance.current?.getCurrentTime() ?? 0) * 1000 - currentMs) > 80) instance.current?.setTime(currentMs / 1000); }, [currentMs]);
   useEffect(() => {
     const plugin = regions.current; if (!plugin) return;
-    plugin.clearRegions();
-    for (const event of events) {
-      plugin.addRegion({ id: event.event_id, start: event.start_ms / 1000, end: event.end_ms / 1000, drag: true, resize: true, color: event.event_id === selectedId ? 'rgba(45, 212, 191, 0.78)' : 'rgba(45, 212, 191, 0.35)', content: event.kind, minLength: 0.001 });
+    syncingRegionsRef.current = true;
+    try {
+      plugin.clearRegions();
+      for (const event of events) {
+        plugin.addRegion({ id: event.event_id, start: event.start_ms / 1000, end: event.end_ms / 1000, drag: true, resize: true, color: event.event_id === selectedId ? 'rgba(45, 212, 191, 0.78)' : 'rgba(45, 212, 191, 0.35)', content: event.kind, minLength: 0.001 });
+      }
+    } finally {
+      syncingRegionsRef.current = false;
     }
   }, [events, selectedId]);
 

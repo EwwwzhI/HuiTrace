@@ -93,7 +93,12 @@ fn main() -> Result<()> {
     let review_manifest_path = args.output.join("annotation_windows.review.jsonl");
     let mut blind_manifest = BufWriter::new(File::create(&blind_manifest_path)?);
     let mut review_manifest = BufWriter::new(File::create(&review_manifest_path)?);
-    let artifact_path = args.production_artifact.to_string_lossy().to_string();
+    let artifact_path = args
+        .production_artifact
+        .canonicalize()
+        .context("resolve production artifact path")?
+        .to_string_lossy()
+        .to_string();
 
     let mut window_start = 0;
     let mut index = 1;
