@@ -20,6 +20,8 @@ use super::dataset::{self, duration_bucket, GateSample};
 use super::production_artifact::read_and_validate_artifact;
 
 const DRAFT_SCHEMA_VERSION: u32 = 1;
+const MIN_MEDIA_DURATION_TOLERANCE_MS: i64 = 2_000;
+const MAX_MEDIA_DURATION_TOLERANCE_MS: i64 = 10_000;
 const ALLOWED_KINDS: [&str; 5] = [
     "short_speech",
     "backchannel",
@@ -27,6 +29,23 @@ const ALLOWED_KINDS: [&str; 5] = [
     "non_speech_vocalization",
     "ordinary_speech_control",
 ];
+
+fn source_media_duration_tolerance_ms(artifact_duration_ms: i64) -> i64 {
+    // Browser media elements report the container timeline, while production
+    // artifacts use recording metadata / decoded evidence. Encoder delay and
+    // trailing container padding grow with longer files, so a fixed 2s limit
+    // produces false blockers. Keep a bounded relative tolerance while still
+    // rejecting an accidentally selected source with a materially different run time.
+    (artifact_duration_ms / 50).clamp(
+        MIN_MEDIA_DURATION_TOLERANCE_MS,
+        MAX_MEDIA_DURATION_TOLERANCE_MS,
+    )
+}
+
+fn source_media_duration_matches(media_duration_ms: i64, artifact_duration_ms: i64) -> bool {
+    (media_duration_ms - artifact_duration_ms).abs()
+        <= source_media_duration_tolerance_ms(artifact_duration_ms)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -894,8 +913,13 @@ pub fn qa_workspace(
             Ok(artifact) => {
                 source_duration_ms = Some(artifact.source_audio.duration_ms);
                 if let Some(media_duration) = session.source_media_duration_ms {
-                    if (media_duration - artifact.source_audio.duration_ms).abs() > 2_000 {
-                        errors.push(format!("source media duration {media_duration}ms does not match artifact duration {}ms", artifact.source_audio.duration_ms));
+                    let artifact_duration = artifact.source_audio.duration_ms;
+                    if !source_media_duration_matches(media_duration, artifact_duration) {
+                        let delta = (media_duration - artifact_duration).abs();
+                        let tolerance = source_media_duration_tolerance_ms(artifact_duration);
+                        errors.push(format!(
+                            "source media duration {media_duration}ms does not match artifact duration {artifact_duration}ms (difference {delta}ms exceeds {tolerance}ms tolerance)"
+                        ));
                     }
                 }
             }
@@ -1260,6 +1284,16 @@ mod tests {
         assert!(row.get("speaker_description").is_none());
         assert_eq!(row["production_artifact_sha256"], "a".repeat(64));
         assert_eq!(row["expected_materialized"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn media_duration_check_allows_bounded_container_timing_drift() {
+        let artifact_duration = 210_597;
+        assert_eq!(source_media_duration_tolerance_ms(artifact_duration), 4_211);
+        assert!(source_media_duration_matches(214_221, artifact_duration));
+        assert!(!source_media_duration_matches(220_000, artifact_duration));
+        assert_eq!(source_media_duration_tolerance_ms(30_000), 2_000);
+        assert_eq!(source_media_duration_tolerance_ms(900_000), 10_000);
     }
 
     fn window(id: &str) -> AnnotationWindow {

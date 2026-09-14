@@ -2,7 +2,7 @@
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import {
-  ChangeEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent, useCallback, useEffect,
+  ChangeEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent, SyntheticEvent, useCallback, useEffect,
   useMemo, useRef, useState,
 } from 'react';
 import { toast } from 'sonner';
@@ -172,6 +172,14 @@ export default function ShortTurnAnnotationPage() {
       if (loop) { media.currentTime = loopRange.current.start / 1000; } else { media.pause(); loopRange.current = null; }
     }
   }, [loop]);
+  const onLoadedMetadata = useCallback((event: SyntheticEvent<HTMLMediaElement>) => {
+    // React clears currentTarget after the handler returns. Capture the primitive
+    // before scheduling the state updater so it never reads from a released event.
+    const duration = event.currentTarget.duration;
+    if (!Number.isFinite(duration) || duration < 0) return;
+    const durationMs = Math.round(duration * 1000);
+    updateSession(current => ({ ...current, source_media_duration_ms: durationMs }));
+  }, [updateSession]);
 
   const createEvent = useCallback((start: number, end: number) => {
     const sequence = allocatorRef.current++; updateSession(current => ({ ...current, next_event_sequence: allocatorRef.current }));
@@ -289,7 +297,7 @@ export default function ShortTurnAnnotationPage() {
       <section className="grid min-h-[560px] gap-3 xl:grid-cols-[minmax(280px,1.1fr)_minmax(300px,1fr)_minmax(300px,1fr)]">
         <aside className="rounded-xl border border-border bg-card p-3">
           <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Source media')}</p>
-          {video ? <video ref={audioRef as React.RefObject<HTMLVideoElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={event => updateSession(current => ({ ...current, source_media_duration_ms: Math.round(event.currentTarget.duration * 1000) }))} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="aspect-video w-full rounded bg-black" /> : <div className="rounded bg-muted p-5"><audio ref={audioRef as React.RefObject<HTMLAudioElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={event => updateSession(current => ({ ...current, source_media_duration_ms: Math.round(event.currentTarget.duration * 1000) }))} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="w-full" /><p className="mt-4 text-sm text-muted-foreground">{t('Audio-only source. Speaker map descriptions remain local-only.')}</p></div>}
+          {video ? <video ref={audioRef as React.RefObject<HTMLVideoElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={onLoadedMetadata} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="aspect-video w-full rounded bg-black" /> : <div className="rounded bg-muted p-5"><audio ref={audioRef as React.RefObject<HTMLAudioElement>} src={mediaUrl(session.source_media_path)} controls onLoadedMetadata={onLoadedMetadata} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="w-full" /><p className="mt-4 text-sm text-muted-foreground">{t('Audio-only source. Speaker map descriptions remain local-only.')}</p></div>}
           <div className="mt-3 flex flex-wrap gap-2"><button onClick={togglePlay} className="inline-flex items-center gap-1 rounded bg-secondary px-3 py-2 text-sm text-secondary-foreground">{isPlaying ? <Pause size={16} /> : <Play size={16} />}{isPlaying ? t('Pause') : t('Play')}</button>{[250, 500, 1000].map(padding => <button key={padding} onClick={() => playSelection(padding)} disabled={!selected} className="rounded border border-border bg-background px-2 py-1 text-xs hover:bg-accent disabled:opacity-40">{t('Event')} ±{padding} ms</button>)}<button onClick={() => setLoop(value => !value)} disabled={!selected} aria-pressed={loop} className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${loop ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background'}`}>{t('Loop')}</button></div>
           <div className="mt-5 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Speaker map — local only')}</p>{session.speaker_map.map((speaker, index) => <div className="mb-2 grid grid-cols-[8rem_1fr] gap-2" key={speaker.key}><span className="rounded bg-muted p-1 text-center font-mono text-xs">{speaker.key}</span><input value={speaker.description} placeholder={t('Local description')} aria-label={t('Speaker local description', { number: index + 1 })} onChange={event => updateSession(current => ({ ...current, speaker_map: current.speaker_map.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item) }))} className="min-w-0 rounded border border-input bg-background px-2 text-sm text-foreground" /></div>)}<button onClick={() => updateSession(current => ({ ...current, speaker_map: [...current.speaker_map, { key: `gt_speaker_${String(current.speaker_map.length + 1).padStart(2, '0')}`, description: '' }] }))} className="text-sm text-primary underline">{t('Add speaker')}</button></div>
         </aside>

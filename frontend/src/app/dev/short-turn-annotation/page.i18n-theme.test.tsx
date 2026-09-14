@@ -77,11 +77,16 @@ it('renders the complete core workflow in Chinese', async () => {
 
 it('retains the English workflow', async () => {
   await uiI18n.changeLanguage('en');
-  render(<ShortTurnAnnotationPage />);
+  const { container } = render(<ShortTurnAnnotationPage />);
   expect(screen.getByText('Short-Turn Annotation Workspace')).toBeTruthy();
   expect(screen.getByText('Initialize annotation project')).toBeTruthy();
   await loadWorkspace();
   expect(screen.getByRole('button', { name: 'Run QA' })).toBeTruthy();
+
+  const audio = container.querySelector('audio');
+  expect(audio).toBeTruthy();
+  Object.defineProperty(audio, 'duration', { configurable: true, value: 7.25 });
+  expect(() => fireEvent.loadedMetadata(audio!)).not.toThrow();
 });
 
 it('switches language and theme without changing annotation data', async () => {
