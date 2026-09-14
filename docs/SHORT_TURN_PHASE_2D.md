@@ -139,6 +139,21 @@ build. It stores a meeting-local `annotation_session.json` and
 Neither source media paths nor speaker-map descriptions are emitted to a
 benchmark manifest.
 
+The normal Meeting Details page now provides the minimal bridge into this
+evaluation workflow. Under the same development/evaluation feature gate,
+**Evaluation Tools** can export the existing persisted Production Artifact and
+open `/dev/short-turn-annotation`. Export stays disabled until the shared
+diarization lifecycle is `done`; a completed zero-turn result is still valid.
+The bridge consumes the existing lifecycle and export command and never launches
+inference or builds an artifact in the browser.
+
+The operator sequence is: record/import a real meeting → complete transcription
+→ Identify Speakers → export Production Artifact from Meeting Details → run
+`short_turn_export` → open and initialize the annotation workspace → Blind →
+Review → QA → save/export → `short_turn_dataset_check` → frozen Production
+Artifact replay. This is the supported UI entry path for the real-meeting human
+annotation smoke workflow.
+
 The first pass reads only `annotation_windows.blind.jsonl`; the Tauri boundary
 clears all suggestion fields before returning its viewport. Review is locked
 until every blind viewport has `reviewed_blind` status and then reads only the

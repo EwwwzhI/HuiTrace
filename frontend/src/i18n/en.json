@@ -1179,5 +1179,19 @@
   "Workflow and editing": "Workflow and editing",
   "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.": "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.",
   "Review progress {{completed}} / {{total}}": "Review progress {{completed}} / {{total}}",
-  "Complete all Review windows before exporting the Benchmark Manifest.": "Complete all Review windows before exporting the Benchmark Manifest."
+  "Complete all Review windows before exporting the Benchmark Manifest.": "Complete all Review windows before exporting the Benchmark Manifest.",
+  "Evaluation": "Evaluation",
+  "Export Production Artifact": "Export Production Artifact",
+  "Open Annotation Workspace": "Open Annotation Workspace",
+  "Complete speaker analysis": "Complete speaker analysis",
+  "Generate annotation windows": "Generate annotation windows",
+  "Complete speaker analysis first.": "Complete speaker analysis first.",
+  "Speaker analysis is still running.": "Speaker analysis is still running.",
+  "Speaker analysis status is unavailable.": "Speaker analysis status is unavailable.",
+  "Meeting ID is unavailable.": "Meeting ID is unavailable.",
+  "Production Artifact exported.": "Production Artifact exported.",
+  "Exporting Production Artifact…": "Exporting Production Artifact…",
+  "Failed to export Production Artifact": "Failed to export Production Artifact",
+  "This meeting does not have a complete evaluation snapshot yet. Complete speaker analysis before exporting.": "This meeting does not have a complete evaluation snapshot yet. Complete speaker analysis before exporting.",
+  "Prepare annotation windows before opening the workspace.": "Prepare annotation windows before opening the workspace."
 }

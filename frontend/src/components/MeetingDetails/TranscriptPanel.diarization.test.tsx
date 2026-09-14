@@ -26,6 +26,7 @@ vi.mock('@/components/VirtualizedTranscriptView', () => ({
 }));
 vi.mock('@/components/TranscriptView', () => ({ TranscriptView: () => null }));
 vi.mock('./TranscriptButtonGroup', () => ({ TranscriptButtonGroup: () => null }));
+vi.mock('./EvaluationToolsMenu', () => ({ EvaluationToolsMenu: () => null }));
 
 const { TranscriptPanel } = await import('./TranscriptPanel');
 

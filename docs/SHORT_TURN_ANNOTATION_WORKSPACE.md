@@ -68,6 +68,31 @@ project. A compact Chinese / English control in the workspace header updates
 that same global preference; it does not create annotation-specific language
 state.
 
+## Normal meeting entry point
+
+Meeting Details exposes **Evaluation Tools** beside the transcript controls when
+the existing short-turn annotation feature gate is enabled. Development builds
+enable the gate automatically; an evaluation build must set
+`NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION=true`. **Export Production Artifact**
+is enabled only after speaker analysis reaches `done`, including a valid result
+with zero speaker turns. The action calls the existing persisted-snapshot export
+command; it does not rerun ASR, diarization, VAD, or ShortTurn inference.
+
+Use this end-to-end workflow for a real meeting:
+
+1. Record or import a real meeting in HuiTrace.
+2. Complete transcription.
+3. Run **Identify Speakers** and wait for it to complete.
+4. Open **Evaluation Tools** in Meeting Details and choose **Export Production Artifact**.
+5. Run `short_turn_export` with the meeting media and exported artifact to create Blind and Review windows.
+6. Choose **Open Annotation Workspace** and initialize the generated project.
+7. Complete Blind, then Review, run QA, save, and export the benchmark manifest.
+8. Run `short_turn_dataset_check` against the local dataset root.
+9. Run `short_turn_benchmark --mode production-artifact-replay` for frozen replay.
+
+Cancelling the native export dialog makes no change. A missing completed snapshot
+means the meeting must finish normal production speaker analysis before retrying.
+
 Localization applies only to interface chrome, labels, help, status messages,
 and controls. Meeting IDs, event IDs, speaker keys and descriptions, ASR text,
 paths, filenames, JSON values, enum values, and Ground Truth data are never

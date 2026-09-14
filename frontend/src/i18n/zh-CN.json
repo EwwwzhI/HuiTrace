@@ -1201,5 +1201,19 @@
   "Workflow and editing": "流程与编辑",
   "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.": "当前窗口仍有 {{count}} 个待确认事件。请先完成所有事件的类型、说话人和标记确认，再完成本窗口。",
   "Review progress {{completed}} / {{total}}": "复核进度 {{completed}} / {{total}}",
-  "Complete all Review windows before exporting the Benchmark Manifest.": "完成全部复核窗口后才能导出 Benchmark Manifest。"
+  "Complete all Review windows before exporting the Benchmark Manifest.": "完成全部复核窗口后才能导出 Benchmark Manifest。",
+  "Evaluation": "评测",
+  "Export Production Artifact": "导出 Production Artifact",
+  "Open Annotation Workspace": "打开标注工作台",
+  "Complete speaker analysis": "完成说话人分析",
+  "Generate annotation windows": "生成标注窗口",
+  "Complete speaker analysis first.": "请先完成说话人分析。",
+  "Speaker analysis is still running.": "说话人分析仍在运行。",
+  "Speaker analysis status is unavailable.": "无法获取说话人分析状态。",
+  "Meeting ID is unavailable.": "当前会议 ID 不可用。",
+  "Production Artifact exported.": "Production Artifact 已导出。",
+  "Exporting Production Artifact…": "正在导出 Production Artifact…",
+  "Failed to export Production Artifact": "Production Artifact 导出失败",
+  "This meeting does not have a complete evaluation snapshot yet. Complete speaker analysis before exporting.": "当前会议还没有完整的评测快照。请先完成说话人分析后再导出。",
+  "Prepare annotation windows before opening the workspace.": "请先准备标注窗口，再进入工作台。"
 }

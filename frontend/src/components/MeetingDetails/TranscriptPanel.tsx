@@ -11,6 +11,7 @@ import { useDiarization } from '@/hooks/useDiarization';
 import { speakerCount } from '@/lib/speakerTurns';
 import { translateUI } from '@/i18n';
 import { useUiTranslation } from '@/i18n/client';
+import { EvaluationToolsMenu } from './EvaluationToolsMenu';
 
 
 interface TranscriptPanelProps {
@@ -122,14 +123,17 @@ export function TranscriptPanel({
             {usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           </span>
         </div>
-        <TranscriptButtonGroup
-          transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
-          onCopyTranscript={onCopyTranscript}
-          onOpenMeetingFolder={onOpenMeetingFolder}
-          meetingId={meetingId}
-          meetingFolderPath={meetingFolderPath}
-          onRefetchTranscripts={onRefetchTranscripts}
-        />
+        <div className="flex shrink-0 items-center gap-1">
+          <EvaluationToolsMenu meetingId={meetingId} diarizationState={diarization.state} />
+          <TranscriptButtonGroup
+            transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
+            onCopyTranscript={onCopyTranscript}
+            onOpenMeetingFolder={onOpenMeetingFolder}
+            meetingId={meetingId}
+            meetingFolderPath={meetingFolderPath}
+            onRefetchTranscripts={onRefetchTranscripts}
+          />
+        </div>
       </div>
 
       {/* Who spoke, and for how long. Absent entirely while recording, and while
