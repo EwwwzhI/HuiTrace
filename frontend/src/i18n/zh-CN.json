@@ -1094,7 +1094,6 @@
   "Source media": "源媒体",
   "Audio-only source. Speaker map descriptions remain local-only.": "当前为纯音频源。说话人映射说明仅保存在本地。",
   "Play": "播放",
-  "Pause": "暂停",
   "Event": "事件",
   "Loop": "循环播放",
   "Speaker map — local only": "说话人映射（仅本地）",
@@ -1144,7 +1143,6 @@
   "Select an event or drag a new region. Every region is a single canonical source-timeline event, never a copy of a window label.": "请选择一个事件，或在时间轴上拖选新区域。每个区域都对应唯一的标准源时间轴事件，不是窗口标签的副本。",
   "Annotation inspector": "标注属性",
   "Needs confirmation": "待确认",
-  "Delete": "删除",
   "Start time (ms)": "开始时间（ms）",
   "End time (ms)": "结束时间（ms）",
   "Kind": "类型",
@@ -1200,5 +1198,8 @@
   "Fit meeting": "适应整场会议",
   "Playback and navigation": "播放与定位",
   "Classification and flags": "分类与上下文标记",
-  "Workflow and editing": "流程与编辑"
+  "Workflow and editing": "流程与编辑",
+  "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.": "当前窗口仍有 {{count}} 个待确认事件。请先完成所有事件的类型、说话人和标记确认，再完成本窗口。",
+  "Review progress {{completed}} / {{total}}": "复核进度 {{completed}} / {{total}}",
+  "Complete all Review windows before exporting the Benchmark Manifest.": "完成全部复核窗口后才能导出 Benchmark Manifest。"
 }

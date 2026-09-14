@@ -14,3 +14,22 @@ describe('annotation workspace integrity helpers', () => {
     expect(saveLabel(2, 2, null, false)).toBe('Saved locally');
   });
 });
+
+
+it('blocks pending annotations in every overlapping window, excluding boundary contact', async () => {
+  const { pendingInWindow, reviewCompletion } = await import('./annotationIntegrity');
+  const events = [{ start_ms: 4500, end_ms: 4800, annotation_status: 'pending' }];
+  const a = { window_id: 'a', source_start_ms: 0, source_end_ms: 5000 };
+  const b = { window_id: 'b', source_start_ms: 4000, source_end_ms: 9000 };
+  expect(pendingInWindow(events, a, false)).toBe(1);
+  expect(pendingInWindow(events, b, false)).toBe(1);
+  expect(pendingInWindow(events, { ...b, source_start_ms: 4800 }, false)).toBe(0);
+  events[0].annotation_status = 'blind_confirmed';
+  expect(pendingInWindow(events, a, false)).toBe(0);
+  expect(pendingInWindow(events, b, false)).toBe(0);
+  events[0].annotation_status = 'review_pending';
+  expect(pendingInWindow(events, a, true)).toBe(1);
+  expect(reviewCompletion([a, b], { a: 'reviewed_second_pass' }).complete).toBe(false);
+  expect(reviewCompletion([a, b], { a: 'reviewed_second_pass', b: 'reviewed_second_pass' }).complete).toBe(true);
+  expect(reviewCompletion([], {}).complete).toBe(false);
+});

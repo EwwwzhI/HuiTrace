@@ -1072,7 +1072,6 @@
   "Source media": "Source media",
   "Audio-only source. Speaker map descriptions remain local-only.": "Audio-only source. Speaker map descriptions remain local-only.",
   "Play": "Play",
-  "Pause": "Pause",
   "Event": "Event",
   "Loop": "Loop",
   "Speaker map — local only": "Speaker map — local only",
@@ -1122,7 +1121,6 @@
   "Select an event or drag a new region. Every region is a single canonical source-timeline event, never a copy of a window label.": "Select an event or drag a new region. Every region is a single canonical source-timeline event, never a copy of a window label.",
   "Annotation inspector": "Annotation inspector",
   "Needs confirmation": "Needs confirmation",
-  "Delete": "Delete",
   "Start time (ms)": "Start time (ms)",
   "End time (ms)": "End time (ms)",
   "Kind": "Kind",
@@ -1178,5 +1176,8 @@
   "Fit meeting": "Fit meeting",
   "Playback and navigation": "Playback and navigation",
   "Classification and flags": "Classification and flags",
-  "Workflow and editing": "Workflow and editing"
+  "Workflow and editing": "Workflow and editing",
+  "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.": "This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.",
+  "Review progress {{completed}} / {{total}}": "Review progress {{completed}} / {{total}}",
+  "Complete all Review windows before exporting the Benchmark Manifest.": "Complete all Review windows before exporting the Benchmark Manifest."
 }

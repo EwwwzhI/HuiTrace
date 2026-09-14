@@ -329,6 +329,78 @@ fn all_review_windows_complete(
             .all(|id| statuses.get(id).map(String::as_str) == Some("reviewed_second_pass"))
 }
 
+fn events_overlapping_window<'a>(
+    draft: &'a AnnotationDraft,
+    window: &'a AnnotationWindow,
+) -> impl Iterator<Item = &'a AnnotationEvent> {
+    draft.events.iter().filter(move |event| {
+        event.start_ms < window.source_end_ms && event.end_ms > window.source_start_ms
+    })
+}
+
+fn validate_window_completion(
+    draft: &AnnotationDraft,
+    window: &AnnotationWindow,
+    review: bool,
+) -> Result<()> {
+    let count = events_overlapping_window(draft, window)
+        .filter(|event| {
+            event.annotation_status == "pending"
+                || (review && event.annotation_status == "review_pending")
+        })
+        .count();
+    if count > 0 {
+        bail!("Window {} contains {} unconfirmed annotations; confirm all event labels before completing it", window.window_id, count);
+    }
+    Ok(())
+}
+
+fn validate_blind_entry(draft: &AnnotationDraft) -> Result<()> {
+    let count = draft
+        .events
+        .iter()
+        .filter(|event| event.annotation_status == "pending")
+        .count();
+    if count > 0 {
+        bail!("Blind pass contains {count} unconfirmed annotations. Confirm them before opening Review.");
+    }
+    Ok(())
+}
+
+fn require_complete(
+    windows: &[AnnotationWindow],
+    session: &AnnotationSession,
+    review: bool,
+) -> Result<()> {
+    let complete = if review {
+        all_review_windows_complete(windows, &session.window_status)
+    } else {
+        all_blind_windows_complete(windows, &session.window_status)
+    };
+    if !complete {
+        let total = expected_window_ids(windows).len();
+        let completed = windows
+            .iter()
+            .filter(|window| {
+                let status = session
+                    .window_status
+                    .get(&window.window_id)
+                    .map(String::as_str);
+                status == Some("reviewed_second_pass")
+                    || (!review && status == Some("reviewed_blind"))
+            })
+            .map(|window| &window.window_id)
+            .collect::<BTreeSet<_>>()
+            .len();
+        let pass = if review { "Review" } else { "Blind" };
+        bail!(
+            "{pass} annotation is incomplete: {} / {total} windows remain (completed: {completed})",
+            total - completed
+        );
+    }
+    Ok(())
+}
+
 fn read_windows(path: &Path, mode: &AnnotationMode) -> Result<Vec<AnnotationWindow>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -597,7 +669,8 @@ pub fn load_workspace_inner(request: WorkspaceLoadRequest) -> Result<WorkspaceSn
     if matches!(request.mode, AnnotationMode::Review | AnnotationMode::Qa) && !initialized {
         bail!("initialize the annotation project before opening review or QA");
     }
-    if request.mode == AnnotationMode::Review && !windows.is_empty() {
+    if matches!(request.mode, AnnotationMode::Review | AnnotationMode::Qa) {
+        validate_blind_entry(&draft)?;
         let blind_windows = read_windows(
             &directory.join("annotation_windows.blind.jsonl"),
             &AnnotationMode::Blind,
@@ -678,14 +751,6 @@ pub fn save_workspace_inner(request: WorkspaceSaveRequest) -> Result<()> {
         bail!("annotation project is not initialized");
     }
     validate_artifact_identity(&request.dataset_dir, &request.session)?;
-    atomic_write(
-        &directory.join("annotations.draft.json"),
-        &serde_json::to_vec_pretty(&request.draft)?,
-    )?;
-    atomic_write(
-        &directory.join("annotation_session.json"),
-        &serde_json::to_vec_pretty(&request.session)?,
-    )?;
     let blind_windows = read_windows(
         &directory.join("annotation_windows.blind.jsonl"),
         &AnnotationMode::Blind,
@@ -693,6 +758,38 @@ pub fn save_workspace_inner(request: WorkspaceSaveRequest) -> Result<()> {
     let review_windows = read_windows(
         &directory.join("annotation_windows.review.jsonl"),
         &AnnotationMode::Review,
+    )?;
+    // Autosave is the backend authority for completion; validate before any write.
+    for window in &blind_windows {
+        if matches!(
+            request
+                .session
+                .window_status
+                .get(&window.window_id)
+                .map(String::as_str),
+            Some("reviewed_blind" | "reviewed_second_pass")
+        ) {
+            validate_window_completion(&request.draft, window, false)?;
+        }
+    }
+    for window in &review_windows {
+        if request
+            .session
+            .window_status
+            .get(&window.window_id)
+            .map(String::as_str)
+            == Some("reviewed_second_pass")
+        {
+            validate_window_completion(&request.draft, window, true)?;
+        }
+    }
+    atomic_write(
+        &directory.join("annotations.draft.json"),
+        &serde_json::to_vec_pretty(&request.draft)?,
+    )?;
+    atomic_write(
+        &directory.join("annotation_session.json"),
+        &serde_json::to_vec_pretty(&request.session)?,
     )?;
     let identity = request
         .session
@@ -734,15 +831,11 @@ impl GateSample for AnnotationEvent {
         self.end_ms
     }
     fn kind_label(&self) -> &'static str {
-        match self.kind.as_str() {
-            "short_speech" => "short_speech",
-            "backchannel" => "backchannel",
-            "noise" => "noise",
-            "non_speech_vocalization" => "non_speech_vocalization",
-            "ordinary_speech_control" => "ordinary_speech_control",
-            _ => "invalid",
-        }
+        dataset::GroundTruthKind::from_label(&self.kind)
+            .map(|kind| kind.as_label())
+            .unwrap_or("invalid")
     }
+
     fn ground_truth_speaker(&self) -> Option<&str> {
         self.speaker.as_deref()
     }
@@ -939,11 +1032,31 @@ pub fn export_manifest(
     draft: &AnnotationDraft,
     session: &AnnotationSession,
 ) -> Result<dataset::DatasetCheckReport> {
+    let directory = meeting_dir(dataset_dir, &draft.meeting_id)?;
+    let blind = read_windows(
+        &directory.join("annotation_windows.blind.jsonl"),
+        &AnnotationMode::Blind,
+    )?;
+    let review = read_windows(
+        &directory.join("annotation_windows.review.jsonl"),
+        &AnnotationMode::Review,
+    )?;
+    require_complete(&blind, session, false)?;
+    require_complete(&review, session, true)?;
     let qa = qa_workspace(dataset_dir, draft, session)?;
     if !qa.errors.is_empty() {
         bail!("QA must pass before export: {}", qa.errors.join("; "));
     }
     validate_artifact_identity(dataset_dir, session)?;
+    let saved_draft: AnnotationDraft =
+        serde_json::from_slice(&fs::read(directory.join("annotations.draft.json"))?)?;
+    let saved_session: AnnotationSession =
+        serde_json::from_slice(&fs::read(directory.join("annotation_session.json"))?)?;
+    if &saved_draft != draft || &saved_session != session {
+        bail!(
+            "Save the current draft and completion state before exporting the Benchmark Manifest"
+        );
+    }
     let artifact = relative_artifact_path(dataset_dir, &session.production_artifact_path)?;
     let artifact_sha = artifact_sha256(&dataset_dir.join(&artifact))?;
     let visible_speakers = session
@@ -965,7 +1078,6 @@ pub fn export_manifest(
             )
         })
         .collect::<Vec<_>>();
-    write_jsonl(&meeting_directory.join("manifest.jsonl"), &own_rows)?;
 
     // The benchmark consumes a root manifest. Preserve exported rows for other
     // meetings and replace only this meeting's canonical event collection.
@@ -993,9 +1105,30 @@ pub fn export_manifest(
     rows.retain(|row| {
         row.get("meeting_id").and_then(|value| value.as_str()) != Some(draft.meeting_id.as_str())
     });
-    rows.extend(own_rows);
-    write_jsonl(&root_manifest, &rows)?;
-    dataset::check_dataset(dataset_dir)
+    rows.extend(own_rows.clone());
+    let records = rows
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<dataset::DatasetRecord>, _>>()?;
+    let report = dataset::check_dataset_records(dataset_dir, &records)?;
+    let meeting_manifest = meeting_directory.join("manifest.jsonl");
+    let previous = if meeting_manifest.exists() {
+        Some(fs::read(&meeting_manifest)?)
+    } else {
+        None
+    };
+    write_jsonl(&meeting_manifest, &own_rows)?;
+    if let Err(error) = write_jsonl(&root_manifest, &rows) {
+        match previous {
+            Some(bytes) => atomic_write(&meeting_manifest, &bytes)
+                .context("restore meeting manifest after root write failure")?,
+            None => fs::remove_file(&meeting_manifest)
+                .context("remove meeting manifest after root write failure")?,
+        }
+        return Err(error);
+    }
+    Ok(report)
 }
 
 /// Tauri boundary for local QA.  No network, inference, or production-state
@@ -1172,6 +1305,210 @@ mod tests {
         statuses.insert("w1".into(), "reviewed_second_pass".into());
         statuses.insert("w3".into(), "reviewed_second_pass".into());
         assert!(all_review_windows_complete(&windows, &statuses));
+    }
+
+    #[test]
+    fn completion_rejects_pending_across_overlapping_windows_only() {
+        let mut a = window("a");
+        a.source_end_ms = 5_000;
+        let mut b = window("b");
+        b.source_start_ms = 4_000;
+        b.source_end_ms = 9_000;
+        let mut c = window("c");
+        c.source_start_ms = 4_800;
+        c.source_end_ms = 9_000;
+        let mut draft = AnnotationDraft::empty("meeting".into());
+        draft.events.push(event("e", 4_500, 4_800, None));
+        draft.events[0].annotation_status = "pending".into();
+        assert!(validate_window_completion(&draft, &a, false).is_err());
+        assert!(validate_window_completion(&draft, &b, false).is_err());
+        assert!(validate_window_completion(&draft, &c, false).is_ok());
+        draft.events[0].annotation_status = "blind_confirmed".into();
+        assert!(validate_window_completion(&draft, &a, false).is_ok());
+        assert!(validate_window_completion(&draft, &b, false).is_ok());
+        draft.events[0].annotation_status = "review_pending".into();
+        assert!(validate_window_completion(&draft, &a, true).is_err());
+        draft.events[0].annotation_status = "reviewed".into();
+        assert!(validate_window_completion(&draft, &a, true).is_ok());
+    }
+
+    /// Exercises real initialize/save/load/QA/export boundaries with a frozen artifact.
+    #[test]
+    fn synthetic_integrity_workflow_a_through_d() {
+        let root = tempfile::tempdir().unwrap();
+        let media_root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("meeting-1");
+        fs::create_dir_all(&directory).unwrap();
+        let artifact = directory.join("production.json");
+        write_artifact(&artifact, &production_artifact("meeting-1")).unwrap();
+        let media = root.path().join("source.wav");
+        fs::write(&media, b"RIFF-test").unwrap();
+        let windows = (0..200)
+            .map(|i| {
+                serde_json::json!({
+                    "window_id": format!("w{i}"), "meeting_id": "meeting-1",
+                    "source_start_ms": i * 10, "source_end_ms": (i + 1) * 10,
+                    "production_artifact_path": artifact
+                })
+            })
+            .collect::<Vec<_>>();
+        for pass in ["blind", "review"] {
+            write_jsonl(
+                &directory.join(format!("annotation_windows.{pass}.jsonl")),
+                &windows,
+            )
+            .unwrap();
+        }
+        let mut snapshot = initialize_annotation_project_inner(
+            InitializeProjectRequest {
+                dataset_dir: root.path().into(),
+                meeting_id: "meeting-1".into(),
+                source_media_path: media,
+                production_artifact_path: artifact,
+            },
+            media_root.path(),
+        )
+        .unwrap();
+        snapshot.draft.events.push(event("e", 0, 200, None));
+        snapshot.draft.events[0].kind = "noise".into();
+        snapshot.draft.events[0].annotation_status = "pending".into();
+        let save = |snapshot: &WorkspaceSnapshot| {
+            save_workspace_inner(WorkspaceSaveRequest {
+                dataset_dir: root.path().into(),
+                draft: snapshot.draft.clone(),
+                session: snapshot.session.clone(),
+            })
+        };
+        save(&snapshot).unwrap();
+        let prior = fs::read(directory.join("annotation_session.json")).unwrap();
+        snapshot
+            .session
+            .window_status
+            .insert("w0".into(), "reviewed_blind".into());
+        assert!(save(&snapshot)
+            .unwrap_err()
+            .to_string()
+            .contains("unconfirmed"));
+        assert_eq!(
+            prior,
+            fs::read(directory.join("annotation_session.json")).unwrap()
+        );
+        snapshot.draft.events[0].annotation_status = "blind_confirmed".into();
+        save(&snapshot).unwrap();
+
+        let root_manifest = root.path().join("manifest.jsonl");
+        let meeting_manifest = directory.join("manifest.jsonl");
+        fs::write(&root_manifest, b"\n").unwrap();
+        fs::write(&meeting_manifest, b"existing meeting manifest\n").unwrap();
+        let rejected = |snapshot: &WorkspaceSnapshot, message: &str| {
+            let root_before = fs::read(&root_manifest).unwrap();
+            let meeting_before = fs::read(&meeting_manifest).unwrap();
+            assert!(
+                export_manifest(root.path(), &snapshot.draft, &snapshot.session)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(message)
+            );
+            assert_eq!(root_before, fs::read(&root_manifest).unwrap());
+            assert_eq!(meeting_before, fs::read(&meeting_manifest).unwrap());
+        };
+        rejected(&snapshot, "Blind annotation is incomplete");
+        for i in 0..200 {
+            snapshot
+                .session
+                .window_status
+                .insert(format!("w{i}"), "reviewed_blind".into());
+        }
+        save(&snapshot).unwrap();
+        // Simulate historical corrupt state without passing through the new save gate.
+        snapshot.draft.events[0].annotation_status = "pending".into();
+        atomic_write(
+            &directory.join("annotations.draft.json"),
+            &serde_json::to_vec(&snapshot.draft).unwrap(),
+        )
+        .unwrap();
+        let load_review = || {
+            load_workspace_inner(WorkspaceLoadRequest {
+                dataset_dir: root.path().into(),
+                meeting_id: "meeting-1".into(),
+                mode: AnnotationMode::Review,
+            })
+        };
+        assert!(load_review()
+            .unwrap_err()
+            .to_string()
+            .contains("Blind pass contains 1"));
+        snapshot.draft.events[0].annotation_status = "blind_confirmed".into();
+        save(&snapshot).unwrap();
+        assert!(load_review().unwrap().review_evidence.is_some());
+        assert!(
+            qa_workspace(root.path(), &snapshot.draft, &snapshot.session)
+                .unwrap()
+                .errors
+                .is_empty()
+        );
+        for i in 0..100 {
+            snapshot
+                .session
+                .window_status
+                .insert(format!("w{i}"), "reviewed_second_pass".into());
+        }
+        save(&snapshot).unwrap();
+        rejected(&snapshot, "Review annotation is incomplete");
+        for i in 100..199 {
+            snapshot
+                .session
+                .window_status
+                .insert(format!("w{i}"), "reviewed_second_pass".into());
+        }
+        rejected(&snapshot, "1 / 200");
+        snapshot.session.window_status.remove("w199");
+        rejected(&snapshot, "incomplete");
+        snapshot
+            .session
+            .window_status
+            .insert("w199".into(), "reviewed_second_pass".into());
+        snapshot.draft.events[0].annotation_status = "pending".into();
+        rejected(&snapshot, "QA must pass");
+        snapshot.draft.events[0].annotation_status = "review_pending".into();
+        assert!(save(&snapshot).is_err());
+        rejected(&snapshot, "QA must pass");
+        // Reopen affected Review windows while retaining their completed Blind pass.
+        for i in 0..20 {
+            snapshot
+                .session
+                .window_status
+                .insert(format!("w{i}"), "reviewed_blind".into());
+        }
+        save(&snapshot).unwrap();
+        assert!(load_review().is_ok());
+        for i in 0..20 {
+            snapshot
+                .session
+                .window_status
+                .insert(format!("w{i}"), "reviewed_second_pass".into());
+        }
+        snapshot.draft.events[0].annotation_status = "reviewed".into();
+        save(&snapshot).unwrap();
+        snapshot.draft.events[0].notes = "unsaved edit".into();
+        rejected(&snapshot, "Save the current draft");
+        snapshot.draft.events[0].notes.clear();
+        fs::write(&root_manifest, b"invalid-json\n").unwrap();
+        rejected(&snapshot, "parse");
+        fs::write(&root_manifest, b"\n").unwrap();
+        let report = export_manifest(root.path(), &snapshot.draft, &snapshot.session).unwrap();
+        assert_eq!(report.coverage.scorable_samples, 1);
+        assert_eq!(
+            fs::read(&root_manifest).unwrap(),
+            fs::read(&meeting_manifest).unwrap()
+        );
+        assert_eq!(
+            dataset::check_dataset(root.path())
+                .unwrap()
+                .coverage
+                .scorable_samples,
+            1
+        );
     }
 
     #[test]

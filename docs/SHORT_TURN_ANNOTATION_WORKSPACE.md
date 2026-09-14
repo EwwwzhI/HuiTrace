@@ -126,14 +126,85 @@ Blind is complete only when every ID in `annotation_windows.blind.jsonl` is `rev
 
 `expected_materialized` is tri-state: Auto (`null`/`None`) applies the benchmark default, while Yes and No are explicit overrides. New annotations always start at Auto and in a pending state; QA blocks export until each is explicitly confirmed. Meeting-local speaker keys are generated as immutable `gt_speaker_XX` identifiers, while descriptions remain editable and local-only. QA rejects empty/duplicate keys, missing event membership, and `ordinary_speech_control` intervals at or below 1200 ms.
 
-The benchmark aligns meeting-local GT identities to production diarizer clusters from temporal overlap using a maximum-weight one-to-one assignment before speaker metrics are computed. Production cluster labels are never exposed during Blind annotation.
+The benchmark aligns meeting-local GT identities to production diarizer clusters using temporal overlap from independent ordinary-speech reference intervals and a maximum-weight one-to-one assignment before speaker metrics are computed. Production cluster labels are never exposed during Blind annotation.
 
 ## Persistence, visualization, and visibility
 
 Autosave uses monotonically increasing edit/saving/saved revisions and a serialized single-flight queue. An older save completing cannot mark a newer edit Saved. Backend atomic writes use per-process unique temporary names. Any malformed root-manifest line aborts export instead of being silently dropped.
 
-Blind exposes only media, waveform, manual GT, local speaker helpers, progress, and structural QA. Dataset quotas, representative-data gates, suggestions, ASR, diarizer, and VAD evidence remain hidden. Review renders viewport-scaled ASR text, diarizer speaker/overlap, VAD confidence, system suggestions, and GT as visually separate tiers. Export is available only in Review after current-revision QA passes and the same revision has been saved.
+Blind exposes only media, waveform, manual GT, local speaker helpers, progress, and structural QA. Dataset quotas, representative-data gates, suggestions, ASR, diarizer, and VAD evidence remain hidden. Review renders viewport-scaled ASR text, diarizer speaker/overlap, VAD confidence, system suggestions, and GT as visually separate tiers. Export is available only after all Blind and Review windows are complete, current-revision QA passes and the same revision has been saved.
 
 ## Operational smoke workflow
 
 For one 10–15 minute, 2–4 speaker meeting: run production processing; export Production Artifact v2; run `short_turn_export`; initialize the project without editing JSON; annotate and close/reopen midway through Blind; finish all Blind windows; repeat the close/reopen check midway through Review; run QA; export `manifest.jsonl`; run `short_turn_dataset_check`; then run `short_turn_benchmark --mode production-artifact-replay`. With only one meeting, `INSUFFICIENT_REPRESENTATIVE_DATA` is the expected gate result. The workspace never invokes ASR, diarization, VAD, or ShortTurn inference.
+
+
+## Phase 2D.2a-final: Blind Completion Integrity
+
+A completed Blind viewport must contain no pending annotation. Membership uses
+strict source-time intersection: event.start_ms < window.source_end_ms and
+event.end_ms > window.source_start_ms. Boundary contact alone is not overlap;
+a pending event crossing two overlapping windows blocks both. Confirmation is
+always an explicit annotator action; completing a window never confirms events.
+The UI reports the pending count in Chinese/English. The backend validates every
+completed viewport before autosave writes any draft/session file. Review completion
+also rejects review_pending annotations. Editing or undoing into a pending state
+reopens affected viewports; reopening Review retains the previous Blind completion.
+
+Opening Review requires every expected Blind window ID to be complete AND zero
+pending events anywhere in the draft, including historical sessions with incorrect
+completed statuses. The same evidence boundary applies to a direct QA-mode load,
+which returns Review evidence. Structural QA still rejects pending/review_pending.
+
+## Phase 2D.2a-final: Review Export Integrity
+
+Formal export requires Blind complete + Review complete + QA pass + Saved.
+Expected IDs come from both window files, never from the number of session keys.
+Blind accepts reviewed_blind or reviewed_second_pass; Review accepts only
+reviewed_second_pass. Empty window sets and missing statuses fail closed.
+The UI displays Review completed/total and disables export until every Review
+window is complete, current-revision QA passes, and the same revision is saved.
+
+The backend independently checks both passes before QA or manifest writes, and
+requires the supplied draft/session to equal persisted state. Errors include
+completed, total, and remaining counts. It parses the existing root manifest,
+constructs the merged rows and runs the shared dataset check before replacing
+either manifest. Incomplete passes, pending annotations, unsaved changes, malformed
+existing JSON and dataset/artifact validation failures leave both manifests unchanged.
+If root replacement fails after the meeting copy was written, the meeting copy is
+restored. This is rollback for reported write failures, not a crash-atomic transaction
+across two files; sudden termination or failure of rollback storage remains a limit.
+
+## Phase 2D.2a-final: Speaker Alignment Integrity
+
+Only independent ordinary-speech reference intervals are used for GT ↔ production
+cluster alignment. A reference must retain the explicit ordinary_speech_control
+label, have duration > 1200 ms, a nonempty known speaker, annotation_uncertain=false,
+and no overlap tag. Prefer clear intervals of at least 2 seconds during collection;
+the implemented eligibility rule is the fixed >1200 ms threshold. Handoff and
+embedded flags alone do not exclude a reference.
+
+The shared GroundTruthKind enum preserves the original annotation label rather
+than reducing both short_speech and ordinary_speech_control to SegmentKind::Speech.
+Production comparisons still use SegmentKind via explicit conversion. Legacy
+speech remains readable and keeps its prior coverage interpretation, but never
+becomes a reference based on duration. short_speech, backchannel, noise and
+non_speech_vocalization never participate in the alignment matrix.
+
+Per meeting, reference-only temporal overlaps are accumulated and a maximum-weight
+one-to-one assignment is frozen before ShortTurn scoring. There is no fallback to
+short events. Speakers with no valid positive-overlap assignment are unaligned and
+excluded from individual attribution denominators; ambiguous speaker sets are scored
+only if all their GT speakers are aligned. Dataset coverage is computed on original
+GT identities before alignment. JSON output includes speaker_alignment by meeting:
+mapped_speakers, total_gt_speakers, unmapped_gt_speakers, reference_intervals,
+reference_duration_ms and the frozen mapping. Production cluster identities remain
+confined to Review evidence/evaluation and are never added to Blind UI.
+
+Regression coverage includes overlapping-window pending gates, corrupted historical
+Review entry, 199/200 and missing-status export failures with unchanged manifests,
+full export, unsaved changes, swapped clusters, adversarial short-turn evidence,
+uncertain/overlap/legacy exclusions, accumulated references and unmapped denominators.
+The synthetic integration test exercises short_turn_export → Initialize → Blind
+Confirm/100% → Review/100% → QA → Saved → Export → Dataset Check → Frozen Replay,
+using generated silence and explicitly synthetic labels, not representative data.

@@ -153,3 +153,35 @@ logic. Continue frozen replay with the existing command:
 ```text
 cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset/local --mode production-artifact-replay
 ```
+
+
+## Phase 2D.2a-final: Blind Completion Integrity
+
+Pending events block completion in every strictly intersecting source-time viewport.
+The UI checks before completion; the backend checks completed window states before
+save. Any pending event anywhere blocks Review evidence, even in an old session
+whose Blind window statuses are already marked complete. Review completion also
+rejects review_pending; final QA confirmation checks remain in place.
+
+## Phase 2D.2a-final: Review Export Integrity
+
+Export requires every expected Blind ID complete, every expected Review ID complete,
+QA pass and persisted current state. Review progress is visible and disables export
+when incomplete. Backend checks, merged-manifest parsing and dataset validation run
+before either manifest is replaced; root-write errors roll back the meeting copy.
+A missing status, empty window set, 199/200 Review or an unsaved edit cannot export.
+This does not provide crash atomicity across two files.
+
+## Phase 2D.2a-final: Speaker Alignment Integrity
+
+Only independent ordinary_speech_control intervals >1200 ms with a known speaker,
+no annotation uncertainty and no overlap tag establish the frozen mapping. The shared
+GroundTruthKind preserves original labels; short_speech and backchannel never enter
+the matrix. No-reference speakers are explicitly unmapped, excluded from attribution
+denominators and listed in per-meeting speaker_alignment coverage. Dataset coverage
+uses original GT identities. No prediction or ShortTurn row can repair the mapping.
+
+See [workspace integrity details](SHORT_TURN_ANNOTATION_WORKSPACE.md) and the
+[implementation and validation report](SHORT_TURN_PHASE_2D_2A_FINAL_REPORT.md).
+The synthetic CLI workflow now covers export through Frozen Replay. Formal collection
+readiness still requires the documented real-meeting human annotation smoke workflow.

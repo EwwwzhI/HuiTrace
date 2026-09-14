@@ -9,9 +9,11 @@ import { UiLanguageProvider } from '@/i18n/UiLanguageProvider';
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   setTheme: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path, invoke: mocks.invoke }));
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: vi.fn() } }));
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light', setTheme: mocks.setTheme }) }));
 vi.mock('@/components/short-turn-annotation/WaveformTimeline', () => ({ WaveformTimeline: () => <div>controlled waveform</div> }));
 
@@ -54,6 +56,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   mocks.invoke.mockReset();
   mocks.setTheme.mockReset();
+  mocks.toastError.mockReset();
   localStorage.clear();
   await uiI18n.changeLanguage('en');
 });
@@ -97,4 +100,33 @@ it('switches language and theme without changing annotation data', async () => {
   expect(screen.getByText('meeting-demo-001-event-0001')).toBeTruthy();
   expect(container.querySelector('[data-testid="annotation-workspace"]')?.className).toContain('bg-background');
   expect(container.innerHTML).not.toContain('bg-slate-950');
+});
+
+
+it('refuses Blind completion until the annotator explicitly confirms the event', async () => {
+  render(<ShortTurnAnnotationPage />);
+  await loadWorkspace();
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and complete this window' }));
+  expect(mocks.toastError).toHaveBeenCalledWith('This window still contains 1 pending annotations. Confirm all event labels before completing the window.');
+  fireEvent.click(screen.getByText('meeting-demo-001-event-0001'));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm annotation' }));
+  mocks.toastError.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and complete this window' }));
+  expect(mocks.toastError).not.toHaveBeenCalled();
+});
+
+it('keeps export disabled after successful QA when Review is only partial', async () => {
+  const partial = structuredClone(snapshot);
+  partial.mode = 'review';
+  partial.draft.events[0].annotation_status = 'blind_confirmed';
+  partial.session.window_status = { 'window-1': 'reviewed_second_pass' };
+  partial.windows.push({ ...partial.windows[0], window_id: 'window-2' });
+  mocks.invoke.mockImplementation((command: string) => Promise.resolve(command === 'load_workspace' ? partial
+    : command === 'qa_workspace_command' ? { errors: [], possibleDuplicates: [], sourceDurationMs: 5000 } : null));
+  render(<ShortTurnAnnotationPage />);
+  await loadWorkspace('review');
+  fireEvent.click(screen.getByRole('button', { name: 'Run QA' }));
+  await screen.findByText('Review progress 1 / 2', { exact: false });
+  expect((screen.getByRole('button', { name: 'Export benchmark manifest' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText('Complete all Review windows before exporting the Benchmark Manifest.', { exact: false })).toBeTruthy();
 });

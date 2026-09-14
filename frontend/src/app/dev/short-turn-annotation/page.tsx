@@ -10,7 +10,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, CircleHelp, Download, Languag
 import { useTheme } from 'next-themes';
 import { isTauri } from '@/lib/isTauri';
 import { WaveformTimeline } from '@/components/short-turn-annotation/WaveformTimeline';
-import { durationBucket } from '@/lib/annotationIntegrity';
+import { durationBucket, pendingInWindow, reviewCompletion } from '@/lib/annotationIntegrity';
 import { isShortTurnAnnotationEnabled } from '@/lib/shortTurnAnnotationFeature';
 import { useUiTranslation } from '@/i18n/client';
 import { useUiLanguage } from '@/i18n/UiLanguageProvider';
@@ -101,6 +101,7 @@ export default function ShortTurnAnnotationPage() {
   useEffect(() => setThemeMounted(true), []);
 
   const currentWindow = windows[windowIndex];
+  const reviewProgress = reviewCompletion(windows, session.window_status);
   const selected = draft.events.find(event => event.event_id === selectedId) ?? null;
   const viewportStart = currentWindow?.source_start_ms ?? 0;
   const viewportEnd = currentWindow?.source_end_ms ?? 5000;
@@ -115,6 +116,23 @@ export default function ShortTurnAnnotationPage() {
   const updateSession = useCallback((mutation: (current: Session) => Session) => {
     setSession(current => mutation(current)); markDirty();
   }, [markDirty]);
+
+  useEffect(() => {
+    const invalid = windows.filter(window => {
+      const status = session.window_status[window.window_id];
+      return (status === 'reviewed_blind' || status === 'reviewed_second_pass')
+        && pendingInWindow(draft.events, window, status === 'reviewed_second_pass') > 0;
+    });
+    if (!invalid.length) return;
+    updateSession(current => {
+      const statuses = { ...current.window_status };
+      for (const window of invalid) {
+        if (statuses[window.window_id] === 'reviewed_second_pass' && pendingInWindow(draft.events, window, false) === 0) statuses[window.window_id] = 'reviewed_blind';
+        else delete statuses[window.window_id];
+      }
+      return { ...current, window_status: statuses };
+    });
+  }, [draft.events, session.window_status, updateSession, windows]);
 
   const load = useCallback(async (nextPass = annotationPass) => {
     if (!datasetDir.trim() || !meetingId.trim()) return toast.error(t('Dataset folder and Meeting ID are required'));
@@ -175,7 +193,7 @@ export default function ShortTurnAnnotationPage() {
   const runQa = useCallback(async () => { try { const result = await invoke<QaReport>('qa_workspace_command', { datasetDir, draft, session }); setQa(result); setQaRevision(editRevision); setPanel('qa'); } catch (error) { toast.error(String(error)); } }, [datasetDir, draft, editRevision, session]);
   const exportManifest = useCallback(async () => { try { const result = await invoke<CheckReport>('export_manifest_command', { datasetDir, draft, session }); setCheck(result); toast.success(t('Benchmark manifest exported and checked locally')); } catch (error) { toast.error(String(error)); } }, [datasetDir, draft, session, t]);
   const goToWindow = useCallback((index: number) => { const next = clamp(index, 0, Math.max(0, windows.length - 1)); setWindowIndex(next); const row=windows[next]; if (row) { seek(row.source_start_ms); updateSession(current => ({ ...current, [annotationPass === 'blind' ? 'last_blind_window_id' : 'last_review_window_id']: row.window_id })); } }, [annotationPass, seek, updateSession, windows]);
-  const completeWindow = useCallback(() => { if (!currentWindow) return; const status = annotationPass === 'blind' ? 'reviewed_blind' : 'reviewed_second_pass'; updateSession(current => ({ ...current, window_status: { ...current.window_status, [currentWindow.window_id]: status } })); const next = windows.findIndex((row, index) => index > windowIndex && session.window_status[row.window_id] !== status); if (next >= 0) goToWindow(next); }, [annotationPass, currentWindow, goToWindow, session.window_status, updateSession, windowIndex, windows]);
+  const completeWindow = useCallback(() => { if (!currentWindow) return; const pending = pendingInWindow(draft.events, currentWindow, annotationPass === 'review'); if (pending) { toast.error(t('This window still contains {{count}} pending annotations. Confirm all event labels before completing the window.', { count: pending })); return; } const status = annotationPass === 'blind' ? 'reviewed_blind' : 'reviewed_second_pass'; updateSession(current => ({ ...current, window_status: { ...current.window_status, [currentWindow.window_id]: status } })); const next = windows.findIndex((row, index) => index > windowIndex && session.window_status[row.window_id] !== status); if (next >= 0) goToWindow(next); }, [annotationPass, currentWindow, draft.events, goToWindow, session.window_status, t, updateSession, windowIndex, windows]);
   const initializeProject = useCallback(async (sourceMediaPath: string, productionArtifactPath: string) => {
     if (!datasetDir.trim() || !meetingId.trim()) return toast.error(t('Dataset folder and Meeting ID are required'));
     try {
@@ -265,7 +283,7 @@ export default function ShortTurnAnnotationPage() {
         </div>
         <TierRows mode={annotationPass} evidence={reviewEvidence} start={viewportStart} end={viewportEnd} />
       </section>
-      <section className="mt-3 grid gap-3 rounded-xl border border-border bg-card p-3 lg:grid-cols-[1fr_auto]"><div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Quality assurance and benchmark export')}</p><p className="mt-1 text-sm text-muted-foreground">{t('Blind QA is structural only. Dataset coverage and representative gates remain hidden until Review.')}</p>{qa && <QaView qa={qa} />}{annotationPass === 'review' && check && <CheckView check={check} />}</div><div className="flex flex-wrap content-start gap-2"><button onClick={runQa} className="inline-flex items-center gap-1 rounded border border-warning bg-warning/10 px-3 py-2 text-sm text-warning"><CircleHelp size={16} />{t('Run QA')}</button>{annotationPass === 'review' && <button onClick={exportManifest} disabled={!qa || qa.errors.length > 0 || qaRevision !== editRevision || savedRevision !== editRevision} className="inline-flex items-center gap-1 rounded bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"><Download size={16} />{t('Export benchmark manifest')}</button>}</div></section>
+      <section className="mt-3 grid gap-3 rounded-xl border border-border bg-card p-3 lg:grid-cols-[1fr_auto]"><div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{t('Quality assurance and benchmark export')}</p><p className="mt-1 text-sm text-muted-foreground">{t('Blind QA is structural only. Dataset coverage and representative gates remain hidden until Review.')}</p>{annotationPass === 'review' && <p className="mt-1 text-sm text-muted-foreground">{t('Review progress {{completed}} / {{total}}', { completed: reviewProgress.completed, total: reviewProgress.total })}{!reviewProgress.complete && <> — {t('Complete all Review windows before exporting the Benchmark Manifest.')}</>}</p>}{qa && <QaView qa={qa} />}{annotationPass === 'review' && check && <CheckView check={check} />}</div><div className="flex flex-wrap content-start gap-2"><button onClick={runQa} className="inline-flex items-center gap-1 rounded border border-warning bg-warning/10 px-3 py-2 text-sm text-warning"><CircleHelp size={16} />{t('Run QA')}</button>{annotationPass === 'review' && <button onClick={exportManifest} disabled={!reviewProgress.complete || !qa || qa.errors.length > 0 || qaRevision !== editRevision || savedRevision !== editRevision} className="inline-flex items-center gap-1 rounded bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40"><Download size={16} />{t('Export benchmark manifest')}</button>}</div></section>
     </>}
     <ShortcutHelp />
   </main>;

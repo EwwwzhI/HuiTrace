@@ -10,6 +10,95 @@ use serde::{Deserialize, Serialize};
 
 use super::production_artifact::read_and_validate_artifact;
 
+/// Preserve the annotator's label: legacy `speech` is never a speaker reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroundTruthKind {
+    ShortSpeech,
+    Backchannel,
+    Noise,
+    NonSpeechVocalization,
+    OrdinarySpeechControl,
+    #[serde(rename = "speech")]
+    LegacySpeech,
+    Unknown,
+}
+
+impl GroundTruthKind {
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "short_speech" => Some(Self::ShortSpeech),
+            "backchannel" => Some(Self::Backchannel),
+            "noise" => Some(Self::Noise),
+            "non_speech_vocalization" => Some(Self::NonSpeechVocalization),
+            "ordinary_speech_control" => Some(Self::OrdinarySpeechControl),
+            "speech" => Some(Self::LegacySpeech),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
+    pub fn is_true_short(self, duration_ms: i64) -> bool {
+        duration_ms <= 1_200
+            && matches!(
+                self,
+                Self::ShortSpeech | Self::Backchannel | Self::LegacySpeech
+            )
+    }
+
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::ShortSpeech => "short_speech",
+            Self::Backchannel => "backchannel",
+            Self::Noise => "noise",
+            Self::NonSpeechVocalization => "non_speech_vocalization",
+            Self::OrdinarySpeechControl => "ordinary_speech_control",
+            Self::LegacySpeech => "speech",
+            Self::Unknown => "invalid",
+        }
+    }
+
+    /// Legacy coverage compatibility only; reference selection uses the original enum.
+    pub fn gate_label(self, duration_ms: i64) -> &'static str {
+        if self == Self::LegacySpeech {
+            if duration_ms <= 1_200 {
+                "short_speech"
+            } else {
+                "ordinary_speech_control"
+            }
+        } else {
+            self.as_label()
+        }
+    }
+
+    pub fn segment_kind(self) -> crate::diarization::types::SegmentKind {
+        use crate::diarization::types::SegmentKind;
+        match self {
+            Self::ShortSpeech | Self::OrdinarySpeechControl | Self::LegacySpeech => {
+                SegmentKind::Speech
+            }
+            Self::Backchannel => SegmentKind::Backchannel,
+            Self::Noise => SegmentKind::Noise,
+            Self::NonSpeechVocalization => SegmentKind::NonSpeechVocalization,
+            Self::Unknown => SegmentKind::Unknown,
+        }
+    }
+
+    pub fn is_speaker_reference(
+        self,
+        duration_ms: i64,
+        speaker: Option<&str>,
+        uncertain: bool,
+        overlap: bool,
+    ) -> bool {
+        self == Self::OrdinarySpeechControl
+            && duration_ms > 1_200
+            && speaker.is_some_and(|key| !key.trim().is_empty())
+            && !uncertain
+            && !overlap
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatasetRecord {
     #[serde(default, alias = "id")]
@@ -65,17 +154,11 @@ impl GateSample for DatasetRecord {
         self.end_ms
     }
     fn kind_label(&self) -> &'static str {
-        match self.ground_truth_kind.as_str() {
-            "short_speech" => "short_speech",
-            "speech" if self.end_ms - self.start_ms <= 1_200 => "short_speech",
-            "speech" => "ordinary_speech_control",
-            "backchannel" => "backchannel",
-            "noise" => "noise",
-            "non_speech_vocalization" => "non_speech_vocalization",
-            "ordinary_speech_control" => "ordinary_speech_control",
-            _ => "invalid",
-        }
+        GroundTruthKind::from_label(&self.ground_truth_kind)
+            .map(|kind| kind.gate_label(self.end_ms - self.start_ms))
+            .unwrap_or("invalid")
     }
+
     fn ground_truth_speaker(&self) -> Option<&str> {
         self.ground_truth_speaker.as_deref()
     }
@@ -384,9 +467,14 @@ pub fn check_dataset(dataset: &Path) -> Result<DatasetCheckReport> {
         bail!("dataset directory does not exist: {}", dataset.display());
     }
     let rows = read_dataset_records(dataset)?;
-    validate_records(&rows)?;
+    check_dataset_records(dataset, &rows)
+}
+
+/// Validate a prospective export before either manifest is replaced.
+pub fn check_dataset_records(dataset: &Path, rows: &[DatasetRecord]) -> Result<DatasetCheckReport> {
+    validate_records(rows)?;
     let mut artifacts = HashMap::<&str, PathBuf>::new();
-    for row in &rows {
+    for row in rows {
         let path = row
             .production_artifact_path
             .as_ref()

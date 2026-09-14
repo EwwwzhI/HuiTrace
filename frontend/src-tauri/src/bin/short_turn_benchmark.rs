@@ -13,7 +13,7 @@ use app_lib::diarization::short_turn_event::ShortTurnEvent;
 use app_lib::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
 };
-use app_lib::evaluation::dataset::{coverage, CoveragePolicy, GateSample};
+use app_lib::evaluation::dataset::{coverage, CoveragePolicy, GateSample, GroundTruthKind};
 use app_lib::evaluation::production_artifact::{
     validate_artifact, validate_production_config, ArtifactBackend, ArtifactDiarizerTurn,
     ArtifactTranscript, ArtifactVadEvent, MeetingProductionArtifact, ProductionConfigSnapshot,
@@ -64,8 +64,7 @@ struct ManifestRow {
     start_ms: i64,
     end_ms: i64,
     duration_bucket: String,
-    #[serde(deserialize_with = "deserialize_ground_truth_kind")]
-    ground_truth_kind: SegmentKind,
+    ground_truth_kind: GroundTruthKind,
     #[serde(default)]
     ground_truth_speaker: Option<String>,
     #[serde(default)]
@@ -248,22 +247,6 @@ struct ConfidenceBin {
     accuracy: f64,
 }
 
-fn deserialize_ground_truth_kind<'de, D>(d: D) -> std::result::Result<SegmentKind, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    match String::deserialize(d)?.as_str() {
-        "short_speech" | "speech" | "ordinary_speech_control" => Ok(SegmentKind::Speech),
-        "backchannel" => Ok(SegmentKind::Backchannel),
-        "noise" => Ok(SegmentKind::Noise),
-        "non_speech_vocalization" => Ok(SegmentKind::NonSpeechVocalization),
-        "unknown" => Ok(SegmentKind::Unknown),
-        value => Err(serde::de::Error::custom(format!(
-            "invalid ground_truth_kind {value:?}"
-        ))),
-    }
-}
-
 impl GateSample for ManifestRow {
     fn event_id(&self) -> &str {
         &self.ground_truth_event_id
@@ -282,14 +265,8 @@ impl GateSample for ManifestRow {
     }
 
     fn kind_label(&self) -> &'static str {
-        match self.ground_truth_kind {
-            SegmentKind::Speech if self.end_ms - self.start_ms <= 1_200 => "short_speech",
-            SegmentKind::Speech => "ordinary_speech_control",
-            SegmentKind::Backchannel => "backchannel",
-            SegmentKind::Noise => "noise",
-            SegmentKind::NonSpeechVocalization => "non_speech_vocalization",
-            SegmentKind::Unknown => "invalid",
-        }
+        self.ground_truth_kind
+            .gate_label(self.end_ms - self.start_ms)
     }
 
     fn ground_truth_speaker(&self) -> Option<&str> {
@@ -324,16 +301,13 @@ fn valid_confidence(value: Option<f64>) -> bool {
 }
 
 fn is_true_short(row: &ManifestRow) -> bool {
-    row.end_ms - row.start_ms <= 1_200
-        && matches!(
-            row.ground_truth_kind,
-            SegmentKind::Speech | SegmentKind::Backchannel
-        )
+    row.ground_truth_kind
+        .is_true_short(row.end_ms - row.start_ms)
 }
 
 fn is_negative(row: &ManifestRow) -> bool {
     matches!(
-        row.ground_truth_kind,
+        row.ground_truth_kind.segment_kind(),
         SegmentKind::Noise | SegmentKind::NonSpeechVocalization
     )
 }
@@ -418,7 +392,7 @@ fn validate_manifest(rows: &[ManifestRow], production_only: bool) -> Result<()> 
     for (index, left) in rows.iter().enumerate() {
         for right in rows.iter().skip(index + 1) {
             if left.meeting_id == right.meeting_id
-                && left.ground_truth_kind == right.ground_truth_kind
+                && left.ground_truth_kind.segment_kind() == right.ground_truth_kind.segment_kind()
                 && overlap_iou(left.start_ms, left.end_ms, right.start_ms, right.end_ms) >= 0.80
                 && !(left.tags.iter().any(|tag| tag == "overlap")
                     && right.tags.iter().any(|tag| tag == "overlap")
@@ -768,11 +742,42 @@ fn maximum_weight_assignment(weights: &[Vec<i64>]) -> Vec<Option<usize>> {
     solve(0, 0, weights, &mut HashMap::new()).1
 }
 
-fn align_ground_truth_speakers(rows: &mut [ManifestRow], runs: &BTreeMap<String, MeetingRun>) {
+#[derive(Debug, Serialize)]
+struct SpeakerAlignmentCoverage {
+    mapped_speakers: usize,
+    total_gt_speakers: usize,
+    unmapped_gt_speakers: Vec<String>,
+    reference_intervals: usize,
+    reference_duration_ms: i64,
+    mapping: BTreeMap<String, String>,
+}
+
+fn is_speaker_reference(row: &ManifestRow) -> bool {
+    row.ground_truth_kind.is_speaker_reference(
+        row.end_ms - row.start_ms,
+        row.ground_truth_speaker.as_deref(),
+        row.annotation_uncertain,
+        row.tags.iter().any(|tag| tag == "overlap"),
+    )
+}
+
+fn align_ground_truth_speakers(
+    rows: &mut [ManifestRow],
+    runs: &BTreeMap<String, MeetingRun>,
+) -> BTreeMap<String, SpeakerAlignmentCoverage> {
+    let mut coverage = BTreeMap::new();
     for (meeting_id, run) in runs {
-        let gt = rows
+        let all_gt = rows
             .iter()
             .filter(|row| &row.meeting_id == meeting_id)
+            .filter_map(|row| row.ground_truth_speaker.clone())
+            .collect::<BTreeSet<_>>();
+        let references = rows
+            .iter()
+            .filter(|row| &row.meeting_id == meeting_id && is_speaker_reference(row))
+            .collect::<Vec<_>>();
+        let gt = references
+            .iter()
             .filter_map(|row| row.ground_truth_speaker.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -785,20 +790,15 @@ fn align_ground_truth_speakers(rows: &mut [ManifestRow], runs: &BTreeMap<String,
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        if gt.is_empty() || production.is_empty() || production.len() > 20 {
-            continue;
-        }
         let weights = gt
             .iter()
             .map(|speaker| {
                 production
                     .iter()
                     .map(|cluster| {
-                        rows.iter()
-                            .filter(|row| {
-                                &row.meeting_id == meeting_id
-                                    && row.ground_truth_speaker.as_ref() == Some(speaker)
-                            })
+                        references
+                            .iter()
+                            .filter(|row| row.ground_truth_speaker.as_ref() == Some(speaker))
                             .map(|row| {
                                 run.artifact
                                     .raw_diarizer_turns
@@ -816,26 +816,42 @@ fn align_ground_truth_speakers(rows: &mut [ManifestRow], runs: &BTreeMap<String,
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let assignment = maximum_weight_assignment(&weights);
+        // Preserve the existing bounded assignment; unavailable mappings never fall back to GT events.
+        let assignment = if production.len() <= 20 {
+            maximum_weight_assignment(&weights)
+        } else {
+            vec![None; gt.len()]
+        };
         let mapping = gt
             .iter()
             .enumerate()
             .filter_map(|(index, key)| {
-                assignment
-                    .get(index)
-                    .and_then(|value| *value)
+                assignment[index]
                     .filter(|cluster| weights[index][*cluster] > 0)
                     .map(|cluster| (key.clone(), production[cluster].clone()))
             })
             .collect::<BTreeMap<_, _>>();
+        coverage.insert(
+            meeting_id.clone(),
+            SpeakerAlignmentCoverage {
+                mapped_speakers: mapping.len(),
+                total_gt_speakers: all_gt.len(),
+                unmapped_gt_speakers: all_gt
+                    .into_iter()
+                    .filter(|key| !mapping.contains_key(key))
+                    .collect(),
+                reference_intervals: references.len(),
+                reference_duration_ms: references.iter().map(|row| row.end_ms - row.start_ms).sum(),
+                mapping: mapping.clone(),
+            },
+        );
+        // Freeze the reference-only mapping before any ShortTurn comparison.
         for row in rows.iter_mut().filter(|row| &row.meeting_id == meeting_id) {
-            if let Some(key) = row
+            row.ground_truth_speaker = row
                 .ground_truth_speaker
                 .as_ref()
                 .and_then(|key| mapping.get(key))
-            {
-                row.ground_truth_speaker = Some(key.clone());
-            }
+                .cloned();
             for key in &mut row.ground_truth_accepted_speakers {
                 if let Some(mapped) = mapping.get(key) {
                     *key = mapped.clone();
@@ -848,6 +864,7 @@ fn align_ground_truth_speakers(rows: &mut [ManifestRow], runs: &BTreeMap<String,
             }
         }
     }
+    coverage
 }
 
 fn match_predictions<'a>(
@@ -918,11 +935,17 @@ fn match_predictions<'a>(
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
-                let speaker_set_correct = (!ground_truth_speakers.is_empty())
-                    .then_some(ground_truth_speakers == predicted_speakers);
+                let speaker_set_correct = (!ground_truth_speakers.is_empty()
+                    && gt_indices
+                        .iter()
+                        .all(|index| meeting_rows[*index].ground_truth_speaker.is_some()))
+                .then_some(ground_truth_speakers == predicted_speakers);
                 let mut ground_truth_kinds = gt_indices
                     .iter()
-                    .map(|index| kind_label(&meeting_rows[*index].ground_truth_kind).to_string())
+                    .map(|index| {
+                        kind_label(&meeting_rows[*index].ground_truth_kind.segment_kind())
+                            .to_string()
+                    })
                     .collect::<Vec<_>>();
                 ground_truth_kinds.sort();
                 let mut predicted_kinds = prediction_indices
@@ -1101,11 +1124,11 @@ fn root_cause(
         .iter()
         .any(|tag| tag == "overlap" || tag == "speaker_handoff")
         && prediction.is_some_and(|item| item.candidate.true_speaker_overlap)
-        && predicted_kind != row.ground_truth_kind
+        && predicted_kind != row.ground_truth_kind.segment_kind()
     {
         return Some(RootCause::SegmentationOverlapError);
     }
-    if prediction.is_some() && predicted_kind != row.ground_truth_kind {
+    if prediction.is_some() && predicted_kind != row.ground_truth_kind.segment_kind() {
         return Some(RootCause::KindError);
     }
     if !matching_ambiguous
@@ -1172,7 +1195,7 @@ fn class_metrics<'a>(
     let mut confusion: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for row in rows {
         *confusion
-            .entry(kind_label(&row.ground_truth_kind).into())
+            .entry(kind_label(&row.ground_truth_kind.segment_kind()).into())
             .or_default()
             .entry(kind_label(&predicted_kind(row)).into())
             .or_default() += 1;
@@ -1181,7 +1204,7 @@ fn class_metrics<'a>(
     for class in classes {
         let support = rows
             .iter()
-            .filter(|row| row.ground_truth_kind == class)
+            .filter(|row| row.ground_truth_kind.segment_kind() == class)
             .count();
         let predicted = rows
             .iter()
@@ -1189,7 +1212,9 @@ fn class_metrics<'a>(
             .count();
         let tp = rows
             .iter()
-            .filter(|row| row.ground_truth_kind == class && predicted_kind(row) == class)
+            .filter(|row| {
+                row.ground_truth_kind.segment_kind() == class && predicted_kind(row) == class
+            })
             .count();
         let precision = ratio(tp, predicted);
         let recall = ratio(tp, support);
@@ -1361,7 +1386,9 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|(id, meeting)| (id, run_meeting(meeting, experiment_config.as_ref())))
         .collect::<BTreeMap<_, _>>();
-    align_ground_truth_speakers(&mut rows, &runs);
+    let policy = CoveragePolicy::default();
+    let coverage = coverage(&rows, &policy);
+    let speaker_alignment = align_ground_truth_speakers(&mut rows, &runs);
     let matching = match_predictions(&rows, &runs);
     let matched = &matching.predictions;
     let scorable = rows
@@ -1646,8 +1673,6 @@ fn main() -> Result<()> {
             failure_summary(&overgeneration),
         )))
         .collect::<BTreeMap<_, _>>();
-    let policy = CoveragePolicy::default();
-    let coverage = coverage(&rows, &policy);
     let count = |cause| taxonomy.get(&cause).map_or(0, Vec::len);
     let union_recall = source_recall(None, &true_short);
     let decision = if !coverage.missing_requirements.is_empty() {
@@ -1672,9 +1697,9 @@ fn main() -> Result<()> {
         "KEEP_MODEL_FREE"
     };
     let confidence = serde_json::json!({
-        "diarization": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.and_then(|v| v.candidate.diarization_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
+        "diarization": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.and_then(|v| v.candidate.diarization_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind.segment_kind())) })),
         "effective_speaker": confidence_report(scorable.iter().filter(|row| row.ground_truth_speaker.is_some() && !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.evidence.effective_speaker_confidence), p.and_then(|v| v.decision.speaker_key.as_ref()) == row.ground_truth_speaker.as_ref()) })),
-        "kind": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.kind_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
+        "kind": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.kind_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind.segment_kind())) })),
         "claim": "reliability bins only; not calibrated"
     });
     let report = serde_json::json!({
@@ -1693,6 +1718,7 @@ fn main() -> Result<()> {
         "matching_diagnostics": matching.diagnostics,
         "kind_classification": {"per_class": kind_metrics, "confusion_matrix": confusion,
             "ambiguous_temporal_sets": {"denominator": ambiguous_kind_sets, "correct": correct_ambiguous_kind_sets, "multiset_accuracy": ratio(correct_ambiguous_kind_sets, ambiguous_kind_sets), "individual_pairs_excluded": matching.ambiguous_ground_truth.len()}},
+        "speaker_alignment": speaker_alignment,
         "speaker_attribution": {"overall": speaker_overall, "duration_buckets": speaker_buckets, "contexts": speaker_contexts, "error_subtypes": speaker_error_subtypes,
             "ambiguous_temporal_sets": {"denominator": ambiguous_speaker_sets, "correct": correct_ambiguous_speaker_sets, "set_accuracy": ratio(correct_ambiguous_speaker_sets, ambiguous_speaker_sets), "individual_pairs_excluded": matching.ambiguous_ground_truth.len()}},
         "speaker_acceptance": {"meeting_count": runs.len(), "false_new_speaker_rate": ratio(false_new_meetings, runs.len()), "missed_real_speaker_rate": ratio(missed_real_meetings, runs.len())},
@@ -1787,7 +1813,13 @@ mod tests {
         value.start_ms = start_ms;
         value.end_ms = end_ms;
         value.duration_bucket = duration_bucket(end_ms - start_ms).into();
-        value.ground_truth_kind = kind;
+        value.ground_truth_kind = match kind {
+            SegmentKind::Speech => GroundTruthKind::ShortSpeech,
+            SegmentKind::Backchannel => GroundTruthKind::Backchannel,
+            SegmentKind::Noise => GroundTruthKind::Noise,
+            SegmentKind::NonSpeechVocalization => GroundTruthKind::NonSpeechVocalization,
+            SegmentKind::Unknown => GroundTruthKind::Unknown,
+        };
         value.ground_truth_speaker = speaker.map(str::to_owned);
         value
     }
@@ -2131,9 +2163,9 @@ mod tests {
         let original = match_predictions(&rows, &original_runs);
 
         let mut mutated = rows.clone();
-        mutated[0].ground_truth_kind = SegmentKind::Backchannel;
+        mutated[0].ground_truth_kind = GroundTruthKind::Backchannel;
         mutated[0].ground_truth_speaker = Some("different".into());
-        mutated[1].ground_truth_kind = SegmentKind::Speech;
+        mutated[1].ground_truth_kind = GroundTruthKind::ShortSpeech;
         mutated[1].ground_truth_speaker = Some("also-different".into());
         mutated.reverse();
         let reordered_runs = BTreeMap::from([(
@@ -2162,5 +2194,216 @@ mod tests {
             maximum_weight_assignment(&[vec![0, 2_000], vec![1_500, 0]]),
             vec![Some(1), Some(0)]
         );
+    }
+
+    fn reference(id: &str, start: i64, end: i64, speaker: &str) -> ManifestRow {
+        let mut value = row_at(id, start, end, SegmentKind::Speech, Some(speaker));
+        value.ground_truth_kind = GroundTruthKind::OrdinarySpeechControl;
+        value
+    }
+
+    fn alignment_run(turns: &[(i64, i64, &str)]) -> BTreeMap<String, MeetingRun> {
+        let mut run = run_with_predictions(vec![]);
+        run.artifact.raw_diarizer_turns = turns
+            .iter()
+            .map(|(start, end, speaker)| ArtifactDiarizerTurn {
+                start_ms: *start,
+                end_ms: *end,
+                speaker_key: (*speaker).into(),
+                confidence: None,
+                overlap: false,
+            })
+            .collect();
+        BTreeMap::from([("meeting-1".into(), run)])
+    }
+
+    #[test]
+    fn reference_alignment_recovers_swapped_clusters_and_scores_short_turns() {
+        let mut rows = vec![
+            reference("a", 0, 2_000, "gt_A"),
+            reference("b", 2_000, 4_000, "gt_B"),
+            row_at(
+                "short-a",
+                4_000,
+                4_300,
+                SegmentKind::Backchannel,
+                Some("gt_A"),
+            ),
+            row_at(
+                "short-b",
+                4_500,
+                4_800,
+                SegmentKind::Backchannel,
+                Some("gt_B"),
+            ),
+        ];
+        let report = align_ground_truth_speakers(
+            &mut rows,
+            &alignment_run(&[(0, 2_000, "speaker_02"), (2_000, 4_000, "speaker_01")]),
+        );
+        assert_eq!(report["meeting-1"].mapping["gt_A"], "speaker_02");
+        assert_eq!(report["meeting-1"].mapping["gt_B"], "speaker_01");
+        let a = prediction_at(4_000, 4_300, SegmentKind::Backchannel, Some("speaker_02"));
+        let b = prediction_at(4_500, 4_800, SegmentKind::Backchannel, Some("speaker_01"));
+        let metrics = speaker_metrics(
+            &rows.iter().collect::<Vec<_>>(),
+            &HashMap::from([("short-a".into(), Some(&a)), ("short-b".into(), Some(&b))]),
+            &HashSet::new(),
+        );
+        assert_eq!(metrics.denominator, 2);
+        assert_eq!(metrics.correct, 2);
+    }
+
+    #[test]
+    fn synthetic_workflow_e_wrong_short_turn_cannot_change_mapping() {
+        let mut rows = vec![
+            reference("a", 0, 2_000, "gt_A"),
+            reference("b", 2_000, 4_000, "gt_B"),
+            row_at(
+                "wrong",
+                4_000,
+                4_300,
+                SegmentKind::Backchannel,
+                Some("gt_A"),
+            ),
+        ];
+        let runs = alignment_run(&[
+            (0, 2_000, "speaker_01"),
+            (2_000, 4_000, "speaker_02"),
+            (4_000, 10_000, "speaker_02"),
+        ]);
+        // These disjoint wrong short turns would outweigh the references if they
+        // leaked into the matrix. Their aggregate must have exactly zero influence.
+        for i in 1..20 {
+            rows.push(row_at(
+                &format!("wrong-{i}"),
+                4_000 + i * 300,
+                4_300 + i * 300,
+                SegmentKind::Backchannel,
+                Some("gt_A"),
+            ));
+        }
+        let report = align_ground_truth_speakers(&mut rows, &runs);
+        assert_eq!(report["meeting-1"].mapping["gt_A"], "speaker_01");
+        assert_eq!(report["meeting-1"].reference_intervals, 2);
+        let wrong = prediction_at(4_000, 4_300, SegmentKind::Backchannel, Some("speaker_02"));
+        assert_eq!(
+            root_cause(&rows[2], Some(&wrong), false, false),
+            Some(RootCause::SpeakerAttributionError)
+        );
+        let metrics = speaker_metrics(
+            &[&rows[2]],
+            &HashMap::from([("wrong".into(), Some(&wrong))]),
+            &HashSet::new(),
+        );
+        assert_eq!(metrics.denominator, 1);
+        assert_eq!(metrics.correct, 0);
+    }
+
+    #[test]
+    fn alignment_never_falls_back_to_short_uncertain_overlap_or_legacy_speech() {
+        for label in [
+            "short_speech",
+            "backchannel",
+            "noise",
+            "non_speech_vocalization",
+            "speech",
+        ] {
+            let mut value = row(label);
+            value.end_ms = 5_000; // Duration never upgrades a label into a reference.
+            let report = align_ground_truth_speakers(
+                std::slice::from_mut(&mut value),
+                &alignment_run(&[(0, 6_000, "speaker_01")]),
+            );
+            assert_eq!(report["meeting-1"].mapped_speakers, 0);
+            assert_eq!(report["meeting-1"].reference_intervals, 0);
+            assert!(value.ground_truth_speaker.is_none());
+        }
+        for (uncertain, overlap, duration) in [
+            (true, false, 2_000),
+            (false, true, 2_000),
+            (false, false, 1_200),
+        ] {
+            let mut value = reference("a", 0, duration, "gt_A");
+            value.annotation_uncertain = uncertain;
+            if overlap {
+                value.tags.push("overlap".into());
+            }
+            assert!(!is_speaker_reference(&value));
+            let report = align_ground_truth_speakers(
+                std::slice::from_mut(&mut value),
+                &alignment_run(&[(0, 6_000, "speaker_01")]),
+            );
+            assert_eq!(report["meeting-1"].mapped_speakers, 0);
+        }
+        let mut value = reference("a", 0, 1_201, "gt_A");
+        value.tags = vec!["speaker_handoff".into(), "embedded".into()];
+        assert!(is_speaker_reference(&value));
+        value.ground_truth_speaker = None;
+        assert!(!is_speaker_reference(&value));
+    }
+
+    #[test]
+    fn multiple_references_accumulate_and_unmapped_speaker_is_excluded() {
+        let mut rows = vec![
+            reference("a1", 0, 2_000, "gt_A"),
+            reference("a2", 2_000, 4_000, "gt_A"),
+            reference("a3", 4_000, 6_000, "gt_A"),
+            reference("b", 6_000, 8_000, "gt_B"),
+            row_at(
+                "short-a",
+                8_000,
+                8_300,
+                SegmentKind::Backchannel,
+                Some("gt_A"),
+            ),
+            row_at(
+                "short-b",
+                8_300,
+                8_600,
+                SegmentKind::Backchannel,
+                Some("gt_B"),
+            ),
+            row_at(
+                "short-c",
+                8_600,
+                8_900,
+                SegmentKind::Backchannel,
+                Some("gt_C"),
+            ),
+        ];
+        let report = align_ground_truth_speakers(
+            &mut rows,
+            &alignment_run(&[
+                (0, 2_000, "speaker_02"),
+                (2_000, 6_000, "speaker_01"),
+                (6_000, 8_000, "speaker_02"),
+                (8_600, 8_900, "speaker_03"),
+            ]),
+        );
+        let coverage = &report["meeting-1"];
+        assert_eq!(coverage.mapping["gt_A"], "speaker_01");
+        assert_eq!(coverage.mapped_speakers, 2);
+        assert_eq!(coverage.total_gt_speakers, 3);
+        assert_eq!(coverage.unmapped_gt_speakers, vec!["gt_C"]);
+        assert_eq!(coverage.reference_duration_ms, 8_000);
+        assert_eq!(coverage.reference_intervals, 4);
+        let metrics = speaker_metrics(
+            &rows.iter().collect::<Vec<_>>(),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+        assert_eq!(metrics.denominator, 2);
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["meeting-1"]["unmapped_gt_speakers"][0], "gt_C");
+    }
+
+    #[test]
+    fn manifest_preserves_distinct_speech_labels() {
+        for label in ["short_speech", "ordinary_speech_control", "speech"] {
+            let value = row(label);
+            assert_eq!(value.ground_truth_kind.as_label(), label);
+            assert_eq!(value.ground_truth_kind.segment_kind(), SegmentKind::Speech);
+        }
     }
 }
