@@ -135,3 +135,23 @@
     Qa-mode cleanup、文件选择器、minimap/theme polish、后端错误 i18n、布局/tooltips、
     representative gate tuning 均未开展。真实会议 smoke 属于尚未完成的验收项，不能以 P1/P2
     名义绕过。正式采集就绪状态在该项完成前保持待验收。
+
+## Partial Speaker Alignment
+
+Speaker Acceptance 在 alignment mutation 前保存 meeting-level 原始 expected GT speaker
+集合，并要求该集合完整映射到 production speaker namespace 后才评分。完整映射继续使用
+原有 accepted-set 等值策略；任一 expected speaker 未映射时返回 unscorable，既不算正确也
+不算错误，不产生 `SpeakerAcceptanceError`，但仍继续检查独立的 Materialization root cause。
+空 expected 集合同样以 `no_expected_speakers` 明确标记为不可评分。
+
+Benchmark JSON 的 `speaker_acceptance` 增加 `scorable_meetings`、
+`unscorable_meetings` 和逐 meeting 状态；partial alignment 状态包含固定 reason
+`partial_speaker_alignment`、mapped/total expected speaker 数量以及排序后的
+`unmapped_expected_speakers`。false-new 与 missed-real rate 的分母改为可评分会议数。
+Decision Tree 本身未修改；由于 unscorable 不进入 acceptance error taxonomy，仅 partial
+alignment 不会触发 `FIX_SPEAKER_ACCEPTANCE`。
+
+Speaker Attribution 行为完全保持：已映射短事件进入 denominator，未映射短事件排除。
+没有删除 unmapped expected speaker 后继续评分，因为那会把 production 漏接收真实 speaker
+隐藏为不完整 target。采集建议为每位真实 speaker 标注 1–2 段清晰、非 overlap、非
+uncertain、最好至少 2 秒的 `ordinary_speech_control`；hard eligibility 仍为 **>1200 ms**。

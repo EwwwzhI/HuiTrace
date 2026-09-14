@@ -181,6 +181,22 @@ the matrix. No-reference speakers are explicitly unmapped, excluded from attribu
 denominators and listed in per-meeting speaker_alignment coverage. Dataset coverage
 uses original GT identities. No prediction or ShortTurn row can repair the mapping.
 
+## Partial Speaker Alignment
+
+Speaker attribution and speaker acceptance intentionally have different scorability.
+Attribution continues to score only events whose GT speaker has a frozen production
+mapping; unmapped events remain outside its denominator. Speaker acceptance requires
+the complete meeting-level expected speaker set to map into the production namespace.
+If any expected GT speaker is unmapped, acceptance is unscorable rather than correct
+or erroneous, and it cannot create `speaker_acceptance_error` or select
+`FIX_SPEAKER_ACCEPTANCE`. A meeting with no expected speaker GT is also unscorable.
+False-new and missed-real rates use only scorable meetings as their denominator.
+
+For formal collection, each real speaker should have 1–2 clear, non-overlapping,
+non-uncertain `ordinary_speech_control` references, preferably at least 2 seconds.
+This is collection guidance only; hard reference eligibility remains strictly
+greater than 1200 ms.
+
 See [workspace integrity details](SHORT_TURN_ANNOTATION_WORKSPACE.md) and the
 [implementation and validation report](SHORT_TURN_PHASE_2D_2A_FINAL_REPORT.md).
 The synthetic CLI workflow now covers export through Frozen Replay. Formal collection

@@ -752,6 +752,113 @@ struct SpeakerAlignmentCoverage {
     mapping: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SpeakerAcceptanceMeetingStatus {
+    scorable: bool,
+    reason: Option<&'static str>,
+    mapped_expected_speakers: usize,
+    total_expected_speakers: usize,
+    unmapped_expected_speakers: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SpeakerAcceptanceCoverage {
+    meeting_count: usize,
+    scorable_meetings: usize,
+    unscorable_meetings: usize,
+    false_new_speaker_rate: f64,
+    missed_real_speaker_rate: f64,
+    meetings: BTreeMap<String, SpeakerAcceptanceMeetingStatus>,
+}
+
+#[derive(Debug, Clone)]
+struct SpeakerAcceptanceEvaluation {
+    status: SpeakerAcceptanceMeetingStatus,
+    failed: Option<bool>,
+    false_new: bool,
+    missed_real: bool,
+}
+
+fn expected_speaker_universes(rows: &[ManifestRow]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut expected = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in rows.iter().filter(|row| !row.annotation_uncertain) {
+        expected.entry(row.meeting_id.clone()).or_default().extend(
+            if row.expected_visible_speakers.is_empty() {
+                row.ground_truth_accepted_speakers.iter().cloned()
+            } else {
+                row.expected_visible_speakers.iter().cloned()
+            },
+        );
+    }
+    expected
+}
+
+fn map_expected_speakers(
+    original: &BTreeSet<String>,
+    mapping: &BTreeMap<String, String>,
+) -> Result<BTreeSet<String>, Vec<String>> {
+    let unmapped = original
+        .iter()
+        .filter(|key| !mapping.contains_key(*key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unmapped.is_empty() {
+        return Err(unmapped);
+    }
+    Ok(original.iter().map(|key| mapping[key].clone()).collect())
+}
+
+fn evaluate_speaker_acceptance(
+    original: &BTreeSet<String>,
+    mapping: &BTreeMap<String, String>,
+    predicted: &BTreeSet<String>,
+) -> SpeakerAcceptanceEvaluation {
+    if original.is_empty() {
+        return SpeakerAcceptanceEvaluation {
+            status: SpeakerAcceptanceMeetingStatus {
+                scorable: false,
+                reason: Some("no_expected_speakers"),
+                mapped_expected_speakers: 0,
+                total_expected_speakers: 0,
+                unmapped_expected_speakers: Vec::new(),
+            },
+            failed: None,
+            false_new: false,
+            missed_real: false,
+        };
+    }
+    match map_expected_speakers(original, mapping) {
+        Ok(expected) => {
+            let false_new = predicted.iter().any(|key| !expected.contains(key));
+            let missed_real = expected.iter().any(|key| !predicted.contains(key));
+            SpeakerAcceptanceEvaluation {
+                status: SpeakerAcceptanceMeetingStatus {
+                    scorable: true,
+                    reason: None,
+                    mapped_expected_speakers: expected.len(),
+                    total_expected_speakers: original.len(),
+                    unmapped_expected_speakers: Vec::new(),
+                },
+                failed: Some(false_new || missed_real),
+                false_new,
+                missed_real,
+            }
+        }
+        Err(unmapped) => SpeakerAcceptanceEvaluation {
+            status: SpeakerAcceptanceMeetingStatus {
+                scorable: false,
+                reason: Some("partial_speaker_alignment"),
+                mapped_expected_speakers: original.len() - unmapped.len(),
+                total_expected_speakers: original.len(),
+                unmapped_expected_speakers: unmapped,
+            },
+            failed: None,
+            false_new: false,
+            missed_real: false,
+        },
+    }
+}
+
 fn is_speaker_reference(row: &ManifestRow) -> bool {
     row.ground_truth_kind.is_speaker_reference(
         row.end_ms - row.start_ms,
@@ -1104,7 +1211,7 @@ fn root_cause_label(cause: RootCause) -> &'static str {
 fn root_cause(
     row: &ManifestRow,
     prediction: Option<&Prediction>,
-    acceptance_failed: bool,
+    acceptance_failed: Option<bool>,
     matching_ambiguous: bool,
 ) -> Option<RootCause> {
     if row.annotation_uncertain {
@@ -1139,7 +1246,7 @@ fn root_cause(
     {
         return Some(RootCause::SpeakerAttributionError);
     }
-    if acceptance_failed {
+    if acceptance_failed == Some(true) {
         return Some(RootCause::SpeakerAcceptanceError);
     }
     let expected_visible = row
@@ -1388,7 +1495,23 @@ fn main() -> Result<()> {
         .collect::<BTreeMap<_, _>>();
     let policy = CoveragePolicy::default();
     let coverage = coverage(&rows, &policy);
+    // Preserve the acceptance GT namespace before alignment mutates speaker identities.
+    let original_expected_speakers = expected_speaker_universes(&rows);
     let speaker_alignment = align_ground_truth_speakers(&mut rows, &runs);
+    let acceptance_evaluations = runs
+        .iter()
+        .map(|(meeting_id, run)| {
+            let original = original_expected_speakers
+                .get(meeting_id)
+                .cloned()
+                .unwrap_or_default();
+            let mapping = &speaker_alignment[meeting_id].mapping;
+            (
+                meeting_id.clone(),
+                evaluate_speaker_acceptance(&original, mapping, &run.predicted_accepted),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let matching = match_predictions(&rows, &runs);
     let matched = &matching.predictions;
     let scorable = rows
@@ -1537,32 +1660,18 @@ fn main() -> Result<()> {
         .iter()
         .filter(|group| group.kind_multiset_correct)
         .count();
-    let mut false_new_meetings = 0;
-    let mut missed_real_meetings = 0;
-    for (meeting_id, run) in &runs {
-        let expected = rows
-            .iter()
-            .filter(|row| &row.meeting_id == meeting_id && !row.annotation_uncertain)
-            .flat_map(|row| {
-                if row.expected_visible_speakers.is_empty() {
-                    row.ground_truth_accepted_speakers.iter()
-                } else {
-                    row.expected_visible_speakers.iter()
-                }
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        false_new_meetings += usize::from(
-            run.predicted_accepted
-                .iter()
-                .any(|key| !expected.contains(key)),
-        );
-        missed_real_meetings += usize::from(
-            expected
-                .iter()
-                .any(|key| !run.predicted_accepted.contains(key)),
-        );
-    }
+    let scorable_acceptance_meetings = acceptance_evaluations
+        .values()
+        .filter(|evaluation| evaluation.status.scorable)
+        .count();
+    let false_new_meetings = acceptance_evaluations
+        .values()
+        .filter(|evaluation| evaluation.false_new)
+        .count();
+    let missed_real_meetings = acceptance_evaluations
+        .values()
+        .filter(|evaluation| evaluation.missed_real)
+        .count();
     let expected_visible = scorable
         .iter()
         .filter(|row| {
@@ -1639,14 +1748,7 @@ fn main() -> Result<()> {
     let mut taxonomy: BTreeMap<RootCause, Vec<String>> = BTreeMap::new();
     let mut overgeneration = Vec::new();
     for row in &rows {
-        let run = &runs[&row.meeting_id];
-        let expected = if row.expected_visible_speakers.is_empty() {
-            &row.ground_truth_accepted_speakers
-        } else {
-            &row.expected_visible_speakers
-        };
-        let acceptance_failed = run.predicted_accepted.iter().any(|s| !expected.contains(s))
-            || expected.iter().any(|s| !run.predicted_accepted.contains(s));
+        let acceptance_failed = acceptance_evaluations[&row.meeting_id].failed;
         let prediction = matched[&row.ground_truth_event_id];
         if is_negative(row) && prediction.is_some() {
             overgeneration.push(row.ground_truth_event_id.clone());
@@ -1702,6 +1804,17 @@ fn main() -> Result<()> {
         "kind": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.kind_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind.segment_kind())) })),
         "claim": "reliability bins only; not calibrated"
     });
+    let speaker_acceptance = SpeakerAcceptanceCoverage {
+        meeting_count: runs.len(),
+        scorable_meetings: scorable_acceptance_meetings,
+        unscorable_meetings: runs.len() - scorable_acceptance_meetings,
+        false_new_speaker_rate: ratio(false_new_meetings, scorable_acceptance_meetings),
+        missed_real_speaker_rate: ratio(missed_real_meetings, scorable_acceptance_meetings),
+        meetings: acceptance_evaluations
+            .iter()
+            .map(|(meeting_id, evaluation)| (meeting_id.clone(), evaluation.status.clone()))
+            .collect(),
+    };
     let report = serde_json::json!({
         "mode": match args.mode { BenchmarkMode::Evidence => "annotated_evidence_replay", BenchmarkMode::ProductionArtifactReplay => "frozen_production_replay", BenchmarkMode::CounterfactualReplay => "counterfactual_replay", BenchmarkMode::Pipeline => unreachable!() },
         "pipeline_mode": "unsupported_not_run",
@@ -1721,7 +1834,7 @@ fn main() -> Result<()> {
         "speaker_alignment": speaker_alignment,
         "speaker_attribution": {"overall": speaker_overall, "duration_buckets": speaker_buckets, "contexts": speaker_contexts, "error_subtypes": speaker_error_subtypes,
             "ambiguous_temporal_sets": {"denominator": ambiguous_speaker_sets, "correct": correct_ambiguous_speaker_sets, "set_accuracy": ratio(correct_ambiguous_speaker_sets, ambiguous_speaker_sets), "individual_pairs_excluded": matching.ambiguous_ground_truth.len()}},
-        "speaker_acceptance": {"meeting_count": runs.len(), "false_new_speaker_rate": ratio(false_new_meetings, runs.len()), "missed_real_speaker_rate": ratio(missed_real_meetings, runs.len())},
+        "speaker_acceptance": speaker_acceptance,
         "materialization": {"visible_precision": ratio(visible_tp, predicted_visible), "visible_recall": ratio(visible_tp, expected_visible),
             "embedded_speaker_accuracy": ratio(embedded_correct, embedded_scored), "duplicate_render_rate": ratio(event_ids.len().saturating_sub(unique_events), event_ids.len()),
             "false_embedded_event_rate": ratio(embedded_false_accepts, negatives.iter().filter(|row| row.embedded.unwrap_or(false)).count()),
@@ -1913,13 +2026,16 @@ mod tests {
     fn rejected_noise_candidate_is_not_candidate_failure() {
         let row = row("noise");
         let prediction = prediction(SegmentKind::Noise);
-        assert_eq!(root_cause(&row, Some(&prediction), false, false), None);
+        assert_eq!(
+            root_cause(&row, Some(&prediction), Some(false), false),
+            None
+        );
     }
 
     #[test]
     fn missing_true_short_candidate_is_candidate_miss() {
         assert_eq!(
-            root_cause(&row("short_speech"), None, false, false),
+            root_cause(&row("short_speech"), None, Some(false), false),
             Some(RootCause::CandidateMiss)
         );
     }
@@ -1929,9 +2045,102 @@ mod tests {
         let row = row("noise");
         let prediction = prediction(SegmentKind::Speech);
         assert_eq!(
-            root_cause(&row, Some(&prediction), false, false),
+            root_cause(&row, Some(&prediction), Some(false), false),
             Some(RootCause::KindError)
         );
+    }
+
+    #[test]
+    fn speaker_acceptance_full_alignment_preserves_existing_scoring() {
+        let expected = BTreeSet::from(["gt_A".into(), "gt_B".into()]);
+        let mapping = BTreeMap::from([
+            ("gt_A".into(), "speaker_01".into()),
+            ("gt_B".into(), "speaker_02".into()),
+        ]);
+        let matching = evaluate_speaker_acceptance(
+            &expected,
+            &mapping,
+            &BTreeSet::from(["speaker_01".into(), "speaker_02".into()]),
+        );
+        assert!(matching.status.scorable);
+        assert_eq!(matching.failed, Some(false));
+        let json = serde_json::to_value(&matching.status).unwrap();
+        assert_eq!(json["scorable"], true);
+        assert!(json["reason"].is_null());
+        assert_eq!(json["mapped_expected_speakers"], 2);
+        assert_eq!(json["total_expected_speakers"], 2);
+
+        let missing = evaluate_speaker_acceptance(
+            &expected,
+            &mapping,
+            &BTreeSet::from(["speaker_01".into()]),
+        );
+        assert!(missing.status.scorable);
+        assert_eq!(missing.failed, Some(true));
+        let row = row("noise");
+        let prediction = prediction(SegmentKind::Noise);
+        assert_eq!(
+            root_cause(&row, Some(&prediction), missing.failed, false),
+            Some(RootCause::SpeakerAcceptanceError)
+        );
+    }
+
+    #[test]
+    fn partial_alignment_is_unscorable_even_with_an_extra_cluster() {
+        let expected = BTreeSet::from(["gt_A".into(), "gt_B".into(), "gt_C".into()]);
+        let mapping = BTreeMap::from([
+            ("gt_A".into(), "speaker_01".into()),
+            ("gt_B".into(), "speaker_02".into()),
+        ]);
+        assert_eq!(
+            map_expected_speakers(&expected, &mapping),
+            Err(vec!["gt_C".into()])
+        );
+        let evaluation = evaluate_speaker_acceptance(
+            &expected,
+            &mapping,
+            &BTreeSet::from([
+                "speaker_01".into(),
+                "speaker_02".into(),
+                "speaker_03".into(),
+            ]),
+        );
+        assert!(!evaluation.status.scorable);
+        assert_eq!(evaluation.failed, None);
+        assert_eq!(evaluation.status.reason, Some("partial_speaker_alignment"));
+        assert_eq!(evaluation.status.unmapped_expected_speakers, vec!["gt_C"]);
+        let json = serde_json::to_value(&evaluation.status).unwrap();
+        assert_eq!(json["scorable"], false);
+        assert_eq!(json["reason"], "partial_speaker_alignment");
+        assert_eq!(json["mapped_expected_speakers"], 2);
+        assert_eq!(json["total_expected_speakers"], 3);
+        assert_eq!(json["unmapped_expected_speakers"][0], "gt_C");
+
+        let row = row("noise");
+        let prediction = prediction(SegmentKind::Noise);
+        assert_ne!(
+            root_cause(&row, Some(&prediction), evaluation.failed, false),
+            Some(RootCause::SpeakerAcceptanceError)
+        );
+    }
+
+    #[test]
+    fn unscorable_acceptance_does_not_hide_materialization_errors() {
+        let mut row = row("noise");
+        row.expected_materialized = Some(true);
+        assert_eq!(
+            root_cause(&row, Some(&prediction(SegmentKind::Noise)), None, false),
+            Some(RootCause::MaterializationError)
+        );
+    }
+
+    #[test]
+    fn no_expected_speakers_are_reported_unscorable() {
+        let evaluation =
+            evaluate_speaker_acceptance(&BTreeSet::new(), &BTreeMap::new(), &BTreeSet::new());
+        assert!(!evaluation.status.scorable);
+        assert_eq!(evaluation.status.reason, Some("no_expected_speakers"));
+        assert_eq!(evaluation.failed, None);
     }
 
     #[test]
@@ -2288,7 +2497,7 @@ mod tests {
         assert_eq!(report["meeting-1"].reference_intervals, 2);
         let wrong = prediction_at(4_000, 4_300, SegmentKind::Backchannel, Some("speaker_02"));
         assert_eq!(
-            root_cause(&rows[2], Some(&wrong), false, false),
+            root_cause(&rows[2], Some(&wrong), Some(false), false),
             Some(RootCause::SpeakerAttributionError)
         );
         let metrics = speaker_metrics(
