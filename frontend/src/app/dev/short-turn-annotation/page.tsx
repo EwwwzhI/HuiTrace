@@ -10,6 +10,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, CircleHelp, Download, Pause, 
 import { isTauri } from '@/lib/isTauri';
 import { WaveformTimeline } from '@/components/short-turn-annotation/WaveformTimeline';
 import { durationBucket, saveLabel } from '@/lib/annotationIntegrity';
+import { isShortTurnAnnotationEnabled } from '@/lib/shortTurnAnnotationFeature';
 
 type AnnotationPass = 'blind' | 'review';
 type WorkspacePanel = 'annotation' | 'qa' | 'dataset';
@@ -57,7 +58,7 @@ function isTextEntry(target: EventTarget | null) {
 
 /** Deliberately unlinked development/evaluation surface.  Production users do not see it. */
 export default function ShortTurnAnnotationPage() {
-  const enabled = process.env.NODE_ENV === 'development' || process.env.NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION === 'true';
+  const enabled = isShortTurnAnnotationEnabled();
   const [datasetDir, setDatasetDir] = useState('evaluation/short_turn_dataset/local');
   const [meetingId, setMeetingId] = useState('');
   const [annotationPass, setAnnotationPass] = useState<AnnotationPass>('blind');

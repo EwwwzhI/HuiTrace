@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { PreferenceSettings } from '@/components/PreferenceSettings';
@@ -11,6 +11,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { translateUI } from '@/i18n';
 import { useUiTranslation } from '@/i18n/client';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { Button } from '@/components/ui/button';
+import { isShortTurnAnnotationEnabled } from '@/lib/shortTurnAnnotationFeature';
 
 
 const loading = () => <p role="status" className="p-4 text-sm text-muted-foreground">{translateUI("Loading settings…")}</p>;
@@ -30,6 +32,10 @@ export default function SettingsPage() {
   useUiTranslation();
   const router = useRouter();
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
+  const annotationWorkspaceEnabled = isShortTurnAnnotationEnabled();
+  const tabs = annotationWorkspaceEnabled
+    ? [...TABS, { value: 'evaluation', label: 'Evaluation Tools', icon: FlaskConical }]
+    : TABS;
 
   // Animation state for tabs
   const [activeTab, setActiveTab] = useState('general');
@@ -74,7 +80,7 @@ export default function SettingsPage() {
           {/* Tabs */}
           <Tabs className="ink-settings-grid" orientation={verticalTabs ? 'vertical' : 'horizontal'} value={activeTab} onValueChange={selectTab}>
             <TabsList className="ink-settings-nav flex w-full justify-start overflow-x-auto bg-transparent rounded-none border-b border-border p-0 h-auto">
-              {TABS.map((tab) => {
+              {tabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <TabsTrigger
@@ -104,6 +110,22 @@ export default function SettingsPage() {
             <TabsContent className="ink-settings-panel" forceMount hidden={activeTab !== 'summaryModels'} value="summaryModels">
               {visitedTabs.has('summaryModels') && <SummaryModelSettings />}
             </TabsContent>
+            {annotationWorkspaceEnabled && <TabsContent className="ink-settings-panel" forceMount hidden={activeTab !== 'evaluation'} value="evaluation">
+              {visitedTabs.has('evaluation') && <section aria-labelledby="short-turn-workspace-title" className="v2-panel border bg-card p-6">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="max-w-2xl">
+                    <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><FlaskConical aria-hidden="true" className="h-5 w-5" /></div>
+                    <h2 id="short-turn-workspace-title" className="font-heading text-xl font-semibold">Short-Turn Annotation Workspace</h2>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">Build and review local ground truth for short-turn speaker diarization evaluation.</p>
+                    <p className="mt-3 text-xs font-medium tracking-wide text-muted-foreground">Blind Annotation · Review · QA · Benchmark Manifest</p>
+                  </div>
+                  <Button onClick={() => router.push('/dev/short-turn-annotation')} className="shrink-0 gap-2">
+                    Open Annotation Workspace
+                    <ArrowRight aria-hidden="true" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </section>}
+            </TabsContent>}
           </Tabs>
         </div>
       </div>

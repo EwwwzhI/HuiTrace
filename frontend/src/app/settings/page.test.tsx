@@ -5,8 +5,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import SettingsPage from './page';
 import { invoke } from '@tauri-apps/api/core';
 
-const mocks = vi.hoisted(() => ({ mounted: vi.fn(), setConfig: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ back: vi.fn() }) }));
+const mocks = vi.hoisted(() => ({ mounted: vi.fn(), setConfig: vi.fn(), push: vi.fn(), back: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ back: mocks.back, push: mocks.push }) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(null) }));
 vi.mock('@/contexts/ConfigContext', () => ({ useConfig: () => ({ transcriptModelConfig: {}, setTranscriptModelConfig: mocks.setConfig }) }));
 vi.mock('@/components/PreferenceSettings', () => ({ PreferenceSettings: () => <div>General settings</div> }));
@@ -16,7 +16,7 @@ vi.mock('@/components/TranscriptSettings', () => ({ TranscriptSettings: () => {
   React.useEffect(() => { mocks.mounted(); }, []);
   return <input aria-label="Model draft" defaultValue="small" />;
 } }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllEnvs(); mocks.push.mockReset(); });
 
 it('mounts a tab only when visited and retains its draft when switching back', async () => {
   render(<SettingsPage />);
@@ -38,4 +38,21 @@ it('omits empty beta and upstream commercial licensing tabs', () => {
   expect(screen.queryByRole('tab', { name: 'Beta' })).toBeNull();
   expect(screen.queryByRole('tab', { name: 'License' })).toBeNull();
   expect(screen.getAllByRole('tab')).toHaveLength(4);
+});
+
+it('shows the gated evaluation entry and navigates with the Next router', async () => {
+  vi.stubEnv('NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION', 'true');
+  render(<SettingsPage />);
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Evaluation Tools' }), { button: 0 });
+  const open = await screen.findByRole('button', { name: /Open Annotation Workspace/i });
+  fireEvent.click(open);
+  expect(mocks.push).toHaveBeenCalledWith('/dev/short-turn-annotation');
+});
+
+it('does not render evaluation tools without the production opt-in', () => {
+  vi.stubEnv('NODE_ENV', 'production');
+  vi.stubEnv('NEXT_PUBLIC_ENABLE_SHORT_TURN_ANNOTATION', 'false');
+  render(<SettingsPage />);
+  expect(screen.queryByRole('tab', { name: 'Evaluation Tools' })).toBeNull();
+  expect(screen.queryByText('Short-Turn Annotation Workspace')).toBeNull();
 });
