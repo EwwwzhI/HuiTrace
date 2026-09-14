@@ -245,7 +245,7 @@ export default function ShortTurnAnnotationPage() {
 
   if (!enabled) return <main className="min-h-screen bg-background p-10 text-foreground"><h1 className="text-xl font-semibold">{t('Development evaluation route is disabled')}</h1><p className="mt-2 text-muted-foreground">{t('Enable the Short-Turn Annotation feature flag in a development or evaluation build.')}</p></main>;
 
-  return <main data-testid="annotation-workspace" className="min-h-screen bg-background p-4 text-foreground">
+  return <main data-testid="annotation-workspace" className="custom-scrollbar h-full min-h-0 overflow-y-auto overscroll-contain bg-background p-4 text-foreground">
     <header className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
       <div>
         <p className="text-[11px] font-bold tracking-[0.18em] text-primary">HuiTrace / Phase 2D.2</p>

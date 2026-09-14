@@ -106,7 +106,10 @@ it('switches language and theme without changing annotation data', async () => {
   fireEvent.click(screen.getByRole('radio', { name: '浅色' }));
   expect(mocks.setTheme.mock.calls).toEqual([['dark'], ['light']]);
   expect(screen.getByText('meeting-demo-001-event-0001')).toBeTruthy();
-  expect(container.querySelector('[data-testid="annotation-workspace"]')?.className).toContain('bg-background');
+  const workspace = container.querySelector('[data-testid="annotation-workspace"]');
+  expect(workspace?.className).toContain('bg-background');
+  expect(workspace?.className).toContain('h-full');
+  expect(workspace?.className).toContain('overflow-y-auto');
   expect(container.innerHTML).not.toContain('bg-slate-950');
 });
 

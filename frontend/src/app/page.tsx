@@ -219,7 +219,7 @@ export default function Home() {
         {(hasMicrophone || isRecording) &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
           status !== RecordingStatus.SAVING && (
-            <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-5 pb-5 pt-7">
+            <div className="relative shrink-0 border-t border-border/70 bg-background/95 px-5 pb-4 pt-3 shadow-[0_-10px_28px_hsl(var(--foreground)/0.035)] backdrop-blur-xl">
               <div
                 className="flex justify-center"
               >
