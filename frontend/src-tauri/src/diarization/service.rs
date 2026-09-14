@@ -270,6 +270,14 @@ pub fn extract_short_candidate_vad_events(
     source: AudioSource,
 ) -> Result<Vec<VadEventCandidateInput>> {
     let config = ShortCandidateVadConfig::default();
+    extract_short_candidate_vad_events_with_config(audio, source, &config)
+}
+
+fn extract_short_candidate_vad_events_with_config(
+    audio: &Path,
+    source: AudioSource,
+    config: &ShortCandidateVadConfig,
+) -> Result<Vec<VadEventCandidateInput>> {
     let decoded = crate::audio::decoder::decode_audio_file(audio)
         .with_context(|| format!("decode short-candidate audio {}", audio.display()))?;
     let samples = decoded.to_whisper_format();
@@ -327,18 +335,25 @@ pub async fn diarize_meeting(
             speaker_key: segment.speaker_key,
         })
         .collect();
-    let vad_events =
-        extract_short_candidate_vad_events(&audio, AudioSource::Mixed).unwrap_or_else(|error| {
-            log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
-            Vec::new()
-        });
-    SpeakerTurnsRepository::replace_for_meeting_with_evidence(
+    let production_config =
+        crate::evaluation::production_artifact::ProductionConfigSnapshot::default();
+    let vad_events = extract_short_candidate_vad_events_with_config(
+        &audio,
+        AudioSource::Mixed,
+        &production_config.short_candidate_vad,
+    )
+    .unwrap_or_else(|error| {
+        log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
+        Vec::new()
+    });
+    SpeakerTurnsRepository::replace_for_meeting_with_evidence_and_config(
         pool,
         ctx,
         meeting_id,
         &turns,
         AudioSource::Mixed,
         &vad_events,
+        &production_config,
     )
     .await?;
     if let Some(folder) = folder_path {
@@ -524,20 +539,28 @@ pub fn request_offline_diarization<R: Runtime>(
                         speaker_key: segment.speaker_key,
                     })
                     .collect();
-                let vad_events = extract_short_candidate_vad_events(&audio, source.clone())
-                    .unwrap_or_else(|error| {
-                        log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
-                        Vec::new()
-                    });
-                if let Err(error) = SpeakerTurnsRepository::replace_for_meeting_with_evidence(
-                    &pool,
-                    &ctx,
-                    &meeting_id,
-                    &turns,
-                    source,
-                    &vad_events,
+                let production_config =
+                    crate::evaluation::production_artifact::ProductionConfigSnapshot::default();
+                let vad_events = extract_short_candidate_vad_events_with_config(
+                    &audio,
+                    source.clone(),
+                    &production_config.short_candidate_vad,
                 )
-                .await
+                .unwrap_or_else(|error| {
+                    log::warn!("short-candidate VAD failed for {}: {error:#}", meeting_id);
+                    Vec::new()
+                });
+                if let Err(error) =
+                    SpeakerTurnsRepository::replace_for_meeting_with_evidence_and_config(
+                        &pool,
+                        &ctx,
+                        &meeting_id,
+                        &turns,
+                        source,
+                        &vad_events,
+                        &production_config,
+                    )
+                    .await
                 {
                     let _ =
                         set_status(&pool, &ctx, &meeting_id, "failed", Some(&error.to_string()))

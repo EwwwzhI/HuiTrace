@@ -8,7 +8,7 @@ use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 
 // Sequence counter for transcript updates
@@ -16,14 +16,28 @@ static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // Speech detection flag - reset per recording session
 static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
+static ACTIVE_TRANSCRIPTION_PROVENANCE: Mutex<
+    Option<crate::database::repositories::transcript::TranscriptionRunProvenance>,
+> = Mutex::new(None);
 
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
+    if let Ok(mut provenance) = ACTIVE_TRANSCRIPTION_PROVENANCE.lock() {
+        *provenance = None;
+    }
     info!(
         "🔍 SPEECH_DETECTED_EMITTED reset to: {}",
         SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst)
     );
+}
+
+pub(crate) fn current_transcription_run_provenance(
+) -> Option<crate::database::repositories::transcript::TranscriptionRunProvenance> {
+    ACTIVE_TRANSCRIPTION_PROVENANCE
+        .lock()
+        .ok()
+        .and_then(|value| value.clone())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -82,6 +96,24 @@ pub fn start_transcription_task<R: Runtime>(
                 return;
             }
         };
+        let backend = match &transcription_engine {
+            TranscriptionEngine::Whisper(_) => "localWhisper",
+            TranscriptionEngine::Parakeet(_) => "parakeet",
+            TranscriptionEngine::Provider(provider) => provider.provider_name(),
+        };
+        let model = transcription_engine.get_current_model().await;
+        if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+            if let Ok(mut provenance) = ACTIVE_TRANSCRIPTION_PROVENANCE.lock() {
+                *provenance = Some(
+                    crate::database::repositories::transcript::TranscriptionRunProvenance::started(
+                        backend, model,
+                    ),
+                );
+            }
+        } else {
+            error!("Transcription engine started without an identifiable model");
+            return;
+        }
 
         // Create parallel workers for faster processing while preserving ALL chunks
         const NUM_WORKERS: usize = 1; // Serial processing ensures transcripts emit in chronological order

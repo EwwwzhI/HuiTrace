@@ -12,7 +12,7 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Validate one schema-v1 production artifact.
+    /// Validate one production artifact against the current schema.
     Validate { path: PathBuf },
 }
 

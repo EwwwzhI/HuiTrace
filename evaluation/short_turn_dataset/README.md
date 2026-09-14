@@ -38,14 +38,19 @@ one immutable production artifact per meeting through
 events, or accepted speakers into every row. An optional
 `production_artifact_sha256` pins the exact file.
 
-The artifact schema is shown in `production_artifact.example.json`. It records
-identity, source-audio metadata, app commit, ASR/diarization backend and model,
+The artifact schema is shown in `production_artifact.example.json`. Version 2
+records artifact/meeting/transcription-run identity, source-audio metadata,
+app commit, the actually executed ASR/diarization backend and model,
 the complete production config snapshot, full transcripts, raw diarizer turns,
 VAD events, accepted/visible speakers, safety counters, and original metadata.
 
 Production replay loads each meeting artifact once, runs candidate extraction,
 refinement, speaker acceptance, and materialization once, and only then matches
 the complete prediction set to ground truth:
+
+The matcher is label-independent. It uses temporal geometry only and emits
+matched, unmatched, and ambiguous diagnostics without transcript text. Exact
+same-time multi-speaker groups are scored at event-count and speaker-set level.
 
 ```text
 cargo run -p huitrace --bin short_turn_benchmark -- --dataset evaluation/short_turn_dataset/local --mode production-artifact-replay

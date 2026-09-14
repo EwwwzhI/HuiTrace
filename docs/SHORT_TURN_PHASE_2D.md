@@ -36,8 +36,9 @@ this host snapshot, is authoritative for each benchmark run.
 
 ## Immutable production artifact
 
-Schema version 1 contains an artifact and meeting id, source-audio duration and
-optional hash, creation time, app commit, ASR/diarization backend and model,
+Schema version 2 contains an artifact, meeting, and transcription-run id,
+source-audio duration and optional hash, creation time, app commit,
+ASR/diarization backend and model,
 the complete production policy snapshot, full transcripts, raw diarizer turns,
 VAD events, accepted and visible speakers, safety counters, and original
 metadata. The benchmark computes the artifact file SHA-256 and reports it; a
@@ -48,6 +49,12 @@ replay rejects a row with no artifact path even if `evidence_origin` says
 `production_artifact`. Each artifact is loaded once and the complete meeting is
 processed once before matching predictions to labels. Evidence replay remains
 available for deterministic regression, but is not end-to-end.
+
+Matching is one-to-one and uses temporal geometry only: IoU, GT/prediction
+coverage, center distance, boundary error, and duration difference. Kind,
+speaker, expected materialization, and annotation tags never select a pair.
+Same-time/same-duration multi-speaker groups are reported as ambiguous and use
+event-count plus speaker-set evaluation rather than label-assisted pairing.
 
 ## Annotation methodology
 

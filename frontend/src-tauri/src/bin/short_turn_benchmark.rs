@@ -15,9 +15,10 @@ use app_lib::diarization::types::{
 };
 use app_lib::evaluation::dataset::{coverage, CoveragePolicy, GateSample};
 use app_lib::evaluation::production_artifact::{
-    validate_artifact, ArtifactBackend, ArtifactDiarizerTurn, ArtifactTranscript, ArtifactVadEvent,
-    MeetingProductionArtifact, ProductionConfigSnapshot, ProductionSafetyObservations,
-    SourceAudioMetadata, ARTIFACT_SCHEMA_VERSION, PHASE_2C1_FROZEN_BASELINE_COMMIT,
+    validate_artifact, validate_production_config, ArtifactBackend, ArtifactDiarizerTurn,
+    ArtifactTranscript, ArtifactVadEvent, MeetingProductionArtifact, ProductionConfigSnapshot,
+    ProductionSafetyObservations, SourceAudioMetadata, ARTIFACT_SCHEMA_VERSION,
+    PHASE_2C1_FROZEN_BASELINE_COMMIT,
 };
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -98,6 +99,7 @@ struct ManifestRow {
 #[derive(Debug, Clone, Serialize)]
 struct ArtifactProvenance {
     artifact_id: String,
+    transcription_run_id: String,
     meeting_id: String,
     path: String,
     computed_sha256: String,
@@ -142,7 +144,7 @@ enum RootCause {
     AnnotationUncertain,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 struct ClassMetrics {
     support: usize,
     predicted: usize,
@@ -159,6 +161,84 @@ struct SpeakerMetrics {
     attribution_accuracy: f64,
     unattributed_rate: f64,
     wrong_existing_speaker_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TemporalMatchDiagnostics {
+    matched_pairs: Vec<MatchedPairDiagnostic>,
+    unmatched_ground_truth: Vec<UnmatchedGroundTruthDiagnostic>,
+    unmatched_predictions: Vec<UnmatchedPredictionDiagnostic>,
+    ambiguous_matches: Vec<AmbiguousMatchDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MatchedPairDiagnostic {
+    meeting_id: String,
+    ground_truth_event_id: String,
+    ground_truth_interval_ms: [i64; 2],
+    prediction_interval_ms: [i64; 2],
+    temporal_score: f64,
+    iou: f64,
+    ground_truth_coverage: f64,
+    prediction_coverage: f64,
+    center_distance_ms: i64,
+    boundary_error_ms: i64,
+    duration_difference_ms: i64,
+    matching_ambiguous: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnmatchedGroundTruthDiagnostic {
+    meeting_id: String,
+    ground_truth_event_id: String,
+    ground_truth_interval_ms: [i64; 2],
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnmatchedPredictionDiagnostic {
+    meeting_id: String,
+    prediction_interval_ms: [i64; 2],
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AmbiguousMatchDiagnostic {
+    meeting_id: String,
+    interval_ms: [i64; 2],
+    ground_truth_event_ids: Vec<String>,
+    prediction_count: usize,
+    event_count_correct: bool,
+    ground_truth_speakers: Vec<String>,
+    predicted_speakers: Vec<String>,
+    speaker_set_correct: Option<bool>,
+    ground_truth_kinds: Vec<String>,
+    predicted_kinds: Vec<String>,
+    kind_multiset_correct: bool,
+}
+
+struct MatchResult<'a> {
+    predictions: HashMap<String, Option<&'a Prediction>>,
+    ambiguous_ground_truth: HashSet<String>,
+    diagnostics: TemporalMatchDiagnostics,
+}
+
+impl<'a> std::ops::Deref for MatchResult<'a> {
+    type Target = HashMap<String, Option<&'a Prediction>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.predictions
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TemporalGeometry {
+    overlap_ms: i64,
+    iou: f64,
+    ground_truth_coverage: f64,
+    prediction_coverage: f64,
+    center_distance_ms: i64,
+    boundary_error_ms: i64,
+    duration_difference_ms: i64,
+    score: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -340,6 +420,11 @@ fn validate_manifest(rows: &[ManifestRow], production_only: bool) -> Result<()> 
             if left.meeting_id == right.meeting_id
                 && left.ground_truth_kind == right.ground_truth_kind
                 && overlap_iou(left.start_ms, left.end_ms, right.start_ms, right.end_ms) >= 0.80
+                && !(left.tags.iter().any(|tag| tag == "overlap")
+                    && right.tags.iter().any(|tag| tag == "overlap")
+                    && left.ground_truth_speaker.is_some()
+                    && right.ground_truth_speaker.is_some()
+                    && left.ground_truth_speaker != right.ground_truth_speaker)
             {
                 bail!(
                     "{} and {} duplicate one source-timeline event",
@@ -396,6 +481,7 @@ fn load_production_artifacts(
         validate_artifact(&artifact, Some(&meeting_id))?;
         let provenance = ArtifactProvenance {
             artifact_id: artifact.artifact_id.clone(),
+            transcription_run_id: artifact.transcription_run_id.clone(),
             meeting_id: meeting_id.clone(),
             path: path.display().to_string(),
             computed_sha256,
@@ -448,6 +534,7 @@ fn build_evidence_meetings(rows: &[ManifestRow]) -> Result<BTreeMap<String, Load
         let artifact = MeetingProductionArtifact {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             artifact_id: format!("annotated-evidence-{meeting_id}"),
+            transcription_run_id: "not_applicable_evidence_replay".into(),
             meeting_id: meeting_id.clone(),
             source_audio: SourceAudioMetadata {
                 path_hint: None,
@@ -591,22 +678,163 @@ fn run_meeting(
     }
 }
 
+fn temporal_geometry(row: &ManifestRow, prediction: &Prediction) -> TemporalGeometry {
+    let prediction_duration = prediction
+        .candidate
+        .end_ms
+        .saturating_sub(prediction.candidate.start_ms)
+        .max(1);
+    let ground_truth_duration = row.end_ms.saturating_sub(row.start_ms).max(1);
+    let overlap = overlap_ms(
+        prediction.candidate.start_ms,
+        prediction.candidate.end_ms,
+        row.start_ms,
+        row.end_ms,
+    );
+    let union = prediction
+        .candidate
+        .end_ms
+        .max(row.end_ms)
+        .saturating_sub(prediction.candidate.start_ms.min(row.start_ms))
+        .max(1);
+    let iou = overlap as f64 / union as f64;
+    let ground_truth_coverage = overlap as f64 / ground_truth_duration as f64;
+    let prediction_coverage = overlap as f64 / prediction_duration as f64;
+    let center_distance_ms = ((prediction.candidate.start_ms + prediction.candidate.end_ms)
+        - (row.start_ms + row.end_ms))
+        .abs()
+        / 2;
+    let boundary_error_ms = (prediction.candidate.start_ms - row.start_ms).abs()
+        + (prediction.candidate.end_ms - row.end_ms).abs();
+    let duration_difference_ms = (prediction_duration - ground_truth_duration).abs();
+    let distance_scale = ground_truth_duration.max(prediction_duration) as f64;
+    let score = 0.50 * iou + 0.30 * ground_truth_coverage + 0.20 * prediction_coverage
+        - 0.05 * (center_distance_ms as f64 / distance_scale).min(1.0)
+        - 0.05 * (boundary_error_ms as f64 / (2.0 * distance_scale)).min(1.0);
+    TemporalGeometry {
+        overlap_ms: overlap,
+        iou,
+        ground_truth_coverage,
+        prediction_coverage,
+        center_distance_ms,
+        boundary_error_ms,
+        duration_difference_ms,
+        score,
+    }
+}
+
+fn prediction_tie_key(prediction: &Prediction) -> String {
+    // This key contains prediction output only. It makes exact geometry ties
+    // deterministic without comparing either predicted field to a GT label.
+    format!(
+        "{:?}|{}|{:?}",
+        prediction.decision.kind,
+        prediction.decision.speaker_key.as_deref().unwrap_or(""),
+        prediction.candidate.candidate_sources
+    )
+}
+
 fn match_predictions<'a>(
     rows: &[ManifestRow],
     runs: &'a BTreeMap<String, MeetingRun>,
-) -> HashMap<String, Option<&'a Prediction>> {
+) -> MatchResult<'a> {
     let mut matched = rows
         .iter()
         .map(|row| (row.ground_truth_event_id.clone(), None))
         .collect::<HashMap<_, _>>();
+    let mut ambiguous_ground_truth = HashSet::new();
+    let mut matched_pairs = Vec::new();
+    let mut unmatched_ground_truth = Vec::new();
+    let mut unmatched_predictions = Vec::new();
+    let mut ambiguous_matches = Vec::new();
     for (meeting_id, run) in runs {
-        let meeting_rows = rows
+        let mut meeting_rows = rows
             .iter()
             .filter(|row| &row.meeting_id == meeting_id)
             .collect::<Vec<_>>();
+        meeting_rows
+            .sort_by_key(|row| (row.start_ms, row.end_ms, row.ground_truth_event_id.as_str()));
+        let mut prediction_order = (0..run.predictions.len()).collect::<Vec<_>>();
+        prediction_order.sort_by_key(|index| {
+            let prediction = &run.predictions[*index];
+            (
+                prediction.candidate.start_ms,
+                prediction.candidate.end_ms,
+                prediction_tie_key(prediction),
+            )
+        });
+
+        let mut gt_intervals: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+        for (row_index, row) in meeting_rows.iter().enumerate() {
+            gt_intervals
+                .entry((row.start_ms, row.end_ms))
+                .or_default()
+                .push(row_index);
+        }
+        let mut prediction_intervals: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+        for prediction_index in &prediction_order {
+            let prediction = &run.predictions[*prediction_index];
+            prediction_intervals
+                .entry((prediction.candidate.start_ms, prediction.candidate.end_ms))
+                .or_default()
+                .push(*prediction_index);
+        }
+        for (interval, gt_indices) in gt_intervals.iter().filter(|(_, values)| values.len() > 1) {
+            let prediction_indices = prediction_intervals
+                .get(interval)
+                .cloned()
+                .unwrap_or_default();
+            if prediction_indices.len() > 1 {
+                let gt_ids = gt_indices
+                    .iter()
+                    .map(|index| meeting_rows[*index].ground_truth_event_id.clone())
+                    .collect::<Vec<_>>();
+                ambiguous_ground_truth.extend(gt_ids.iter().cloned());
+                let ground_truth_speakers = gt_indices
+                    .iter()
+                    .filter_map(|index| meeting_rows[*index].ground_truth_speaker.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let predicted_speakers = prediction_indices
+                    .iter()
+                    .filter_map(|index| run.predictions[*index].decision.speaker_key.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let speaker_set_correct = (!ground_truth_speakers.is_empty())
+                    .then_some(ground_truth_speakers == predicted_speakers);
+                let mut ground_truth_kinds = gt_indices
+                    .iter()
+                    .map(|index| kind_label(&meeting_rows[*index].ground_truth_kind).to_string())
+                    .collect::<Vec<_>>();
+                ground_truth_kinds.sort();
+                let mut predicted_kinds = prediction_indices
+                    .iter()
+                    .map(|index| kind_label(&run.predictions[*index].decision.kind).to_string())
+                    .collect::<Vec<_>>();
+                predicted_kinds.sort();
+                let kind_multiset_correct = ground_truth_kinds == predicted_kinds;
+                ambiguous_matches.push(AmbiguousMatchDiagnostic {
+                    meeting_id: meeting_id.clone(),
+                    interval_ms: [interval.0, interval.1],
+                    ground_truth_event_ids: gt_ids,
+                    prediction_count: prediction_indices.len(),
+                    event_count_correct: gt_indices.len() == prediction_indices.len(),
+                    ground_truth_speakers,
+                    predicted_speakers,
+                    speaker_set_correct,
+                    ground_truth_kinds,
+                    predicted_kinds,
+                    kind_multiset_correct,
+                });
+            }
+        }
+
         let mut edges = Vec::new();
         for (row_index, row) in meeting_rows.iter().enumerate() {
-            for (prediction_index, prediction) in run.predictions.iter().enumerate() {
+            for prediction_index in &prediction_order {
+                let prediction = &run.predictions[*prediction_index];
                 if candidate_matches_ground_truth(
                     prediction.candidate.start_ms,
                     prediction.candidate.end_ms,
@@ -614,49 +842,112 @@ fn match_predictions<'a>(
                     row.end_ms,
                     &run.replay_config.candidate_match,
                 ) {
-                    edges.push((
-                        row.annotation_uncertain,
-                        std::cmp::Reverse(prediction.decision.kind == row.ground_truth_kind),
-                        std::cmp::Reverse(
-                            row.ground_truth_speaker.is_some()
-                                && prediction.decision.speaker_key == row.ground_truth_speaker,
-                        ),
-                        std::cmp::Reverse(overlap_ms(
-                            prediction.candidate.start_ms,
-                            prediction.candidate.end_ms,
-                            row.start_ms,
-                            row.end_ms,
-                        )),
-                        (prediction.candidate.end_ms - prediction.candidate.start_ms)
-                            + (row.end_ms - row.start_ms)
-                            - 2 * overlap_ms(
-                                prediction.candidate.start_ms,
-                                prediction.candidate.end_ms,
-                                row.start_ms,
-                                row.end_ms,
-                            ),
-                        ((prediction.candidate.start_ms + prediction.candidate.end_ms)
-                            - (row.start_ms + row.end_ms))
-                            .abs(),
-                        row_index,
-                        prediction_index,
-                    ));
+                    let geometry = temporal_geometry(row, prediction);
+                    edges.push((row_index, *prediction_index, geometry));
                 }
             }
         }
-        edges.sort();
+        edges.sort_by(|left, right| {
+            let left_score = (left.2.score * 1_000_000.0).round() as i64;
+            let right_score = (right.2.score * 1_000_000.0).round() as i64;
+            right_score
+                .cmp(&left_score)
+                .then_with(|| right.2.overlap_ms.cmp(&left.2.overlap_ms))
+                .then_with(|| left.2.center_distance_ms.cmp(&right.2.center_distance_ms))
+                .then_with(|| left.2.boundary_error_ms.cmp(&right.2.boundary_error_ms))
+                .then_with(|| {
+                    left.2
+                        .duration_difference_ms
+                        .cmp(&right.2.duration_difference_ms)
+                })
+                .then_with(|| {
+                    meeting_rows[left.0]
+                        .ground_truth_event_id
+                        .cmp(&meeting_rows[right.0].ground_truth_event_id)
+                })
+                .then_with(|| {
+                    prediction_tie_key(&run.predictions[left.1])
+                        .cmp(&prediction_tie_key(&run.predictions[right.1]))
+                })
+        });
         let mut used_rows = HashSet::new();
         let mut used_predictions = HashSet::new();
-        for (_, _, _, _, _, _, row_index, prediction_index) in edges {
+        for (row_index, prediction_index, geometry) in edges {
             if used_rows.insert(row_index) && used_predictions.insert(prediction_index) {
-                matched.insert(
-                    meeting_rows[row_index].ground_truth_event_id.clone(),
-                    Some(&run.predictions[prediction_index]),
-                );
+                let row = meeting_rows[row_index];
+                let prediction = &run.predictions[prediction_index];
+                matched.insert(row.ground_truth_event_id.clone(), Some(prediction));
+                matched_pairs.push(MatchedPairDiagnostic {
+                    meeting_id: meeting_id.clone(),
+                    ground_truth_event_id: row.ground_truth_event_id.clone(),
+                    ground_truth_interval_ms: [row.start_ms, row.end_ms],
+                    prediction_interval_ms: [
+                        prediction.candidate.start_ms,
+                        prediction.candidate.end_ms,
+                    ],
+                    temporal_score: geometry.score,
+                    iou: geometry.iou,
+                    ground_truth_coverage: geometry.ground_truth_coverage,
+                    prediction_coverage: geometry.prediction_coverage,
+                    center_distance_ms: geometry.center_distance_ms,
+                    boundary_error_ms: geometry.boundary_error_ms,
+                    duration_difference_ms: geometry.duration_difference_ms,
+                    matching_ambiguous: ambiguous_ground_truth.contains(&row.ground_truth_event_id),
+                });
             }
         }
+        unmatched_ground_truth.extend(
+            meeting_rows
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !used_rows.contains(index))
+                .map(|(_, row)| UnmatchedGroundTruthDiagnostic {
+                    meeting_id: meeting_id.clone(),
+                    ground_truth_event_id: row.ground_truth_event_id.clone(),
+                    ground_truth_interval_ms: [row.start_ms, row.end_ms],
+                }),
+        );
+        unmatched_predictions.extend(
+            prediction_order
+                .iter()
+                .filter(|index| !used_predictions.contains(index))
+                .map(|index| {
+                    let prediction = &run.predictions[*index];
+                    UnmatchedPredictionDiagnostic {
+                        meeting_id: meeting_id.clone(),
+                        prediction_interval_ms: [
+                            prediction.candidate.start_ms,
+                            prediction.candidate.end_ms,
+                        ],
+                    }
+                }),
+        );
     }
-    matched
+    matched_pairs.sort_by(|left, right| {
+        (&left.meeting_id, &left.ground_truth_event_id)
+            .cmp(&(&right.meeting_id, &right.ground_truth_event_id))
+    });
+    unmatched_ground_truth.sort_by(|left, right| {
+        (&left.meeting_id, &left.ground_truth_event_id)
+            .cmp(&(&right.meeting_id, &right.ground_truth_event_id))
+    });
+    unmatched_predictions.sort_by_key(|item| {
+        (
+            item.meeting_id.clone(),
+            item.prediction_interval_ms[0],
+            item.prediction_interval_ms[1],
+        )
+    });
+    MatchResult {
+        predictions: matched,
+        ambiguous_ground_truth,
+        diagnostics: TemporalMatchDiagnostics {
+            matched_pairs,
+            unmatched_ground_truth,
+            unmatched_predictions,
+            ambiguous_matches,
+        },
+    }
 }
 
 fn root_cause_label(cause: RootCause) -> &'static str {
@@ -675,12 +966,16 @@ fn root_cause(
     row: &ManifestRow,
     prediction: Option<&Prediction>,
     acceptance_failed: bool,
+    matching_ambiguous: bool,
 ) -> Option<RootCause> {
     if row.annotation_uncertain {
         return Some(RootCause::AnnotationUncertain);
     }
     if is_true_short(row) && prediction.is_none() {
         return Some(RootCause::CandidateMiss);
+    }
+    if matching_ambiguous {
+        return None;
     }
     let predicted_kind = prediction
         .map(|item| item.decision.kind.clone())
@@ -697,7 +992,8 @@ fn root_cause(
     if prediction.is_some() && predicted_kind != row.ground_truth_kind {
         return Some(RootCause::KindError);
     }
-    if is_true_short(row)
+    if !matching_ambiguous
+        && is_true_short(row)
         && row.ground_truth_speaker.is_some()
         && prediction.and_then(|item| item.decision.speaker_key.as_ref())
             != row.ground_truth_speaker.as_ref()
@@ -803,10 +1099,15 @@ fn class_metrics<'a>(
 fn speaker_metrics<'a>(
     rows: &[&ManifestRow],
     predictions: &HashMap<String, Option<&'a Prediction>>,
+    ambiguous_ground_truth: &HashSet<String>,
 ) -> SpeakerMetrics {
     let scored = rows
         .iter()
-        .filter(|row| is_true_short(row) && row.ground_truth_speaker.is_some())
+        .filter(|row| {
+            is_true_short(row)
+                && row.ground_truth_speaker.is_some()
+                && !ambiguous_ground_truth.contains(&row.ground_truth_event_id)
+        })
         .collect::<Vec<_>>();
     let predicted_speaker = |row: &ManifestRow| {
         predictions
@@ -835,6 +1136,7 @@ fn speaker_metrics<'a>(
 fn speaker_error_breakdown<'a>(
     rows: &[&ManifestRow],
     predictions: &HashMap<String, Option<&'a Prediction>>,
+    ambiguous_ground_truth: &HashSet<String>,
 ) -> BTreeMap<&'static str, usize> {
     let mut result = BTreeMap::from([
         ("wrong_existing_speaker", 0),
@@ -843,10 +1145,11 @@ fn speaker_error_breakdown<'a>(
         ("direct_diarizer_error", 0),
         ("overlap_ambiguity", 0),
     ]);
-    for row in rows
-        .iter()
-        .filter(|row| is_true_short(row) && row.ground_truth_speaker.is_some())
-    {
+    for row in rows.iter().filter(|row| {
+        is_true_short(row)
+            && row.ground_truth_speaker.is_some()
+            && !ambiguous_ground_truth.contains(&row.ground_truth_event_id)
+    }) {
         let prediction = predictions
             .get(&row.ground_truth_event_id)
             .and_then(|value| *value);
@@ -925,6 +1228,9 @@ fn main() -> Result<()> {
         (_, Some(_)) => bail!("--experiment-config is only valid with counterfactual replay"),
         _ => None,
     };
+    if let Some(config) = experiment_config.as_ref() {
+        validate_production_config(config).context("validate complete counterfactual config")?;
+    }
     validate_manifest(&rows, production_mode)?;
     let loaded = if production_mode {
         load_production_artifacts(&args.dataset, &rows)?
@@ -939,7 +1245,8 @@ fn main() -> Result<()> {
         .into_iter()
         .map(|(id, meeting)| (id, run_meeting(meeting, experiment_config.as_ref())))
         .collect::<BTreeMap<_, _>>();
-    let matched = match_predictions(&rows, &runs);
+    let matching = match_predictions(&rows, &runs);
+    let matched = &matching.predictions;
     let scorable = rows
         .iter()
         .filter(|row| !row.annotation_uncertain)
@@ -1020,10 +1327,15 @@ fn main() -> Result<()> {
     let kind_rows = scorable
         .iter()
         .copied()
-        .filter(|row| row.end_ms - row.start_ms <= 1_200)
+        .filter(|row| {
+            row.end_ms - row.start_ms <= 1_200
+                && !matching
+                    .ambiguous_ground_truth
+                    .contains(&row.ground_truth_event_id)
+        })
         .collect::<Vec<_>>();
     let (kind_metrics, confusion) = class_metrics(&kind_rows, &matched);
-    let speaker_overall = speaker_metrics(&scorable, &matched);
+    let speaker_overall = speaker_metrics(&scorable, matched, &matching.ambiguous_ground_truth);
     let speaker_buckets = ["100-300ms", "300-500ms", "500-800ms", "800-1200ms"]
         .into_iter()
         .map(|bucket| {
@@ -1032,7 +1344,10 @@ fn main() -> Result<()> {
                 .copied()
                 .filter(|row| row.duration_bucket == bucket)
                 .collect::<Vec<_>>();
-            (bucket, speaker_metrics(&subset, &matched))
+            (
+                bucket,
+                speaker_metrics(&subset, matched, &matching.ambiguous_ground_truth),
+            )
         })
         .collect::<BTreeMap<_, _>>();
     let speaker_contexts = ["overlap", "non_overlap", "speaker_handoff", "embedded"]
@@ -1051,10 +1366,33 @@ fn main() -> Result<()> {
                     }
                 })
                 .collect::<Vec<_>>();
-            (tag, speaker_metrics(&subset, &matched))
+            (
+                tag,
+                speaker_metrics(&subset, matched, &matching.ambiguous_ground_truth),
+            )
         })
         .collect::<BTreeMap<_, _>>();
-    let speaker_error_subtypes = speaker_error_breakdown(&scorable, &matched);
+    let speaker_error_subtypes =
+        speaker_error_breakdown(&scorable, matched, &matching.ambiguous_ground_truth);
+    let ambiguous_speaker_sets = matching
+        .diagnostics
+        .ambiguous_matches
+        .iter()
+        .filter(|group| group.speaker_set_correct.is_some())
+        .count();
+    let correct_ambiguous_speaker_sets = matching
+        .diagnostics
+        .ambiguous_matches
+        .iter()
+        .filter(|group| group.speaker_set_correct == Some(true))
+        .count();
+    let ambiguous_kind_sets = matching.diagnostics.ambiguous_matches.len();
+    let correct_ambiguous_kind_sets = matching
+        .diagnostics
+        .ambiguous_matches
+        .iter()
+        .filter(|group| group.kind_multiset_correct)
+        .count();
     let mut false_new_meetings = 0;
     let mut missed_real_meetings = 0;
     for (meeting_id, run) in &runs {
@@ -1169,7 +1507,14 @@ fn main() -> Result<()> {
         if is_negative(row) && prediction.is_some() {
             overgeneration.push(row.ground_truth_event_id.clone());
         }
-        if let Some(cause) = root_cause(row, prediction, acceptance_failed) {
+        if let Some(cause) = root_cause(
+            row,
+            prediction,
+            acceptance_failed,
+            matching
+                .ambiguous_ground_truth
+                .contains(&row.ground_truth_event_id),
+        ) {
             taxonomy
                 .entry(cause)
                 .or_default()
@@ -1210,9 +1555,9 @@ fn main() -> Result<()> {
         "KEEP_MODEL_FREE"
     };
     let confidence = serde_json::json!({
-        "diarization": confidence_report(scorable.iter().map(|row| { let p = matched[&row.ground_truth_event_id]; (p.and_then(|v| v.candidate.diarization_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
-        "effective_speaker": confidence_report(scorable.iter().filter(|row| row.ground_truth_speaker.is_some()).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.evidence.effective_speaker_confidence), p.and_then(|v| v.decision.speaker_key.as_ref()) == row.ground_truth_speaker.as_ref()) })),
-        "kind": confidence_report(scorable.iter().map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.kind_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
+        "diarization": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.and_then(|v| v.candidate.diarization_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
+        "effective_speaker": confidence_report(scorable.iter().filter(|row| row.ground_truth_speaker.is_some() && !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.evidence.effective_speaker_confidence), p.and_then(|v| v.decision.speaker_key.as_ref()) == row.ground_truth_speaker.as_ref()) })),
+        "kind": confidence_report(scorable.iter().filter(|row| !matching.ambiguous_ground_truth.contains(&row.ground_truth_event_id)).map(|row| { let p = matched[&row.ground_truth_event_id]; (p.map(|v| v.decision.kind_confidence), p.is_some_and(|v| v.decision.kind == row.ground_truth_kind)) })),
         "claim": "reliability bins only; not calibrated"
     });
     let report = serde_json::json!({
@@ -1228,8 +1573,11 @@ fn main() -> Result<()> {
             "negative_controls_with_candidate": negative_with_candidate, "negative_controls_with_candidate_rate": ratio(negative_with_candidate, negatives.len()),
             "candidates_rejected_downstream": downstream_rejected, "final_negative_false_accepts": final_false_accepts
         }},
-        "kind_classification": {"per_class": kind_metrics, "confusion_matrix": confusion},
-        "speaker_attribution": {"overall": speaker_overall, "duration_buckets": speaker_buckets, "contexts": speaker_contexts, "error_subtypes": speaker_error_subtypes},
+        "matching_diagnostics": matching.diagnostics,
+        "kind_classification": {"per_class": kind_metrics, "confusion_matrix": confusion,
+            "ambiguous_temporal_sets": {"denominator": ambiguous_kind_sets, "correct": correct_ambiguous_kind_sets, "multiset_accuracy": ratio(correct_ambiguous_kind_sets, ambiguous_kind_sets), "individual_pairs_excluded": matching.ambiguous_ground_truth.len()}},
+        "speaker_attribution": {"overall": speaker_overall, "duration_buckets": speaker_buckets, "contexts": speaker_contexts, "error_subtypes": speaker_error_subtypes,
+            "ambiguous_temporal_sets": {"denominator": ambiguous_speaker_sets, "correct": correct_ambiguous_speaker_sets, "set_accuracy": ratio(correct_ambiguous_speaker_sets, ambiguous_speaker_sets), "individual_pairs_excluded": matching.ambiguous_ground_truth.len()}},
         "speaker_acceptance": {"meeting_count": runs.len(), "false_new_speaker_rate": ratio(false_new_meetings, runs.len()), "missed_real_speaker_rate": ratio(missed_real_meetings, runs.len())},
         "materialization": {"visible_precision": ratio(visible_tp, predicted_visible), "visible_recall": ratio(visible_tp, expected_visible),
             "embedded_speaker_accuracy": ratio(embedded_correct, embedded_scored), "duplicate_render_rate": ratio(event_ids.len().saturating_sub(unique_events), event_ids.len()),
@@ -1345,6 +1693,7 @@ mod tests {
         MeetingProductionArtifact {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             artifact_id: "artifact-1".into(),
+            transcription_run_id: "transcription-run-1".into(),
             meeting_id: "meeting-1".into(),
             source_audio: SourceAudioMetadata {
                 path_hint: None,
@@ -1415,13 +1764,13 @@ mod tests {
     fn rejected_noise_candidate_is_not_candidate_failure() {
         let row = row("noise");
         let prediction = prediction(SegmentKind::Noise);
-        assert_eq!(root_cause(&row, Some(&prediction), false), None);
+        assert_eq!(root_cause(&row, Some(&prediction), false, false), None);
     }
 
     #[test]
     fn missing_true_short_candidate_is_candidate_miss() {
         assert_eq!(
-            root_cause(&row("short_speech"), None, false),
+            root_cause(&row("short_speech"), None, false, false),
             Some(RootCause::CandidateMiss)
         );
     }
@@ -1431,7 +1780,7 @@ mod tests {
         let row = row("noise");
         let prediction = prediction(SegmentKind::Speech);
         assert_eq!(
-            root_cause(&row, Some(&prediction), false),
+            root_cause(&row, Some(&prediction), false, false),
             Some(RootCause::KindError)
         );
     }
@@ -1467,7 +1816,10 @@ mod tests {
         let mut value = row("short_speech");
         value.ground_truth_speaker = None;
         let predictions = HashMap::from([(value.ground_truth_event_id.clone(), None)]);
-        assert_eq!(speaker_metrics(&[&value], &predictions).denominator, 0);
+        assert_eq!(
+            speaker_metrics(&[&value], &predictions, &HashSet::new()).denominator,
+            0
+        );
     }
 
     #[test]
@@ -1549,8 +1901,22 @@ mod tests {
         );
     }
 
+    fn matched_interval_map(result: &MatchResult<'_>) -> BTreeMap<String, [i64; 2]> {
+        result
+            .diagnostics
+            .matched_pairs
+            .iter()
+            .map(|pair| {
+                (
+                    pair.ground_truth_event_id.clone(),
+                    pair.prediction_interval_ms,
+                )
+            })
+            .collect()
+    }
+
     #[test]
-    fn adversarial_matching_is_one_to_one_and_prefers_identity_evidence() {
+    fn adversarial_matching_is_temporal_one_to_one_and_marks_ambiguity() {
         // Adjacent events and speaker handoffs retain their own prediction.
         let mut rows = vec![
             row_at("left", 1_000, 1_200, SegmentKind::Backchannel, Some("a")),
@@ -1595,7 +1961,7 @@ mod tests {
         let matched = match_predictions(&rows, &runs);
         assert_eq!(matched["single"].unwrap().candidate.start_ms, 1_000);
 
-        // Same-time overlap rows are resolved by speaker identity, not input order.
+        // Same-time overlap is not secretly resolved with speaker labels.
         let mut rows = vec![
             row_at("speaker-a", 2_000, 2_300, SegmentKind::Speech, Some("a")),
             row_at("speaker-b", 2_000, 2_300, SegmentKind::Speech, Some("b")),
@@ -1608,24 +1974,15 @@ mod tests {
         ]);
         let runs = BTreeMap::from([("meeting-1".into(), run)]);
         let matched = match_predictions(&rows, &runs);
+        assert_eq!(matched.ambiguous_ground_truth.len(), 2);
+        assert_eq!(matched.diagnostics.ambiguous_matches.len(), 1);
+        assert!(matched.diagnostics.ambiguous_matches[0].event_count_correct);
         assert_eq!(
-            matched["speaker-a"]
-                .unwrap()
-                .decision
-                .speaker_key
-                .as_deref(),
-            Some("a")
-        );
-        assert_eq!(
-            matched["speaker-b"]
-                .unwrap()
-                .decision
-                .speaker_key
-                .as_deref(),
-            Some("b")
+            matched.diagnostics.ambiguous_matches[0].speaker_set_correct,
+            Some(true)
         );
 
-        // A nearby noise control and true short speech prefer kind-consistent matches.
+        // Nearby noise and speech pair by geometry even when their labels cross.
         let rows = vec![
             row_at("speech", 3_000, 3_250, SegmentKind::Speech, None),
             row_at("noise", 3_050, 3_300, SegmentKind::Noise, None),
@@ -1636,10 +1993,49 @@ mod tests {
         ]);
         let runs = BTreeMap::from([("meeting-1".into(), run)]);
         let matched = match_predictions(&rows, &runs);
+        assert_eq!(matched["speech"].unwrap().decision.kind, SegmentKind::Noise);
+        assert_eq!(matched["noise"].unwrap().decision.kind, SegmentKind::Speech);
+    }
+
+    #[test]
+    fn matching_is_invariant_to_ground_truth_label_mutation_and_input_order() {
+        let rows = vec![
+            row_at("left", 1_000, 1_200, SegmentKind::Speech, Some("a")),
+            row_at("right", 1_200, 1_400, SegmentKind::Noise, Some("b")),
+        ];
+        let predictions = vec![
+            prediction_at(1_195, 1_405, SegmentKind::Speech, Some("b")),
+            prediction_at(995, 1_205, SegmentKind::Noise, Some("a")),
+        ];
+        let original_runs = BTreeMap::from([(
+            "meeting-1".into(),
+            run_with_predictions(predictions.clone()),
+        )]);
+        let original = match_predictions(&rows, &original_runs);
+
+        let mut mutated = rows.clone();
+        mutated[0].ground_truth_kind = SegmentKind::Backchannel;
+        mutated[0].ground_truth_speaker = Some("different".into());
+        mutated[1].ground_truth_kind = SegmentKind::Speech;
+        mutated[1].ground_truth_speaker = Some("also-different".into());
+        mutated.reverse();
+        let reordered_runs = BTreeMap::from([(
+            "meeting-1".into(),
+            run_with_predictions(predictions.into_iter().rev().collect()),
+        )]);
+        let after_mutation = match_predictions(&mutated, &reordered_runs);
+
         assert_eq!(
-            matched["speech"].unwrap().decision.kind,
-            SegmentKind::Speech
+            matched_interval_map(&original),
+            matched_interval_map(&after_mutation)
         );
-        assert_eq!(matched["noise"].unwrap().decision.kind, SegmentKind::Noise);
+        assert_ne!(
+            class_metrics(&rows.iter().collect::<Vec<_>>(), &original.predictions).0,
+            class_metrics(
+                &mutated.iter().collect::<Vec<_>>(),
+                &after_mutation.predictions
+            )
+            .0
+        );
     }
 }

@@ -569,6 +569,27 @@ async fn run_import<R: Runtime>(
     } else {
         None
     };
+    let transcription_provenance = match (&whisper_engine, &parakeet_engine) {
+        (Some(engine), _) => Some(
+            crate::database::repositories::transcript::TranscriptionRunProvenance::started(
+                "localWhisper",
+                engine
+                    .get_current_model()
+                    .await
+                    .ok_or_else(|| anyhow!("Whisper executed without an identifiable model"))?,
+            ),
+        ),
+        (_, Some(engine)) => Some(
+            crate::database::repositories::transcript::TranscriptionRunProvenance::started(
+                "parakeet",
+                engine
+                    .get_current_model()
+                    .await
+                    .ok_or_else(|| anyhow!("Parakeet executed without an identifiable model"))?,
+            ),
+        ),
+        _ => None,
+    };
 
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
@@ -756,6 +777,7 @@ async fn run_import<R: Runtime>(
         &title,
         &segments,
         meeting_folder.to_string_lossy().to_string(),
+        transcription_provenance.as_ref(),
     )
     .await?;
 
@@ -819,14 +841,16 @@ async fn create_meeting_with_transcripts(
     title: &str,
     segments: &[TranscriptSegment],
     folder_path: String,
+    provenance: Option<&crate::database::repositories::transcript::TranscriptionRunProvenance>,
 ) -> Result<String> {
     let ctx = crate::context::current();
-    let meeting_id = crate::database::repositories::transcript::TranscriptsRepository::create_meeting_with_segments(
+    let meeting_id = crate::database::repositories::transcript::TranscriptsRepository::create_meeting_with_segments_and_provenance(
         pool,
         &ctx,
         title,
         segments,
         Some(folder_path),
+        provenance,
     )
     .await
     .map_err(|e| anyhow!("Failed to create meeting with transcripts: {}", e))?;

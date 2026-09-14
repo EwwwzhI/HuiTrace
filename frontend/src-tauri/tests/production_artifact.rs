@@ -3,7 +3,8 @@ use app_lib::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRep
 use app_lib::diarization::short_turn::VadEventCandidateInput;
 use app_lib::diarization::types::AudioSource;
 use app_lib::evaluation::production_artifact::{
-    build_from_persisted_meeting, validate_artifact, ARTIFACT_SCHEMA_VERSION,
+    build_from_persisted_meeting, validate_artifact, ProductionConfigSnapshot,
+    ARTIFACT_SCHEMA_VERSION,
 };
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -43,11 +44,21 @@ async fn seed_production_state(pool: &SqlitePool) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO transcripts (id, meeting_id, workspace_id, transcript, timestamp, audio_start_time, audio_end_time, duration, asr_confidence) VALUES ('transcript-1', 'meeting-1', 'local', 'hello', '2026-09-14T00:00:00Z', 0.1, 0.8, 0.7, 0.82)")
+    sqlx::query("INSERT INTO meeting_transcription_runs (id, meeting_id, workspace_id, created_at, completed_at, backend, model, model_version_or_hash) VALUES ('transcription-run-1', 'meeting-1', 'local', '2026-09-14T00:00:00Z', '2026-09-14T00:00:01Z', 'whisper', 'large-v3', NULL)")
         .execute(pool)
         .await
         .unwrap();
-    SpeakerTurnsRepository::replace_for_meeting_with_evidence(
+    sqlx::query("INSERT INTO transcripts (id, meeting_id, workspace_id, transcript, timestamp, audio_start_time, audio_end_time, duration, asr_confidence, transcription_run_id) VALUES ('transcript-1', 'meeting-1', 'local', 'hello', '2026-09-14T00:00:00Z', 0.1, 0.8, 0.7, 0.82, 'transcription-run-1')")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE transcript_settings SET model = 'medium', updated_at = '2026-09-14T00:00:02Z' WHERE id = 'settings-1'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let mut runtime_config = ProductionConfigSnapshot::default();
+    runtime_config.candidate_match.min_iou = 0.42;
+    SpeakerTurnsRepository::replace_for_meeting_with_evidence_and_config(
         pool,
         &context("local"),
         "meeting-1",
@@ -74,6 +85,7 @@ async fn seed_production_state(pool: &SqlitePool) {
             confidence: None,
             audio_source: AudioSource::Mixed,
         }],
+        &runtime_config,
     )
     .await
     .unwrap();
@@ -112,6 +124,8 @@ async fn builder_uses_persisted_production_state_without_second_inference() {
     assert_eq!(artifact.vad_events.len(), 1);
     assert_eq!(artifact.asr.backend, "whisper");
     assert_eq!(artifact.asr.model, "large-v3");
+    assert_eq!(artifact.transcription_run_id, "transcription-run-1");
+    assert_eq!(artifact.production_config.candidate_match.min_iou, 0.42);
     assert!(artifact.source_audio.path_hint.is_none());
     assert!(artifact
         .safety_observations

@@ -18,6 +18,38 @@ use uuid::Uuid;
 
 pub struct TranscriptsRepository;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptionRunProvenance {
+    pub started_at: String,
+    pub backend: String,
+    pub model: String,
+    pub model_version_or_hash: Option<String>,
+}
+
+impl TranscriptionRunProvenance {
+    pub fn started(backend: impl Into<String>, model: impl Into<String>) -> Self {
+        let backend = backend.into();
+        let model = model.into();
+        let model_version_or_hash = match backend.as_str() {
+            "localWhisper" | "whisper" | "whisper.cpp" => {
+                crate::whisper_engine::whisper_engine::whisper_model_sha256(&model)
+                    .map(|hash| format!("sha256:{hash}"))
+            }
+            "parakeet" => Some(format!(
+                "revision:{}",
+                crate::parakeet_engine::parakeet_engine::parakeet_model_revision(&model)
+            )),
+            _ => None,
+        };
+        Self {
+            started_at: Utc::now().to_rfc3339(),
+            backend,
+            model,
+            model_version_or_hash,
+        }
+    }
+}
+
 impl TranscriptsRepository {
     /// Saves a new meeting and its associated transcript segments.
     /// This function uses a transaction to ensure that either both the meeting
@@ -32,6 +64,25 @@ impl TranscriptsRepository {
         meeting_title: &str,
         transcripts: &[TranscriptSegment],
         folder_path: Option<String>,
+    ) -> Result<String, SqlxError> {
+        Self::save_transcript_with_provenance(
+            pool,
+            ctx,
+            meeting_title,
+            transcripts,
+            folder_path,
+            None,
+        )
+        .await
+    }
+
+    pub async fn save_transcript_with_provenance(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_title: &str,
+        transcripts: &[TranscriptSegment],
+        folder_path: Option<String>,
+        provenance: Option<&TranscriptionRunProvenance>,
     ) -> Result<String, SqlxError> {
         let meeting_id = format!("meeting-{}", Uuid::new_v4());
 
@@ -64,6 +115,9 @@ impl TranscriptsRepository {
 
         info!("Successfully created meeting with id: {}", meeting_id);
 
+        let transcription_run_id =
+            persist_transcription_run(&mut transaction, ctx, &meeting_id, provenance, now).await?;
+
         // 2. Save each transcript segment with audio timing fields
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
@@ -74,6 +128,7 @@ impl TranscriptsRepository {
                 &meeting_id,
                 segment,
                 now,
+                transcription_run_id.as_deref(),
             )
             .await;
 
@@ -110,6 +165,25 @@ impl TranscriptsRepository {
         segments: &[TranscriptSegment],
         folder_path: Option<String>,
     ) -> Result<String, SqlxError> {
+        Self::create_meeting_with_segments_and_provenance(
+            pool,
+            ctx,
+            meeting_title,
+            segments,
+            folder_path,
+            None,
+        )
+        .await
+    }
+
+    pub async fn create_meeting_with_segments_and_provenance(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_title: &str,
+        segments: &[TranscriptSegment],
+        folder_path: Option<String>,
+        provenance: Option<&TranscriptionRunProvenance>,
+    ) -> Result<String, SqlxError> {
         let meeting_id = format!("meeting-{}", Uuid::new_v4());
 
         let mut conn = pool.acquire().await?;
@@ -132,6 +206,9 @@ impl TranscriptsRepository {
         .execute(&mut *transaction)
         .await?;
 
+        let transcription_run_id =
+            persist_transcription_run(&mut transaction, ctx, &meeting_id, provenance, now).await?;
+
         for segment in segments {
             insert_transcript_segment(
                 &mut transaction,
@@ -140,6 +217,7 @@ impl TranscriptsRepository {
                 &meeting_id,
                 segment,
                 now,
+                transcription_run_id.as_deref(),
             )
             .await?;
         }
@@ -170,6 +248,17 @@ impl TranscriptsRepository {
         meeting_id: &str,
         segments: &[TranscriptSegment],
     ) -> Result<(), SqlxError> {
+        Self::replace_meeting_transcripts_with_provenance(pool, ctx, meeting_id, segments, None)
+            .await
+    }
+
+    pub async fn replace_meeting_transcripts_with_provenance(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+        segments: &[TranscriptSegment],
+        provenance: Option<&TranscriptionRunProvenance>,
+    ) -> Result<(), SqlxError> {
         if meeting_id.trim().is_empty() {
             return Err(SqlxError::Protocol(
                 "meeting_id cannot be empty".to_string(),
@@ -194,6 +283,9 @@ impl TranscriptsRepository {
             return Err(SqlxError::RowNotFound);
         }
 
+        let transcription_run_id =
+            persist_transcription_run(&mut transaction, ctx, meeting_id, provenance, now).await?;
+
         sqlx::query("DELETE FROM transcripts WHERE meeting_id = ? AND workspace_id = ?")
             .bind(meeting_id)
             .bind(ctx.tenant_id.as_str())
@@ -201,8 +293,16 @@ impl TranscriptsRepository {
             .await?;
 
         for segment in segments {
-            insert_transcript_segment(&mut transaction, ctx, &segment.id, meeting_id, segment, now)
-                .await?;
+            insert_transcript_segment(
+                &mut transaction,
+                ctx,
+                &segment.id,
+                meeting_id,
+                segment,
+                now,
+                transcription_run_id.as_deref(),
+            )
+            .await?;
         }
 
         transaction.commit().await?;
@@ -823,14 +923,15 @@ async fn insert_transcript_segment(
     meeting_id: &str,
     segment: &TranscriptSegment,
     now: chrono::DateTime<Utc>,
+    transcription_run_id: Option<&str>,
 ) -> Result<(), SqlxError> {
     sqlx::query(
         "INSERT INTO transcripts \
          (id, workspace_id, meeting_id, transcript, timestamp, audio_start_time, \
           audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, \
           speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap, \
-          created_at, updated_at, updated_by, rev) \
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+          created_at, updated_at, updated_by, rev, transcription_run_id) \
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
     )
     .bind(transcript_id)
     .bind(ctx.tenant_id.as_str())
@@ -852,9 +953,67 @@ async fn insert_transcript_segment(
     .bind(now)
     .bind(now)
     .bind(ctx.user_id.as_str())
+    .bind(transcription_run_id)
     .execute(&mut *conn)
     .await?;
     Ok(())
+}
+
+async fn persist_transcription_run(
+    conn: &mut sqlx::SqliteConnection,
+    ctx: &AuthContext,
+    meeting_id: &str,
+    provenance: Option<&TranscriptionRunProvenance>,
+    now: chrono::DateTime<Utc>,
+) -> Result<Option<String>, SqlxError> {
+    let Some(provenance) = provenance else {
+        return Ok(None);
+    };
+    if provenance.started_at.trim().is_empty()
+        || provenance.backend.trim().is_empty()
+        || provenance.model.trim().is_empty()
+    {
+        return Err(SqlxError::Protocol(
+            "transcription provenance requires non-empty backend and model".into(),
+        ));
+    }
+    let run_id = format!("transcription-run-{}", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO meeting_transcription_runs \
+         (id, meeting_id, workspace_id, created_at, completed_at, backend, model, model_version_or_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&run_id)
+    .bind(meeting_id)
+    .bind(ctx.tenant_id.as_str())
+    .bind(&provenance.started_at)
+    .bind(now)
+    .bind(provenance.backend.trim())
+    .bind(provenance.model.trim())
+    .bind(provenance.model_version_or_hash.as_deref())
+    .execute(&mut *conn)
+    .await?;
+    Ok(Some(run_id))
+}
+
+#[cfg(test)]
+mod transcription_provenance_tests {
+    use super::TranscriptionRunProvenance;
+
+    #[test]
+    fn known_model_identity_uses_pinned_hash_or_revision() {
+        let whisper = TranscriptionRunProvenance::started("localWhisper", "large-v3");
+        assert_eq!(
+            whisper.model_version_or_hash.as_deref(),
+            Some("sha256:64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2")
+        );
+
+        let parakeet = TranscriptionRunProvenance::started("parakeet", "parakeet-tdt-0.6b-v3-int8");
+        assert!(parakeet
+            .model_version_or_hash
+            .as_deref()
+            .is_some_and(|value| value.starts_with("revision:")));
+    }
 }
 
 #[cfg(test)]

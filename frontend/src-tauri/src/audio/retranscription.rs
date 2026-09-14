@@ -359,6 +359,27 @@ async fn run_retranscription<R: Runtime>(
     } else {
         None
     };
+    let transcription_provenance = match (&whisper_engine, &parakeet_engine) {
+        (Some(engine), _) => Some(
+            crate::database::repositories::transcript::TranscriptionRunProvenance::started(
+                "localWhisper",
+                engine
+                    .get_current_model()
+                    .await
+                    .ok_or_else(|| anyhow!("Whisper executed without an identifiable model"))?,
+            ),
+        ),
+        (_, Some(engine)) => Some(
+            crate::database::repositories::transcript::TranscriptionRunProvenance::started(
+                "parakeet",
+                engine
+                    .get_current_model()
+                    .await
+                    .ok_or_else(|| anyhow!("Parakeet executed without an identifiable model"))?,
+            ),
+        ),
+        _ => None,
+    };
 
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
@@ -547,11 +568,12 @@ async fn run_retranscription<R: Runtime>(
         Err(e) => return Err(anyhow!("Failed to load redaction configuration: {}", e)),
     }
 
-    crate::database::repositories::transcript::TranscriptsRepository::replace_meeting_transcripts(
+    crate::database::repositories::transcript::TranscriptsRepository::replace_meeting_transcripts_with_provenance(
         pool,
         &ctx,
         &meeting_id,
         &segments,
+        transcription_provenance.as_ref(),
     )
     .await
     .map_err(|e| anyhow!("Failed to replace transcripts: {}", e))?;

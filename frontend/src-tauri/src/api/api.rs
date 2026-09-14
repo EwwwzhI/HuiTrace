@@ -1012,6 +1012,9 @@ pub async fn api_save_transcript<R: Runtime>(
     let trusted_folder_path = recording_folder_reservation
         .as_ref()
         .and_then(|reservation| reservation.folder_path().map(str::to_string));
+    let transcription_provenance = recording_folder_reservation
+        .as_ref()
+        .and_then(|reservation| reservation.transcription_provenance().cloned());
     if completion_token.is_some() && recording_folder_reservation.is_none() {
         log_warn!(
             "Rejected an invalid, stale, duplicate, or cross-context recording completion token"
@@ -1026,12 +1029,13 @@ pub async fn api_save_transcript<R: Runtime>(
     }
 
     // Now, call the repository with the correctly typed data.
-    match TranscriptsRepository::save_transcript(
+    match TranscriptsRepository::save_transcript_with_provenance(
         pool,
         &ctx,
         &meeting_title,
         &transcripts_to_save,
         trusted_folder_path,
+        transcription_provenance.as_ref(),
     )
     .await
     {

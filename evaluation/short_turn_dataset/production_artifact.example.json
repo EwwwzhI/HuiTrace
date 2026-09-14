@@ -1,6 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "artifact_id": "meeting-example-run-20260914",
+  "transcription_run_id": "transcription-run-example-20260914",
   "meeting_id": "meeting-example",
   "source_audio": {"path_hint":"private meeting audio","duration_ms":5000,"sha256":null},
   "created_at": "2026-09-14T00:00:00Z",
@@ -21,6 +22,6 @@
   "vad_events": [{"start_ms":990,"end_ms":1300,"confidence":null}],
   "accepted_speakers": ["speaker_01","speaker_02"],
   "visible_speakers": ["speaker_01","speaker_02"],
-  "safety_observations": {"long_transcript_speaker_corruption_count":0,"manual_override_violation_count":0},
+  "safety_observations": {"long_transcript_speaker_corruption_count":null,"manual_override_violation_count":null},
   "production_metadata": {"platform":"Windows","note":"example only"}
 }

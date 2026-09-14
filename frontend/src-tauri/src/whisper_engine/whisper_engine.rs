@@ -110,6 +110,10 @@ fn whisper_model_artifact(model_name: &str) -> Option<(String, u64, &'static str
     ))
 }
 
+pub(crate) fn whisper_model_sha256(model_name: &str) -> Option<&'static str> {
+    whisper_model_artifact(model_name).map(|(_, _, sha256)| sha256)
+}
+
 pub struct WhisperEngine {
     models_dir: PathBuf,
     current_context: Arc<RwLock<Option<WhisperContext>>>,

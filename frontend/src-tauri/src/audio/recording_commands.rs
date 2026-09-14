@@ -52,6 +52,8 @@ struct PendingCompletedRecording {
     reserved: bool,
     persisted: bool,
     meeting_id: Option<String>,
+    transcription_provenance:
+        Option<crate::database::repositories::transcript::TranscriptionRunProvenance>,
 }
 
 // The renderer receives only the opaque token. The filesystem path stored here
@@ -1246,6 +1248,8 @@ fn install_pending_completed_recording(
         reserved: false,
         persisted: false,
         meeting_id: None,
+        transcription_provenance:
+            super::transcription::worker::current_transcription_run_provenance(),
     };
     let completion_token = pending.completion_token.clone();
 
@@ -1282,7 +1286,11 @@ fn reserve_pending_completed_recording(
     presented_token: Option<&str>,
     tenant_id: &str,
     user_id: &str,
-) -> Option<(String, Option<PathBuf>)> {
+) -> Option<(
+    String,
+    Option<PathBuf>,
+    Option<crate::database::repositories::transcript::TranscriptionRunProvenance>,
+)> {
     let presented_token = presented_token.filter(|token| !token.trim().is_empty())?;
     let pending_recording = pending_recordings.iter_mut().find(|pending_recording| {
         !pending_recording.reserved
@@ -1296,6 +1304,7 @@ fn reserve_pending_completed_recording(
     Some((
         pending_recording.completion_token.clone(),
         pending_recording.folder.clone(),
+        pending_recording.transcription_provenance.clone(),
     ))
 }
 
@@ -1373,11 +1382,19 @@ pub(crate) struct CompletedRecordingFolderReservation {
     completion_token: String,
     folder_path: Option<String>,
     committed: bool,
+    transcription_provenance:
+        Option<crate::database::repositories::transcript::TranscriptionRunProvenance>,
 }
 
 impl CompletedRecordingFolderReservation {
     pub(crate) fn folder_path(&self) -> Option<&str> {
         self.folder_path.as_deref()
+    }
+
+    pub(crate) fn transcription_provenance(
+        &self,
+    ) -> Option<&crate::database::repositories::transcript::TranscriptionRunProvenance> {
+        self.transcription_provenance.as_ref()
     }
 
     pub(crate) fn commit(mut self, meeting_id: &str) {
@@ -1404,7 +1421,7 @@ pub(crate) fn reserve_last_completed_recording_folder(
     completion_token: Option<&str>,
 ) -> Option<CompletedRecordingFolderReservation> {
     let mut pending_recordings = PENDING_COMPLETED_RECORDINGS.lock().ok()?;
-    let (completion_token, folder) = reserve_pending_completed_recording(
+    let (completion_token, folder, transcription_provenance) = reserve_pending_completed_recording(
         &mut pending_recordings,
         completion_token,
         ctx.tenant_id.as_str(),
@@ -1414,6 +1431,7 @@ pub(crate) fn reserve_last_completed_recording_folder(
         completion_token,
         folder_path: folder.map(|path| path.to_string_lossy().to_string()),
         committed: false,
+        transcription_provenance,
     })
 }
 
@@ -1746,6 +1764,7 @@ mod completed_recording_save_tests {
             reserved: false,
             persisted: false,
             meeting_id: None,
+            transcription_provenance: None,
         }]
     }
 
@@ -1754,6 +1773,7 @@ mod completed_recording_save_tests {
         token: Option<&str>,
     ) -> Option<(String, Option<PathBuf>)> {
         reserve_pending_completed_recording(state, token, "workspace-a", "user-a")
+            .map(|(token, folder, _)| (token, folder))
     }
 
     #[test]

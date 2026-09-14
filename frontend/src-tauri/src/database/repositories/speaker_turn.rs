@@ -16,15 +16,14 @@ use crate::context::AuthContext;
 use crate::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use crate::diarization::short_turn::{
     apply_revision_semantics, refine_assignment_with_candidate, MeetingSpeakerPrototypeStore,
-    ShortTurnCandidateExtractor, ShortTurnCandidateSource, ShortTurnRefiner,
-    SpeakerAcceptancePolicy, SpeakerAcceptanceTurn, TranscriptCandidateInput,
-    VadEventCandidateInput,
+    ShortTurnCandidateExtractor, ShortTurnCandidateSource, ShortTurnRefiner, SpeakerAcceptanceTurn,
+    TranscriptCandidateInput, VadEventCandidateInput,
 };
-use crate::diarization::short_turn_event::ShortTurnMaterializationPolicy;
 use crate::diarization::timeline::reconcile_transcript;
 use crate::diarization::types::{
     AssignmentMethod, AudioSource, SegmentKind, SpeakerSegment, TranscriptTiming,
 };
+use crate::evaluation::production_artifact::ProductionConfigSnapshot;
 
 /// One anonymous speaker turn, in the units the schema stores.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -87,6 +86,29 @@ impl SpeakerTurnsRepository {
         source: AudioSource,
         vad_events: &[VadEventCandidateInput],
     ) -> Result<usize> {
+        let production_config = ProductionConfigSnapshot::default();
+        Self::replace_for_meeting_with_evidence_and_config(
+            pool,
+            ctx,
+            meeting_id,
+            turns,
+            source,
+            vad_events,
+            &production_config,
+        )
+        .await
+    }
+
+    pub async fn replace_for_meeting_with_evidence_and_config(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+        turns: &[SpeakerTurn],
+        source: AudioSource,
+        vad_events: &[VadEventCandidateInput],
+        production_config: &ProductionConfigSnapshot,
+    ) -> Result<usize> {
+        crate::evaluation::production_artifact::validate_production_config(production_config)?;
         // SQLite permits concurrent analysis but only one writer. Keep the
         // backend jobs independent while serializing their short commit phase.
         let _write_guard = SPEAKER_TURN_WRITE_LOCK
@@ -132,7 +154,7 @@ impl SpeakerTurnsRepository {
         // meeting speaker. Existing keys remain known across reruns; a new key
         // becomes eligible only after a long, confident, non-overlap speech
         // turn can seed the Phase 2A meeting-local prototype abstraction.
-        let acceptance_policy = SpeakerAcceptancePolicy::default();
+        let acceptance_policy = &production_config.speaker_acceptance;
         let mut known_speaker_keys: std::collections::HashSet<String> = sqlx::query_scalar(
             "SELECT speaker_key FROM speakers WHERE meeting_id = ? AND workspace_id = ?",
         )
@@ -298,8 +320,14 @@ impl SpeakerTurnsRepository {
             .cloned()
             .collect();
         let prototypes = MeetingSpeakerPrototypeStore::new(known_speaker_keys.iter().cloned());
-        let refiner = ShortTurnRefiner::default();
-        let extracted = ShortTurnCandidateExtractor::default().extract(
+        let refiner = ShortTurnRefiner::new(
+            production_config.short_turn.clone(),
+            crate::diarization::short_turn::LexicalBackchannelDetector,
+        );
+        let extracted = ShortTurnCandidateExtractor {
+            config: production_config.short_turn.clone(),
+        }
+        .extract(
             &transcript_inputs
                 .iter()
                 .map(|(input, _)| input.clone())
@@ -353,7 +381,7 @@ impl SpeakerTurnsRepository {
                 .bind(assignment.speaker_key).bind(assignment.speaker_confidence).bind(assignment.speaker_provisional as i64).bind(assignment.speaker_revision).bind(assignment.segment_kind.as_str()).bind(assignment.audio_source.as_str()).bind(assignment.assignment_method.as_str()).bind(assignment.overlap as i64).bind(assignment.transcript_id).bind(meeting_id).bind(ctx.tenant_id.as_str()).execute(&mut *tx).await?;
         }
 
-        let materializer = ShortTurnMaterializationPolicy::default();
+        let materializer = &production_config.materialization;
         let events = extracted
             .iter()
             .filter_map(|candidate| {
@@ -392,6 +420,7 @@ impl SpeakerTurnsRepository {
             vad_events,
             &production_speakers,
             &visible_speakers,
+            production_config,
         )
         .await?;
 

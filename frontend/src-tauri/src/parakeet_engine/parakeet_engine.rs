@@ -25,6 +25,10 @@ fn parakeet_revision(model_name: &str) -> &'static str {
     }
 }
 
+pub(crate) fn parakeet_model_revision(model_name: &str) -> &'static str {
+    parakeet_revision(model_name)
+}
+
 fn parakeet_artifact(model_name: &str, filename: &str) -> Option<(u64, &'static str)> {
     let v2 = model_name.contains("-v2-");
     match (v2, filename) {

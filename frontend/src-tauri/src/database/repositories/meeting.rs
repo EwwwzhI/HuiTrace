@@ -399,6 +399,15 @@ pub(crate) async fn delete_meeting_with_connection(
     .execute(&mut *transaction)
     .await?;
 
+    // ASR run metadata is transcript-adjacent provenance. The transcript and
+    // snapshot references above are already gone, so erase the run history
+    // explicitly before the parent meeting while FK actions are disabled.
+    sqlx::query("DELETE FROM meeting_transcription_runs WHERE meeting_id = ? AND workspace_id = ?")
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .execute(&mut *transaction)
+        .await?;
+
     // Finally delete only the caller-owned parent. With cascades disabled on
     // this disposable connection, foreign malformed children remain untouched.
     let result = sqlx::query("DELETE FROM meetings WHERE id = ? AND workspace_id = ?")

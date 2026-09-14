@@ -19,7 +19,7 @@ use crate::diarization::short_turn::{
 };
 use crate::diarization::short_turn_event::ShortTurnMaterializationPolicy;
 
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 2;
 pub const PHASE_2C1_FROZEN_BASELINE_COMMIT: &str = "7b34d7b7d422deeafeb21f07449f8a3ca8c5f60a";
 
 pub fn app_commit_sha() -> &'static str {
@@ -81,7 +81,6 @@ pub struct ProductionConfigSnapshot {
     pub candidate_match: CandidateMatchConfig,
     pub materialization: ShortTurnMaterializationPolicy,
     pub vad_implementation: String,
-    #[serde(default)]
     pub vad_runtime_config: serde_json::Value,
 }
 
@@ -117,6 +116,7 @@ pub struct ProductionSafetyObservations {
 pub struct MeetingProductionArtifact {
     pub schema_version: u32,
     pub artifact_id: String,
+    pub transcription_run_id: String,
     pub meeting_id: String,
     pub source_audio: SourceAudioMetadata,
     pub created_at: String,
@@ -143,6 +143,73 @@ fn valid_commit_sha(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn valid_version_or_hash(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return true;
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let hash = value.strip_prefix("sha256:").unwrap_or(value);
+    hash.len() != 64 || hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub fn validate_production_config(config: &ProductionConfigSnapshot) -> Result<()> {
+    let short = &config.short_turn;
+    let confidence = |value: f64| value.is_finite() && (0.0..=1.0).contains(&value);
+    if short.min_candidate_ms == 0
+        || short.very_short_ms == 0
+        || short.max_short_turn_ms == 0
+        || short.prototype_min_duration_ms == 0
+        || short.duration_weight_20_until_ms == 0
+        || short.duration_weight_35_until_ms == 0
+        || short.duration_weight_55_until_ms == 0
+        || short.nearby_gap_ms == 0
+        || short.min_candidate_ms > short.very_short_ms
+        || short.very_short_ms > short.max_short_turn_ms
+        || short.duration_weight_20_until_ms > short.duration_weight_35_until_ms
+        || short.duration_weight_35_until_ms > short.duration_weight_55_until_ms
+        || !confidence(short.high_confidence_threshold)
+        || !confidence(short.weak_confidence_threshold)
+        || short.weak_confidence_threshold > short.high_confidence_threshold
+    {
+        bail!("invalid short-turn config ranges or thresholds");
+    }
+    let candidate_vad = &config.short_candidate_vad;
+    if candidate_vad.min_speech_ms == 0
+        || candidate_vad.redemption_ms == 0
+        || candidate_vad.max_candidate_ms == 0
+        || candidate_vad.min_speech_ms > candidate_vad.max_candidate_ms
+    {
+        bail!("invalid short-candidate VAD config");
+    }
+    let acceptance = &config.speaker_acceptance;
+    if acceptance.config != config.short_turn
+        || !confidence(acceptance.max_overlap_ratio)
+        || acceptance.confident_min_longest_turn_ms == 0
+        || acceptance.missing_confidence_min_total_ms == 0
+        || acceptance.missing_confidence_min_turns == 0
+    {
+        bail!("invalid or inconsistent speaker-acceptance config");
+    }
+    let matching = &config.candidate_match;
+    if !confidence(matching.min_iou)
+        || !confidence(matching.min_ground_truth_coverage)
+        || matching.center_tolerance_ms < 0
+    {
+        bail!("invalid candidate-matching config");
+    }
+    if !confidence(config.materialization.aligned_min_iou)
+        || !confidence(config.materialization.strong_internal_evidence)
+        || config.vad_implementation.trim().is_empty()
+        || !config.vad_runtime_config.is_object()
+    {
+        bail!("invalid materialization or VAD runtime config");
+    }
+    Ok(())
+}
+
 pub fn validate_artifact(
     artifact: &MeetingProductionArtifact,
     expected_meeting: Option<&str>,
@@ -155,6 +222,7 @@ pub fn validate_artifact(
         );
     }
     if artifact.artifact_id.trim().is_empty()
+        || artifact.transcription_run_id.trim().is_empty()
         || artifact.meeting_id.trim().is_empty()
         || expected_meeting.is_some_and(|meeting| artifact.meeting_id != meeting)
         || artifact.created_at.trim().is_empty()
@@ -162,8 +230,10 @@ pub fn validate_artifact(
         || artifact.source_audio.duration_ms <= 0
         || artifact.asr.backend.trim().is_empty()
         || artifact.asr.model.trim().is_empty()
+        || !valid_version_or_hash(artifact.asr.version_or_hash.as_deref())
         || artifact.diarization.backend.trim().is_empty()
         || artifact.diarization.model.trim().is_empty()
+        || !valid_version_or_hash(artifact.diarization.version_or_hash.as_deref())
         || artifact
             .production_config
             .vad_implementation
@@ -173,6 +243,7 @@ pub fn validate_artifact(
     {
         bail!("artifact identity, backend, source duration, or config snapshot is incomplete");
     }
+    validate_production_config(&artifact.production_config)?;
     let duration = artifact.source_audio.duration_ms;
     let mut transcript_ids = HashSet::new();
     if artifact.transcripts.iter().any(|item| {
@@ -195,6 +266,30 @@ pub fn validate_artifact(
             || !valid_confidence(item.confidence)
     }) {
         bail!("artifact contains duplicate transcript ids or invalid full-meeting evidence");
+    }
+    let accepted = artifact
+        .accepted_speakers
+        .iter()
+        .map(|key| key.trim())
+        .collect::<HashSet<_>>();
+    let visible = artifact
+        .visible_speakers
+        .iter()
+        .map(|key| key.trim())
+        .collect::<HashSet<_>>();
+    let speaker_universe = artifact
+        .raw_diarizer_turns
+        .iter()
+        .map(|turn| turn.speaker_key.as_str())
+        .chain(accepted.iter().copied())
+        .collect::<HashSet<_>>();
+    if accepted.len() != artifact.accepted_speakers.len()
+        || visible.len() != artifact.visible_speakers.len()
+        || accepted.contains("")
+        || visible.contains("")
+        || visible.iter().any(|key| !speaker_universe.contains(key))
+    {
+        bail!("artifact speaker sets contain empty, duplicate, or unknown keys");
     }
     Ok(())
 }
@@ -219,13 +314,36 @@ pub async fn persist_run_snapshot_tx(
     vad_events: &[VadEventCandidateInput],
     accepted_speakers: &[String],
     visible_speakers: &[String],
-) -> Result<()> {
-    let asr: Option<(String, String)> = sqlx::query_as(
-        "SELECT provider, model FROM transcript_settings WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 1",
+    production_config: &ProductionConfigSnapshot,
+) -> Result<bool> {
+    validate_production_config(production_config)?;
+    let transcription_runs: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT r.id, r.backend, r.model, r.model_version_or_hash \
+         FROM transcripts t INNER JOIN meeting_transcription_runs r ON r.id = t.transcription_run_id \
+         WHERE t.meeting_id = ? AND t.workspace_id = ? AND t.deleted_at IS NULL",
     )
+    .bind(meeting_id)
     .bind(ctx.tenant_id.as_str())
-    .fetch_optional(&mut **tx)
+    .fetch_all(&mut **tx)
     .await?;
+    if transcription_runs.is_empty() {
+        // Legacy/manual transcript rows have no trustworthy execution record.
+        // Keep diarization usable, but remove any stale snapshot rather than
+        // exporting mutable workspace settings as fabricated provenance.
+        sqlx::query(
+            "DELETE FROM meeting_production_snapshots WHERE meeting_id = ? AND workspace_id = ?",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .execute(&mut **tx)
+        .await?;
+        return Ok(false);
+    }
+    let [(transcription_run_id, asr_backend, asr_model, asr_version_or_hash)] =
+        transcription_runs.as_slice()
+    else {
+        bail!("meeting transcripts reference multiple transcription runs");
+    };
     let events = vad_events
         .iter()
         .map(|event| ArtifactVadEvent {
@@ -236,20 +354,22 @@ pub async fn persist_run_snapshot_tx(
         .collect::<Vec<_>>();
     let now = Utc::now().to_rfc3339();
     let snapshot_id = uuid::Uuid::new_v4().to_string();
-    let config_json = serde_json::to_string(&ProductionConfigSnapshot::default())?;
+    let config_json = serde_json::to_string(production_config)?;
     let vad_json = serde_json::to_string(&events)?;
     let accepted_json = serde_json::to_string(accepted_speakers)?;
     let visible_json = serde_json::to_string(visible_speakers)?;
     let result = sqlx::query(
-        "INSERT INTO meeting_production_snapshots (id, meeting_id, workspace_id, created_at, app_commit_sha, asr_backend, asr_model, asr_version_or_hash, diarization_backend, diarization_model, diarization_version_or_hash, production_config_json, vad_events_json, accepted_speakers_json, visible_speakers_json, long_transcript_speaker_corruption_count, manual_override_violation_count) SELECT ?, ?, ?, ?, ?, ?, ?, NULL, 'sherpa-onnx', 'pyannote-segmentation-3.0+3D-Speaker-CAM++', 'segmentation:220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079;embedding:f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11', ?, ?, ?, ?, NULL, NULL WHERE EXISTS (SELECT 1 FROM meetings WHERE id = ? AND workspace_id = ?) ON CONFLICT(workspace_id, meeting_id) DO UPDATE SET id=excluded.id, created_at=excluded.created_at, app_commit_sha=excluded.app_commit_sha, asr_backend=excluded.asr_backend, asr_model=excluded.asr_model, asr_version_or_hash=excluded.asr_version_or_hash, diarization_backend=excluded.diarization_backend, diarization_model=excluded.diarization_model, diarization_version_or_hash=excluded.diarization_version_or_hash, production_config_json=excluded.production_config_json, vad_events_json=excluded.vad_events_json, accepted_speakers_json=excluded.accepted_speakers_json, visible_speakers_json=excluded.visible_speakers_json, long_transcript_speaker_corruption_count=NULL, manual_override_violation_count=NULL WHERE workspace_id=excluded.workspace_id",
+        "INSERT INTO meeting_production_snapshots (id, meeting_id, workspace_id, created_at, app_commit_sha, transcription_run_id, asr_backend, asr_model, asr_version_or_hash, diarization_backend, diarization_model, diarization_version_or_hash, production_config_json, vad_events_json, accepted_speakers_json, visible_speakers_json, long_transcript_speaker_corruption_count, manual_override_violation_count) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sherpa-onnx', 'pyannote-segmentation-3.0+3D-Speaker-CAM++', 'segmentation:220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079;embedding:f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11', ?, ?, ?, ?, NULL, NULL WHERE EXISTS (SELECT 1 FROM meetings WHERE id = ? AND workspace_id = ?) ON CONFLICT(workspace_id, meeting_id) DO UPDATE SET id=excluded.id, created_at=excluded.created_at, app_commit_sha=excluded.app_commit_sha, transcription_run_id=excluded.transcription_run_id, asr_backend=excluded.asr_backend, asr_model=excluded.asr_model, asr_version_or_hash=excluded.asr_version_or_hash, diarization_backend=excluded.diarization_backend, diarization_model=excluded.diarization_model, diarization_version_or_hash=excluded.diarization_version_or_hash, production_config_json=excluded.production_config_json, vad_events_json=excluded.vad_events_json, accepted_speakers_json=excluded.accepted_speakers_json, visible_speakers_json=excluded.visible_speakers_json, long_transcript_speaker_corruption_count=NULL, manual_override_violation_count=NULL WHERE workspace_id=excluded.workspace_id",
     )
     .bind(snapshot_id)
     .bind(meeting_id)
     .bind(ctx.tenant_id.as_str())
     .bind(now)
     .bind(app_commit_sha())
-    .bind(asr.as_ref().map(|value| value.0.as_str()))
-    .bind(asr.as_ref().map(|value| value.1.as_str()))
+    .bind(transcription_run_id)
+    .bind(asr_backend)
+    .bind(asr_model)
+    .bind(asr_version_or_hash)
     .bind(config_json)
     .bind(vad_json)
     .bind(accepted_json)
@@ -261,7 +381,7 @@ pub async fn persist_run_snapshot_tx(
     if result.rows_affected() != 1 {
         bail!("meeting {meeting_id} is not in this workspace");
     }
-    Ok(())
+    Ok(true)
 }
 
 fn metadata_duration_ms(folder: Option<&str>) -> Option<i64> {
@@ -275,7 +395,7 @@ fn metadata_duration_ms(folder: Option<&str>) -> Option<i64> {
         .map(|value| (value * 1000.0).round() as i64)
 }
 
-/// Build a schema-v1 artifact from the latest persisted production run.
+/// Build a schema-v2 artifact from the latest persisted production run.
 pub async fn build_from_persisted_meeting(
     pool: &SqlitePool,
     ctx: &AuthContext,
@@ -291,7 +411,7 @@ pub async fn build_from_persisted_meeting(
     .ok_or_else(|| anyhow::anyhow!("meeting {meeting_id} is not in this workspace"))?;
     let folder: Option<String> = meeting.get("folder_path");
     let snapshot = sqlx::query(
-        "SELECT id, created_at, app_commit_sha, asr_backend, asr_model, asr_version_or_hash, diarization_backend, diarization_model, diarization_version_or_hash, production_config_json, vad_events_json, accepted_speakers_json, visible_speakers_json, long_transcript_speaker_corruption_count, manual_override_violation_count FROM meeting_production_snapshots WHERE meeting_id = ? AND workspace_id = ?",
+        "SELECT id, created_at, app_commit_sha, transcription_run_id, asr_backend, asr_model, asr_version_or_hash, diarization_backend, diarization_model, diarization_version_or_hash, production_config_json, vad_events_json, accepted_speakers_json, visible_speakers_json, long_transcript_speaker_corruption_count, manual_override_violation_count FROM meeting_production_snapshots WHERE meeting_id = ? AND workspace_id = ?",
     )
     .bind(meeting_id)
     .bind(ctx.tenant_id.as_str())
@@ -306,8 +426,12 @@ pub async fn build_from_persisted_meeting(
         }
         _ => bail!("production run did not persist ASR backend/model provenance"),
     };
+    let transcription_run_id: String = snapshot.get("transcription_run_id");
+    if transcription_run_id.trim().is_empty() {
+        bail!("production snapshot is missing transcription run identity");
+    }
     let transcript_rows = sqlx::query(
-        "SELECT id, transcript, audio_start_time, audio_end_time, asr_confidence FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND deleted_at IS NULL ORDER BY audio_start_time, audio_end_time, id",
+        "SELECT id, transcript, audio_start_time, audio_end_time, asr_confidence, transcription_run_id FROM transcripts WHERE meeting_id = ? AND workspace_id = ? AND deleted_at IS NULL ORDER BY audio_start_time, audio_end_time, id",
     )
     .bind(meeting_id)
     .bind(ctx.tenant_id.as_str())
@@ -316,6 +440,13 @@ pub async fn build_from_persisted_meeting(
     let transcripts = transcript_rows
         .into_iter()
         .map(|row| -> Result<ArtifactTranscript> {
+            if row
+                .get::<Option<String>, _>("transcription_run_id")
+                .as_deref()
+                != Some(transcription_run_id.as_str())
+            {
+                bail!("transcript rows and production snapshot reference different ASR runs");
+            }
             let start: Option<f64> = row.get("audio_start_time");
             let end: Option<f64> = row.get("audio_end_time");
             match (start, end) {
@@ -390,6 +521,7 @@ pub async fn build_from_persisted_meeting(
     let artifact = MeetingProductionArtifact {
         schema_version: ARTIFACT_SCHEMA_VERSION,
         artifact_id: snapshot.get("id"),
+        transcription_run_id,
         meeting_id: meeting_id.to_string(),
         source_audio: SourceAudioMetadata {
             path_hint: None,
@@ -446,6 +578,7 @@ mod tests {
         MeetingProductionArtifact {
             schema_version: ARTIFACT_SCHEMA_VERSION,
             artifact_id: "artifact-1".into(),
+            transcription_run_id: "transcription-run-1".into(),
             meeting_id: "meeting-1".into(),
             source_audio: SourceAudioMetadata {
                 path_hint: None,
@@ -492,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_round_trip_preserves_core_fields() {
+    fn schema_v2_round_trip_preserves_core_fields() {
         let expected = artifact();
         let bytes = serde_json::to_vec(&expected).unwrap();
         let actual: MeetingProductionArtifact = serde_json::from_slice(&bytes).unwrap();
@@ -503,7 +636,7 @@ mod tests {
     #[test]
     fn future_schema_is_not_silently_reinterpreted() {
         let mut value = artifact();
-        value.schema_version = 2;
+        value.schema_version = 3;
         assert!(validate_artifact(&value, Some("meeting-1")).is_err());
     }
 
@@ -525,5 +658,31 @@ mod tests {
         let value = serde_json::to_value(artifact()).unwrap();
         assert_eq!(value["source_audio"]["path_hint"], serde_json::Value::Null);
         assert!(!value.to_string().contains("Users\\\\"));
+    }
+
+    #[test]
+    fn complete_config_is_required_and_ranges_are_validated() {
+        let mut json = serde_json::to_value(ProductionConfigSnapshot::default()).unwrap();
+        json.as_object_mut().unwrap().remove("vad_runtime_config");
+        assert!(serde_json::from_value::<ProductionConfigSnapshot>(json).is_err());
+
+        let mut invalid = ProductionConfigSnapshot::default();
+        invalid.speaker_acceptance.max_overlap_ratio = 1.1;
+        assert!(validate_production_config(&invalid).is_err());
+
+        let mut inconsistent = ProductionConfigSnapshot::default();
+        inconsistent.speaker_acceptance.config.max_short_turn_ms += 1;
+        assert!(validate_production_config(&inconsistent).is_err());
+    }
+
+    #[test]
+    fn duplicate_or_unknown_speaker_keys_are_rejected() {
+        let mut duplicate = artifact();
+        duplicate.accepted_speakers.push("speaker_01".into());
+        assert!(validate_artifact(&duplicate, None).is_err());
+
+        let mut unknown = artifact();
+        unknown.visible_speakers = vec!["speaker_02".into()];
+        assert!(validate_artifact(&unknown, None).is_err());
     }
 }
