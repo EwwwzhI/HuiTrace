@@ -6,7 +6,7 @@ import {
   useMemo, useRef, useState,
 } from 'react';
 import { toast } from 'sonner';
-import { AlertTriangle, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Redo2, Sun, Undo2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, CircleHelp, Download, Languages, Moon, Pause, Play, Redo2, Sun, Undo2 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { isTauri } from '@/lib/isTauri';
 import { WaveformTimeline } from '@/components/short-turn-annotation/WaveformTimeline';
@@ -69,7 +69,7 @@ function isTextEntry(target: EventTarget | null) {
 /** Deliberately unlinked development/evaluation surface.  Production users do not see it. */
 export default function ShortTurnAnnotationPage() {
   const enabled = isShortTurnAnnotationEnabled();
-  const { t } = useUiTranslation();
+  const { t, language } = useUiTranslation();
   const { setChoice } = useUiLanguage();
   const { resolvedTheme, setTheme } = useTheme();
   const [themeMounted, setThemeMounted] = useState(false);
@@ -113,6 +113,7 @@ export default function ShortTurnAnnotationPage() {
   const viewportDuration = Math.max(1, viewportEnd - viewportStart);
   const displayedEvents = useMemo(() => draft.events.filter(event => event.start_ms < viewportEnd && event.end_ms > viewportStart).sort((a, b) => a.start_ms - b.start_ms), [draft.events, viewportStart, viewportEnd]);
   const video = /\.(mp4|webm)$/i.test(session.source_media_path);
+  const activeLanguage = language.startsWith('zh') ? 'zh-CN' : 'en';
 
   const markDirty = useCallback(() => { setEditRevision(value => { const next = value + 1; editRevisionRef.current = next; return next; }); setQa(null); setQaRevision(null); setCheck(null); }, []);
   const commit = useCallback((mutation: (current: Draft) => Draft) => {
@@ -243,9 +244,9 @@ export default function ShortTurnAnnotationPage() {
         <p className="mt-0.5 text-xs text-muted-foreground">{t('Build, review, and export Ground Truth for short-turn speaker diarization evaluation.')}</p>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 text-sm">
-        <div aria-label={t('Language')} className="inline-flex rounded-lg border border-border bg-muted p-0.5">
-          <button type="button" onClick={() => setChoice('zh-CN')} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-background hover:text-foreground"><Languages size={13} aria-hidden="true" />中文</button>
-          <button type="button" onClick={() => setChoice('en')} className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-background hover:text-foreground">English</button>
+        <div role="radiogroup" aria-label={t('Language')} className="inline-flex rounded-lg border border-border bg-muted p-0.5">
+          <button type="button" role="radio" aria-checked={activeLanguage === 'zh-CN'} onClick={() => setChoice('zh-CN')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeLanguage === 'zh-CN' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background hover:text-foreground'}`}><Languages size={13} aria-hidden="true" />中文{activeLanguage === 'zh-CN' && <Check size={12} aria-hidden="true" />}</button>
+          <button type="button" role="radio" aria-checked={activeLanguage === 'en'} onClick={() => setChoice('en')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeLanguage === 'en' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background hover:text-foreground'}`}>English{activeLanguage === 'en' && <Check size={12} aria-hidden="true" />}</button>
         </div>
         <div role="radiogroup" aria-label={t('Theme')} className="inline-flex rounded-lg border border-border bg-muted p-0.5">
           <button type="button" role="radio" aria-checked={themeMounted && resolvedTheme === 'light'} onClick={() => setTheme('light')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${themeMounted && resolvedTheme === 'light' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}><Sun size={13} aria-hidden="true" />{t('Light')}</button>

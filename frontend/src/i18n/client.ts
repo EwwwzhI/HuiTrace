@@ -10,6 +10,6 @@ const subscribeToLanguage = (onChange: () => void) => {
 
 /** Re-render a client component whenever the selected UI language changes. */
 export function useUiTranslation() {
-  useSyncExternalStore(subscribeToLanguage, () => uiI18n.language, () => 'en');
-  return { t: translateUI };
+  const language = useSyncExternalStore(subscribeToLanguage, () => uiI18n.language, () => 'en');
+  return { t: translateUI, language };
 }

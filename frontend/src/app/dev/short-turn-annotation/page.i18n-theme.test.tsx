@@ -87,9 +87,13 @@ it('switches language and theme without changing annotation data', async () => {
   await loadWorkspace('review');
   expect(screen.getByText('Yes, I think so')).toBeTruthy();
   expect(screen.getAllByText('gt_speaker_01').length).toBeGreaterThan(0);
+  expect(screen.getByRole('radio', { name: 'English' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('radio', { name: '中文' }).getAttribute('aria-checked')).toBe('false');
 
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: '中文' })));
+  await act(async () => fireEvent.click(screen.getByRole('radio', { name: '中文' })));
   expect(await screen.findByText('短会话标注工作台')).toBeTruthy();
+  expect(screen.getByRole('radio', { name: '中文' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('radio', { name: 'English' }).getAttribute('aria-checked')).toBe('false');
   expect(screen.getByText('Yes, I think so')).toBeTruthy();
   expect(screen.getByText('meeting-demo-001-event-0001')).toBeTruthy();
   expect(screen.getAllByText('gt_speaker_01').length).toBeGreaterThan(0);
