@@ -105,7 +105,11 @@ pub struct ReconstructionMetrics {
     pub mixed_count: usize,
     pub mixed_rate: f64,
     pub cross_speaker_raw_chunk_count: usize,
+    /// Diagnostic-only: V2 emitted more than one assigned speaker for the raw
+    /// chunk. This is resolution coverage, not correctness or handoff recall.
     pub resolved_cross_speaker_chunk_count: usize,
+    /// Diagnostic coverage metric. Ground Truth evaluation is required before
+    /// this value may be interpreted as a correct resolution rate.
     pub resolved_cross_speaker_chunk_rate: f64,
     pub fallback_to_v1_count: usize,
     pub fallback_to_v1_rate: f64,
