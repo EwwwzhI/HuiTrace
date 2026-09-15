@@ -4,6 +4,7 @@
 // transcription engines (Whisper, Parakeet, future providers).
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // TRANSCRIPTION PROVIDER TRAIT & ERROR TYPES
@@ -38,11 +39,49 @@ impl std::fmt::Display for TranscriptionError {
 impl std::error::Error for TranscriptionError {}
 
 /// Unified transcription result across all providers
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptionCapabilities {
+    pub segment_timestamps: bool,
+    pub token_timestamps: bool,
+    pub word_timestamps: bool,
+    pub token_confidence: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingSource {
+    NativeTokenEmission,
+    NativeToken,
+    NativeWord,
+    NativeSegment,
+    ForcedAlignment,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimedToken {
+    pub text: String,
+    /// Provider-native time relative to the input ASR chunk.
+    pub start_ms: i64,
+    /// `None` for point-like emission timestamps such as Parakeet TDT/RNN-T.
+    pub end_ms: Option<i64>,
+    pub confidence: Option<f64>,
+    pub timing_source: TimingSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptTiming {
+    pub provider: String,
+    pub capabilities: TranscriptionCapabilities,
+    pub tokens: Vec<TimedToken>,
+}
+
+/// Unified transcription result across all providers.
 #[derive(Debug, Clone)]
 pub struct TranscriptResult {
     pub text: String,
     pub confidence: Option<f32>, // None if provider doesn't support confidence scores
     pub is_partial: bool,
+    pub timing: Option<TranscriptTiming>,
 }
 
 /// Trait for transcription providers (Whisper, Parakeet, future providers)
@@ -70,4 +109,6 @@ pub trait TranscriptionProvider: Send + Sync {
 
     /// Get the provider name (for logging/debugging)
     fn provider_name(&self) -> &'static str;
+
+    fn capabilities(&self) -> TranscriptionCapabilities;
 }

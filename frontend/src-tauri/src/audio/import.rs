@@ -620,7 +620,13 @@ async fn run_import<R: Runtime>(
     );
 
     // Process each speech segment
-    let mut all_transcripts: Vec<(String, f64, f64, Option<f64>)> = Vec::new();
+    let mut all_transcripts: Vec<(
+        String,
+        f64,
+        f64,
+        Option<f64>,
+        Option<crate::audio::transcription::TranscriptTiming>,
+    )> = Vec::new();
     let mut total_confidence = 0.0f32;
     let mut confidence_count = 0usize;
 
@@ -659,21 +665,29 @@ async fn run_import<R: Runtime>(
         }
 
         // Transcribe
-        let (text, conf) = if use_parakeet {
+        let result = if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
-            let text = engine
-                .transcribe_audio(segment.samples.clone())
+            let native = engine
+                .transcribe_audio_with_timing(segment.samples.clone())
                 .await
                 .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, None)
+            crate::audio::transcription::parakeet_provider::transcript_result_from_native(native)
         } else {
             let engine = whisper_engine.as_ref().unwrap();
             let (text, conf, _) = engine
                 .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
                 .await
                 .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, Some(conf))
+            crate::audio::transcription::TranscriptResult {
+                text,
+                confidence: Some(conf),
+                is_partial: false,
+                timing: None,
+            }
         };
+        let text = result.text;
+        let conf = result.confidence;
+        let timing = result.timing;
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
@@ -698,6 +712,7 @@ async fn run_import<R: Runtime>(
                 segment.start_timestamp_ms,
                 segment.end_timestamp_ms,
                 conf.map(f64::from),
+                timing,
             ));
             if let Some(conf) = conf {
                 total_confidence += conf;
@@ -735,7 +750,7 @@ async fn run_import<R: Runtime>(
 
     // Create transcript segments
     let mut segments =
-        crate::audio::common::create_transcript_segments_with_confidence(&all_transcripts);
+        crate::audio::common::create_transcript_segments_with_timing(&all_transcripts);
     for segment in &mut segments {
         segment.audio_source = Some("imported".to_string());
         segment.segment_kind = Some("speech".to_string());
@@ -761,6 +776,7 @@ async fn run_import<R: Runtime>(
             Ok(cfg) if cfg.is_active() => {
                 for seg in segments.iter_mut() {
                     seg.text = crate::redaction::redact(&seg.text, &cfg);
+                    seg.timing = None;
                 }
                 info!(
                     "Applied redaction to {} imported transcript segment(s) before persistence",
@@ -1361,6 +1377,7 @@ mod tests {
                 audio_source: None,
                 speaker_assignment_method: None,
                 speaker_overlap: None,
+                timing: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1378,6 +1395,7 @@ mod tests {
                 audio_source: None,
                 speaker_assignment_method: None,
                 speaker_overlap: None,
+                timing: None,
             },
         ];
 

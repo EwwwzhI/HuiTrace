@@ -14,6 +14,9 @@ pub use engine::{
     TranscriptionEngine,
 };
 pub use parakeet_provider::ParakeetProvider;
-pub use provider::{TranscriptResult, TranscriptionError, TranscriptionProvider};
+pub use provider::{
+    TimedToken, TimingSource, TranscriptResult, TranscriptTiming, TranscriptionCapabilities,
+    TranscriptionError, TranscriptionProvider,
+};
 pub use whisper_provider::WhisperProvider;
 pub use worker::{reset_speech_detected_flag, start_transcription_task, TranscriptUpdate};

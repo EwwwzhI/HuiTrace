@@ -1,7 +1,9 @@
+mod alignment;
 mod assembler;
 mod boundary;
 mod config;
 mod normalizer;
+mod timing;
 mod types;
 
 pub use assembler::reconstruct;
@@ -17,7 +19,7 @@ use crate::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use crate::database::repositories::speaker_turn::SpeakerTurnsRepository;
 use crate::state::AppState;
 
-/// Derived-on-read V1. Raw transcript rows remain the evidence source of truth.
+/// Derived-on-read reconstruction. Raw transcript rows remain the evidence source of truth.
 #[tauri::command]
 pub async fn api_get_reconstructed_utterances(
     state: State<'_, AppState>,
@@ -36,11 +38,23 @@ pub async fn api_get_reconstructed_utterances(
         .map_err(|error| format!("load speaker turns for reconstruction: {error:#}"))?;
     let short_turn_events = short_turn_events
         .map_err(|error| format!("load short-turn events for reconstruction: {error:#}"))?;
-    let spans = normalize_timeline(&transcripts, &speaker_turns, &short_turn_events);
-    Ok(reconstruct(
+    let config = UtteranceReconstructionConfig::default();
+    let v1_spans = normalize_timeline(&transcripts, &speaker_turns, &short_turn_events);
+    let enhanced = timing::enhance_timeline(&transcripts, &speaker_turns, &v1_spans, &config);
+    if enhanced.valid_timing_chunks == 0 {
+        let mut result = reconstruct(&meeting_id, &v1_spans, &config);
+        result.metrics = enhanced.metrics;
+        result.timing_diagnostics = enhanced.timing_diagnostics;
+        return Ok(result);
+    }
+    Ok(assembler::reconstruct_with_details(
         &meeting_id,
-        &spans,
-        &UtteranceReconstructionConfig::default(),
+        &enhanced.spans,
+        &config,
+        ALGORITHM_VERSION_V2,
+        enhanced.metrics,
+        enhanced.alignment_diagnostics,
+        enhanced.timing_diagnostics,
     ))
 }
 

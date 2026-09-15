@@ -15,6 +15,66 @@ vi.mock('framer-motion', () => ({
 afterEach(cleanup);
 
 describe('VirtualizedTranscriptView short-turn rendering', () => {
+  it('resolves a raw source id to its reconstructed utterance', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    render(
+      <TooltipProvider>
+        <VirtualizedTranscriptView
+          segments={[{
+            id: 'utterance-1', timestamp: 0, endTime: 2, text: 'Reconstructed', reconstructed: true,
+            source_chunk_ids: ['raw-1', 'raw-2'], speaker_attribution: { kind: 'unknown' },
+          }]}
+          scrollToSegmentId="raw-2"
+          disableAutoScroll enableStreaming={false} showConfidence={false}
+        />
+      </TooltipProvider>,
+    );
+    expect(scrollIntoView).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not re-infer an explicitly unknown reconstructed speaker from turns', () => {
+    render(
+      <TooltipProvider>
+        <VirtualizedTranscriptView
+          segments={[{
+            id: 'unknown', timestamp: 0, endTime: 2, text: 'Unknown evidence', reconstructed: true,
+            speaker_attribution: { kind: 'unknown' },
+          }]}
+          speakerTurns={[{ start_ms: 0, end_ms: 2000, speaker_label: 'Speaker 1', speaker_key: 'a', confidence: 0.9 }]}
+          disableAutoScroll enableStreaming={false} showConfidence={false}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText('Unknown speaker')).toBeTruthy();
+    expect(screen.queryByText('Speaker 1')).toBeNull();
+  });
+
+  it('keeps an explicitly mixed reconstructed row mixed', () => {
+    render(
+      <TooltipProvider>
+        <VirtualizedTranscriptView
+          segments={[{
+            id: 'mixed', timestamp: 0, endTime: 2, text: 'Mixed evidence', reconstructed: true,
+            speaker_attribution: { kind: 'mixed', speaker_keys: ['a', 'b'] },
+          }]}
+          speakerTurns={[{ start_ms: 0, end_ms: 2000, speaker_label: 'Speaker 1', speaker_key: 'a', confidence: 0.9 }]}
+          disableAutoScroll enableStreaming={false} showConfidence={false}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText('Mixed speakers')).toBeTruthy();
+    expect(screen.queryByText('Speaker 1')).toBeNull();
+  });
+
   it.each(['uh', 'hmm', '哦'])('preserves meaningful backchannel %s', (text) => {
     render(
       <TooltipProvider>

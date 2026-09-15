@@ -2,7 +2,9 @@
 //
 // Whisper transcription provider implementation.
 
-use super::provider::{TranscriptResult, TranscriptionError, TranscriptionProvider};
+use super::provider::{
+    TranscriptResult, TranscriptionCapabilities, TranscriptionError, TranscriptionProvider,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -33,6 +35,7 @@ impl TranscriptionProvider for WhisperProvider {
                 text: text.trim().to_string(),
                 confidence: Some(confidence),
                 is_partial,
+                timing: None,
             }),
             Err(e) => Err(TranscriptionError::EngineFailed(e.to_string())),
         }
@@ -48,5 +51,25 @@ impl TranscriptionProvider for WhisperProvider {
 
     fn provider_name(&self) -> &'static str {
         "Whisper"
+    }
+
+    fn capabilities(&self) -> TranscriptionCapabilities {
+        whisper_capabilities()
+    }
+}
+
+pub fn whisper_capabilities() -> TranscriptionCapabilities {
+    // `no_timestamps=true` is intentionally retained to prevent the known
+    // chunk-skipping regression. Token timing is therefore not advertised.
+    TranscriptionCapabilities::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_policy_remains_text_only() {
+        assert_eq!(whisper_capabilities(), TranscriptionCapabilities::default());
     }
 }

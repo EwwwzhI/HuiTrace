@@ -9,13 +9,34 @@ use super::config::UtteranceReconstructionConfig;
 use super::normalizer::join_text;
 use super::types::{
     AtomicSpan, BoundaryDecision, BoundaryOutcome, BoundaryReason, ReconstructedEvent,
-    ReconstructedUtterance, ReconstructionResult, SpeakerAttribution, ALGORITHM_VERSION,
+    ReconstructedUtterance, ReconstructionMetrics, ReconstructionResult, SourceLexicalRange,
+    SpeakerAttribution, ALGORITHM_VERSION,
 };
 
 pub fn reconstruct(
     meeting_id: &str,
     spans: &[AtomicSpan],
     config: &UtteranceReconstructionConfig,
+) -> ReconstructionResult {
+    reconstruct_with_details(
+        meeting_id,
+        spans,
+        config,
+        ALGORITHM_VERSION,
+        ReconstructionMetrics::default(),
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+pub(crate) fn reconstruct_with_details(
+    meeting_id: &str,
+    spans: &[AtomicSpan],
+    config: &UtteranceReconstructionConfig,
+    algorithm_version: &str,
+    metrics: ReconstructionMetrics,
+    alignment_diagnostics: Vec<super::types::AlignmentDiagnostic>,
+    timing_diagnostics: Vec<super::types::TimingDiagnostic>,
 ) -> ReconstructionResult {
     let bridges = find_backchannel_bridges(spans, config);
     let skipped = bridges.keys().copied().collect::<HashSet<_>>();
@@ -55,17 +76,22 @@ pub fn reconstruct(
                 .expect("builder exists")
                 .merge(span, &outcome.reasons);
         } else {
-            utterances.push(current.take().expect("builder exists").finish(meeting_id));
+            utterances.push(
+                current
+                    .take()
+                    .expect("builder exists")
+                    .finish(meeting_id, algorithm_version),
+            );
             current = Some(UtteranceBuilder::new(span));
         }
     }
     if let Some(builder) = current {
-        utterances.push(builder.finish(meeting_id));
+        utterances.push(builder.finish(meeting_id, algorithm_version));
     }
 
     let mut unembedded_events = Vec::new();
     for (event_index, bridge) in bridges {
-        let event = reconstructed_event(meeting_id, &spans[event_index]);
+        let event = reconstructed_event(meeting_id, &spans[event_index], algorithm_version);
         if let Some(utterance) = utterances.iter_mut().find(|utterance| {
             utterance
                 .source_transcript_ids
@@ -87,10 +113,16 @@ pub fn reconstruct(
 
     ReconstructionResult {
         meeting_id: meeting_id.to_string(),
-        algorithm_version: ALGORITHM_VERSION.to_string(),
+        algorithm_version: algorithm_version.to_string(),
         utterances,
         events: unembedded_events,
         boundaries,
+        config_version: super::config::CONFIG_VERSION.to_string(),
+        config_hash: config_hash(config),
+        config: config.clone(),
+        metrics,
+        alignment_diagnostics,
+        timing_diagnostics,
     }
 }
 
@@ -160,6 +192,7 @@ struct UtteranceBuilder {
     overlap: bool,
     confidence_sum: f64,
     confidence_count: usize,
+    source_ranges: Vec<SourceLexicalRange>,
 }
 
 impl UtteranceBuilder {
@@ -172,8 +205,9 @@ impl UtteranceBuilder {
             source_ids: span.source_transcript_ids.clone(),
             reasons: Vec::new(),
             overlap: span.overlap,
-            confidence_sum: span.asr_confidence.unwrap_or(0.75),
-            confidence_count: 1,
+            confidence_sum: span.asr_confidence.unwrap_or_default(),
+            confidence_count: usize::from(span.asr_confidence.is_some()),
+            source_ranges: span.lexical_range.clone().into_iter().collect(),
         }
     }
 
@@ -186,34 +220,55 @@ impl UtteranceBuilder {
         self.source_ids.extend(span.source_transcript_ids.clone());
         self.reasons.extend(reasons.iter().cloned());
         self.overlap |= span.overlap;
-        self.confidence_sum += span.asr_confidence.unwrap_or(0.75);
-        self.confidence_count += 1;
+        if let Some(confidence) = span.asr_confidence {
+            self.confidence_sum += confidence;
+            self.confidence_count += 1;
+        }
+        self.source_ranges.extend(span.lexical_range.clone());
     }
 
-    fn finish(self, meeting_id: &str) -> ReconstructedUtterance {
+    fn finish(self, meeting_id: &str, algorithm_version: &str) -> ReconstructedUtterance {
         let mixed = self.attribution.is_mixed();
         ReconstructedUtterance {
-            id: stable_id("utterance", meeting_id, &self.source_ids),
+            id: stable_id(
+                "utterance",
+                meeting_id,
+                &self.source_ids,
+                &self.source_ranges,
+                algorithm_version,
+            ),
             meeting_id: meeting_id.to_string(),
             start_ms: self.start_ms,
             end_ms: self.end_ms,
             speaker_attribution: self.attribution,
             text: self.text,
             source_transcript_ids: self.source_ids,
-            reconstruction_confidence: (self.confidence_sum / self.confidence_count as f64)
-                .clamp(0.0, 1.0),
+            mean_asr_confidence: (self.confidence_count > 0)
+                .then(|| (self.confidence_sum / self.confidence_count as f64).clamp(0.0, 1.0)),
             reconstruction_reasons: self.reasons,
             overlap: self.overlap,
             mixed,
             embedded_events: Vec::new(),
-            algorithm_version: ALGORITHM_VERSION.to_string(),
+            algorithm_version: algorithm_version.to_string(),
+            source_ranges: self.source_ranges,
         }
     }
 }
 
-fn reconstructed_event(meeting_id: &str, span: &AtomicSpan) -> ReconstructedEvent {
+fn reconstructed_event(
+    meeting_id: &str,
+    span: &AtomicSpan,
+    algorithm_version: &str,
+) -> ReconstructedEvent {
+    let source_ranges = span.lexical_range.clone().into_iter().collect::<Vec<_>>();
     ReconstructedEvent {
-        id: stable_id("event", meeting_id, &span.source_transcript_ids),
+        id: stable_id(
+            "event",
+            meeting_id,
+            &span.source_transcript_ids,
+            &source_ranges,
+            algorithm_version,
+        ),
         meeting_id: meeting_id.to_string(),
         start_ms: span.start_ms,
         end_ms: span.end_ms,
@@ -223,21 +278,41 @@ fn reconstructed_event(meeting_id: &str, span: &AtomicSpan) -> ReconstructedEven
         kind: span.segment_kind.clone(),
         confidence: span.short_turn_confidence.or(span.asr_confidence),
         overlap: span.overlap,
-        algorithm_version: ALGORITHM_VERSION.to_string(),
+        algorithm_version: algorithm_version.to_string(),
+        source_ranges,
     }
 }
 
-fn stable_id(prefix: &str, meeting_id: &str, source_ids: &[String]) -> String {
+fn stable_id(
+    prefix: &str,
+    meeting_id: &str,
+    source_ids: &[String],
+    source_ranges: &[SourceLexicalRange],
+    algorithm_version: &str,
+) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(ALGORITHM_VERSION.as_bytes());
+    hasher.update(algorithm_version.as_bytes());
     hasher.update([0]);
     hasher.update(meeting_id.as_bytes());
     for source_id in source_ids {
         hasher.update([0]);
         hasher.update(source_id.as_bytes());
     }
+    for range in source_ranges {
+        hasher.update([0]);
+        hasher.update(range.source_transcript_id.as_bytes());
+        hasher.update((range.lexical_start_index as u64).to_le_bytes());
+        hasher.update((range.lexical_end_index as u64).to_le_bytes());
+        hasher.update((range.token_start_index as u64).to_le_bytes());
+        hasher.update((range.token_end_index as u64).to_le_bytes());
+    }
     let digest = format!("{:x}", hasher.finalize());
     format!("{prefix}_{}", &digest[..24])
+}
+
+fn config_hash(config: &UtteranceReconstructionConfig) -> String {
+    let encoded = serde_json::to_vec(config).expect("reconstruction config is serializable");
+    format!("sha256:{:x}", Sha256::digest(encoded))
 }
 
 #[cfg(debug_assertions)]

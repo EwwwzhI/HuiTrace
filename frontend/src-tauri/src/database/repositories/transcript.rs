@@ -930,8 +930,8 @@ async fn insert_transcript_segment(
          (id, workspace_id, meeting_id, transcript, timestamp, audio_start_time, \
           audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, \
           speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap, \
-          created_at, updated_at, updated_by, rev, transcription_run_id) \
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+          created_at, updated_at, updated_by, rev, transcription_run_id, asr_timing_json) \
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
     )
     .bind(transcript_id)
     .bind(ctx.tenant_id.as_str())
@@ -954,6 +954,14 @@ async fn insert_transcript_segment(
     .bind(now)
     .bind(ctx.user_id.as_str())
     .bind(transcription_run_id)
+    .bind(
+        segment
+            .timing
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| SqlxError::Protocol(format!("serialize ASR timing: {error}")))?,
+    )
     .execute(&mut *conn)
     .await?;
     Ok(())

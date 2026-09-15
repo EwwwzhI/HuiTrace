@@ -25,6 +25,28 @@ export interface Transcript {
   audio_source?: 'microphone' | 'system' | 'imported' | 'mixed';
   speaker_assignment_method?: 'diarization' | 'short_turn_refinement' | 'manual';
   speaker_overlap?: boolean;
+  timing?: TranscriptTiming;
+}
+
+export type TimingSource = 'native_token_emission' | 'native_token' | 'native_word' | 'native_segment' | 'forced_alignment';
+
+export interface TimedToken {
+  text: string;
+  start_ms: number;
+  end_ms?: number | null;
+  confidence?: number | null;
+  timing_source: TimingSource;
+}
+
+export interface TranscriptTiming {
+  provider: string;
+  capabilities: {
+    segment_timestamps: boolean;
+    token_timestamps: boolean;
+    word_timestamps: boolean;
+    token_confidence: boolean;
+  };
+  tokens: TimedToken[];
 }
 
 export interface TranscriptUpdate {
@@ -46,6 +68,7 @@ export interface TranscriptUpdate {
   speaker_revision?: number;
   segment_kind?: string;
   audio_source?: 'microphone' | 'system' | 'imported' | 'mixed';
+  timing?: TranscriptTiming;
 }
 
 export interface Block {
@@ -156,12 +179,21 @@ export interface TranscriptSegmentData {
   source_chunk_ids?: string[];
   reconstructed?: boolean;
   embedded_events?: ReconstructedEvent[];
+  speaker_attribution?: SpeakerAttribution;
 }
 
 export type SpeakerAttribution =
   | { kind: 'single'; speaker_key: string }
   | { kind: 'mixed'; speaker_keys: string[] }
   | { kind: 'unknown' };
+
+export interface SourceLexicalRange {
+  source_transcript_id: string;
+  lexical_start_index: number;
+  lexical_end_index: number;
+  token_start_index: number;
+  token_end_index: number;
+}
 
 export type BoundaryReason =
   | 'same_speaker'
@@ -195,6 +227,7 @@ export interface ReconstructedEvent {
   confidence?: number | null;
   overlap: boolean;
   algorithm_version: string;
+  source_ranges?: SourceLexicalRange[];
 }
 
 export interface ReconstructedUtterance {
@@ -205,12 +238,34 @@ export interface ReconstructedUtterance {
   speaker_attribution: SpeakerAttribution;
   text: string;
   source_transcript_ids: string[];
-  reconstruction_confidence: number;
+  mean_asr_confidence?: number | null;
   reconstruction_reasons: BoundaryReason[];
   overlap: boolean;
   mixed: boolean;
   embedded_events: ReconstructedEvent[];
   algorithm_version: string;
+  source_ranges?: SourceLexicalRange[];
+}
+
+export interface ReconstructionMetrics {
+  total_chunks: number;
+  chunks_with_timing: number;
+  valid_timing_chunks: number;
+  timing_coverage: number;
+  valid_timing_rate: number;
+  total_lexical_units: number;
+  assigned_lexical_units: number;
+  word_assignment_coverage: number;
+  ambiguous_count: number;
+  ambiguous_rate: number;
+  mixed_count: number;
+  mixed_rate: number;
+  cross_speaker_raw_chunk_count: number;
+  resolved_cross_speaker_chunk_count: number;
+  resolved_cross_speaker_chunk_rate: number;
+  fallback_to_v1_count: number;
+  fallback_to_v1_rate: number;
+  lexical_preservation_failure_count: number;
 }
 
 export interface UtteranceReconstructionResult {
@@ -223,6 +278,10 @@ export interface UtteranceReconstructionResult {
     decision: 'split' | 'merge';
     reasons: BoundaryReason[];
   }>;
+  config_version: string;
+  config_hash: string;
+  config: Record<string, number>;
+  metrics: ReconstructionMetrics;
 }
 
 export type ShortTurnCandidateSource = 'transcript' | 'diarizer_turn' | 'vad_event';

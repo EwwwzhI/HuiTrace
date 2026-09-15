@@ -642,7 +642,7 @@ async fn sync_transcripts_json(
     folder: &Path,
 ) -> Result<()> {
     let rows = sqlx::query(
-        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap FROM transcripts WHERE meeting_id = ? AND workspace_id = ? ORDER BY audio_start_time ASC",
+        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, asr_confidence, speaker_id, speaker_confidence, speaker_provisional, speaker_revision, segment_kind, audio_source, speaker_assignment_method, speaker_overlap, asr_timing_json FROM transcripts WHERE meeting_id = ? AND workspace_id = ? ORDER BY audio_start_time ASC",
     ).bind(meeting_id).bind(ctx.tenant_id.as_str()).fetch_all(pool).await?;
     let segments = rows
         .into_iter()
@@ -662,6 +662,9 @@ async fn sync_transcripts_json(
             audio_source: row.get("audio_source"),
             speaker_assignment_method: Some(row.get("speaker_assignment_method")),
             speaker_overlap: Some(row.get::<i64, _>("speaker_overlap") != 0),
+            timing: row
+                .get::<Option<String>, _>("asr_timing_json")
+                .and_then(|json| serde_json::from_str(&json).ok()),
         })
         .collect::<Vec<_>>();
     crate::audio::common::write_transcripts_json(folder, &segments)?;

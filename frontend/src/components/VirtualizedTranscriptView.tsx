@@ -244,7 +244,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
                                 const eventSpeakerKey = event.speaker_attribution.kind === 'single'
                                     ? event.speaker_attribution.speaker_key
                                     : undefined;
-                                const eventSpeaker = speakerChoices?.find((choice) => choice.key === eventSpeakerKey)?.label;
+                                const eventSpeaker = event.speaker_attribution.kind === 'unknown'
+                                    ? translateUI('Unknown speaker')
+                                    : event.speaker_attribution.kind === 'mixed'
+                                        ? translateUI('Mixed speakers')
+                                        : speakerChoices?.find((choice) => choice.key === eventSpeakerKey)?.label ?? eventSpeakerKey;
                                 return (
                                     <div key={event.id} className="rounded-md bg-muted/45 px-2.5 py-2 text-xs text-muted-foreground">
                                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -258,7 +262,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                                                 ↳ {formatPreciseRecordingTime(event.start_ms)}
                                             </button>
                                             <span className="font-medium text-foreground/85">
-                                                {eventSpeaker ?? translateUI('Unconfirmed speaker')}
+                                                {eventSpeaker ?? translateUI('Unknown speaker')}
                                             </span>
                                             <span>· {shortEventLabel(event.kind)}</span>
                                         </div>
@@ -309,16 +313,33 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Real simultaneous speech, which is rarer and more interesting than a row
     // simply spanning a handover.
     const crosstalkFor = useCallback(
-        (segment: TranscriptSegmentData) =>
+        (segment: TranscriptSegmentData) => {
+            if (segment.reconstructed) {
+                return segment.speaker_attribution?.kind === 'mixed' && segment.speaker_overlap === true;
+            }
+            return (
             speakerTurns?.length
                 ? hasCrosstalk({ start: segment.timestamp, end: segment.endTime }, speakerTurns)
-                : false,
+                : false
+            );
+        },
         [speakerTurns]
     );
     // Per-row, because a row can overlap more than one turn. Cheap: only the
     // rows the virtualizer actually mounts are ever asked.
     const speakersFor = useCallback(
         (segment: TranscriptSegmentData) => {
+            if (segment.reconstructed && segment.speaker_attribution) {
+                if (segment.speaker_attribution.kind === 'unknown') {
+                    return [translateUI('Unknown speaker')];
+                }
+                if (segment.speaker_attribution.kind === 'mixed') {
+                    return [translateUI('Mixed speakers')];
+                }
+                const speakerKey = segment.speaker_attribution.speaker_key;
+                const label = speakerTurns?.find((turn) => turn.speaker_key === speakerKey)?.speaker_label;
+                return [label ?? speakerKey];
+            }
             // Prefer the persisted reconciler assignment. The turn-overlap
             // fallback keeps historical meetings (which predate the migration)
             // readable without inventing a speaker for an unassigned segment.

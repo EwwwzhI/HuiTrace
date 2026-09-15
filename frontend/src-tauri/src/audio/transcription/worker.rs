@@ -3,7 +3,7 @@
 // Parallel transcription worker pool and chunk processing logic.
 
 use super::engine::TranscriptionEngine;
-use super::provider::TranscriptionError;
+use super::provider::{TranscriptResult, TranscriptTiming, TranscriptionError};
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -69,6 +69,9 @@ pub struct TranscriptUpdate {
     pub speaker_revision: Option<i64>,
     #[serde(default)]
     pub segment_kind: Option<String>,
+    /// Provider-native, chunk-relative timing. Optional by capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TranscriptTiming>,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -206,7 +209,10 @@ pub fn start_transcription_task<R: Runtime>(
                             match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone)
                                 .await
                             {
-                                Ok((transcript, confidence_opt, is_partial)) => {
+                                Ok(result) => {
+                                    let transcript = result.text;
+                                    let confidence_opt = result.confidence;
+                                    let is_partial = result.is_partial;
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
                                         TranscriptionEngine::Whisper(_)
@@ -294,6 +300,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             speaker_provisional: None,
                                             speaker_revision: None,
                                             segment_kind: Some("speech".to_string()),
+                                            timing: result.timing,
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
@@ -488,12 +495,11 @@ pub fn start_transcription_task<R: Runtime>(
 }
 
 /// Transcribe audio chunk using the appropriate provider (Whisper, Parakeet, or trait-based)
-/// Returns: (text, confidence Option, is_partial)
 async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
     app: &AppHandle<R>,
-) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
+) -> std::result::Result<TranscriptResult, TranscriptionError> {
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
         crate::audio::audio_processing::resample_audio(&chunk.data, chunk.sample_rate, 16000)
@@ -539,7 +545,12 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Ok((text, confidence, is_partial)) => {
                     let cleaned_text = text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), Some(confidence), is_partial));
+                        return Ok(TranscriptResult {
+                            text: String::new(),
+                            confidence: Some(confidence),
+                            is_partial,
+                            timing: None,
+                        });
                     }
 
                     info!(
@@ -550,7 +561,12 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         is_partial
                     );
 
-                    Ok((cleaned_text, Some(confidence), is_partial))
+                    Ok(TranscriptResult {
+                        text: cleaned_text,
+                        confidence: Some(confidence),
+                        is_partial,
+                        timing: None,
+                    })
                 }
                 Err(e) => {
                     error!(
@@ -573,11 +589,17 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             }
         }
         TranscriptionEngine::Parakeet(parakeet_engine) => {
-            match parakeet_engine.transcribe_audio(speech_samples).await {
-                Ok(text) => {
-                    let cleaned_text = text.trim().to_string();
+            match parakeet_engine
+                .transcribe_audio_with_timing(speech_samples)
+                .await
+            {
+                Ok(native) => {
+                    let mut result =
+                        super::parakeet_provider::transcript_result_from_native(native);
+                    let cleaned_text = result.text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), None, false));
+                        result.text.clear();
+                        return Ok(result);
                     }
 
                     info!(
@@ -587,7 +609,8 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                     );
 
                     // Parakeet doesn't provide confidence or partial results
-                    Ok((cleaned_text, None, false))
+                    result.text = cleaned_text;
+                    Ok(result)
                 }
                 Err(e) => {
                     error!(
@@ -617,7 +640,10 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Ok(result) => {
                     let cleaned_text = result.text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), result.confidence, result.is_partial));
+                        return Ok(TranscriptResult {
+                            text: String::new(),
+                            ..result
+                        });
                     }
 
                     let confidence_str = match result.confidence {
@@ -634,7 +660,10 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         result.is_partial
                     );
 
-                    Ok((cleaned_text, result.confidence, result.is_partial))
+                    Ok(TranscriptResult {
+                        text: cleaned_text,
+                        ..result
+                    })
                 }
                 Err(e) => {
                     error!(

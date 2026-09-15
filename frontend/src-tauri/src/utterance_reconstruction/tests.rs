@@ -1,3 +1,6 @@
+use crate::audio::transcription::{
+    TimedToken, TimingSource, TranscriptTiming, TranscriptionCapabilities,
+};
 use crate::database::models::Transcript;
 use crate::database::repositories::speaker_turn::SpeakerTurn;
 use crate::diarization::types::SegmentKind;
@@ -19,6 +22,7 @@ fn span(id: &str, start_ms: i64, end_ms: i64, text: &str, speaker: &str) -> Atom
         overlap: false,
         segment_kind: SegmentKind::Speech,
         short_turn_confidence: None,
+        lexical_range: None,
     }
 }
 
@@ -181,6 +185,158 @@ fn persisted_overlap_never_becomes_a_single_speaker_claim() {
 }
 
 #[test]
+fn manual_assignment_wins_over_sequential_turn_handoff_but_not_true_overlap() {
+    let mut transcript = raw_transcript("t1", 10.0, 18.0, "人工确认内容");
+    transcript.speaker_id = Some("manual-speaker".into());
+    transcript.speaker_assignment_method = "manual".into();
+    let turns = vec![turn(10_000, 14_000, "a"), turn(14_000, 18_000, "b")];
+    let spans = normalize_timeline(&[transcript.clone()], &turns, &[]);
+    assert_eq!(
+        spans[0].speaker_attribution,
+        SpeakerAttribution::Single {
+            speaker_key: "manual-speaker".into()
+        }
+    );
+
+    transcript.speaker_overlap = 1;
+    let spans = normalize_timeline(&[transcript], &turns, &[]);
+    assert!(matches!(
+        spans[0].speaker_attribution,
+        SpeakerAttribution::Mixed { .. }
+    ));
+}
+
+#[test]
+fn absent_asr_confidence_remains_none() {
+    let mut item = span("t1", 0, 1_000, "没有分数", "a");
+    item.asr_confidence = None;
+    let result = reconstruct_spans(&[item]);
+    assert_eq!(result.utterances[0].mean_asr_confidence, None);
+}
+
+#[test]
+fn one_raw_chunk_can_resolve_an_a_to_b_handoff_with_source_ranges() {
+    let mut transcript = raw_transcript("t1", 10.0, 18.0, "我觉得这个方案可以但是我不同意");
+    set_timing(
+        &mut transcript,
+        &[
+            ("我", 1_000),
+            ("觉", 1_500),
+            ("得", 2_000),
+            ("这", 2_500),
+            ("个", 3_000),
+            ("方", 3_300),
+            ("案", 3_600),
+            ("可", 3_700),
+            ("以", 3_750),
+            ("但", 4_500),
+            ("是", 4_800),
+            ("我", 5_200),
+            ("不", 5_800),
+            ("同", 6_200),
+            ("意", 6_600),
+        ],
+    );
+    let turns = vec![turn(10_000, 13_800, "a"), turn(14_100, 18_000, "b")];
+    let result = reconstruct_v2(&[transcript], &turns);
+    assert_eq!(result.algorithm_version, ALGORITHM_VERSION_V2);
+    assert_eq!(result.utterances.len(), 2);
+    assert_eq!(result.utterances[0].text, "我觉得这个方案可以");
+    assert_eq!(result.utterances[1].text, "但是我不同意");
+    assert_eq!(result.utterances[0].source_transcript_ids, ["t1"]);
+    assert_eq!(result.utterances[1].source_transcript_ids, ["t1"]);
+    assert_ne!(result.utterances[0].id, result.utterances[1].id);
+    assert!(!result.utterances[0].source_ranges.is_empty());
+    assert_eq!(result.metrics.resolved_cross_speaker_chunk_count, 1);
+}
+
+#[test]
+fn timed_single_speaker_chunk_is_single_and_deterministic() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "单人发言");
+    set_timing(
+        &mut transcript,
+        &[("单", 300), ("人", 600), ("发", 900), ("言", 1_200)],
+    );
+    let turns = vec![turn(10_000, 12_000, "a")];
+    let first = reconstruct_v2(&[transcript.clone()], &turns);
+    let second = reconstruct_v2(&[transcript], &turns);
+    assert_eq!(first, second);
+    assert_eq!(
+        first.utterances[0].speaker_attribution,
+        SpeakerAttribution::Single {
+            speaker_key: "a".into()
+        }
+    );
+    assert!(first.config_hash.starts_with("sha256:"));
+}
+
+#[test]
+fn sequential_52_48_temporal_evidence_stays_ambiguous() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "嗯");
+    set_timing(&mut transcript, &[("嗯", 1_000)]);
+    let turns = vec![turn(10_000, 11_002, "a"), turn(11_002, 12_000, "b")];
+    let result = reconstruct_v2(&[transcript], &turns);
+    assert_eq!(
+        result.alignment_diagnostics[0].status,
+        WordSpeakerStatus::Ambiguous
+    );
+    assert_eq!(
+        result.utterances[0].speaker_attribution,
+        SpeakerAttribution::Unknown
+    );
+}
+
+#[test]
+fn simultaneous_turns_stay_mixed() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "重叠");
+    transcript.speaker_overlap = 1;
+    set_timing(&mut transcript, &[("重", 500), ("叠", 1_000)]);
+    let turns = vec![turn(10_000, 12_000, "a"), turn(10_000, 12_000, "b")];
+    let result = reconstruct_v2(&[transcript], &turns);
+    assert!(result
+        .alignment_diagnostics
+        .iter()
+        .all(|item| item.status == WordSpeakerStatus::Mixed));
+    assert!(matches!(
+        result.utterances[0].speaker_attribution,
+        SpeakerAttribution::Mixed { .. }
+    ));
+}
+
+#[test]
+fn thirty_millisecond_turn_jitter_is_not_called_true_overlap() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "边界");
+    set_timing(&mut transcript, &[("边", 1_000), ("界", 1_050)]);
+    let turns = vec![turn(10_000, 11_065, "a"), turn(11_035, 12_000, "b")];
+    let result = reconstruct_v2(&[transcript], &turns);
+    assert_ne!(
+        result.alignment_diagnostics[1].status,
+        WordSpeakerStatus::Mixed
+    );
+}
+
+#[test]
+fn invalid_timing_falls_back_to_the_exact_v1_span() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "先后");
+    set_timing(&mut transcript, &[("先", 1_000), ("后", 500)]);
+    let turns = vec![turn(10_000, 12_000, "a")];
+    let v1 = normalize_timeline(&[transcript.clone()], &turns, &[]);
+    let enhanced = super::timing::enhance_timeline(
+        &[transcript],
+        &turns,
+        &v1,
+        &UtteranceReconstructionConfig::default(),
+    );
+    assert_eq!(enhanced.valid_timing_chunks, 0);
+    assert_eq!(enhanced.spans, v1);
+    assert_eq!(enhanced.metrics.fallback_to_v1_count, 1);
+    let baseline = reconstruct_spans(&v1);
+    let fallback = reconstruct_spans(&enhanced.spans);
+    assert_eq!(fallback, baseline);
+    assert_eq!(fallback.algorithm_version, ALGORITHM_VERSION);
+}
+
+#[test]
 fn reconstruction_is_deterministic() {
     let spans = [
         span("t1", 0, 1_000, "one", "a"),
@@ -288,5 +444,53 @@ fn raw_transcript(id: &str, start: f64, end: f64, text: &str) -> Transcript {
         audio_source: Some("mixed".into()),
         speaker_assignment_method: "diarization".into(),
         speaker_overlap: 0,
+        asr_timing_json: None,
     }
+}
+
+fn turn(start_ms: i64, end_ms: i64, speaker: &str) -> SpeakerTurn {
+    SpeakerTurn {
+        start_ms,
+        end_ms,
+        speaker_label: speaker.into(),
+        confidence: Some(0.9),
+        speaker_key: speaker.into(),
+    }
+}
+
+fn set_timing(transcript: &mut Transcript, pieces: &[(&str, i64)]) {
+    let timing = TranscriptTiming {
+        provider: "test".into(),
+        capabilities: TranscriptionCapabilities {
+            token_timestamps: true,
+            ..TranscriptionCapabilities::default()
+        },
+        tokens: pieces
+            .iter()
+            .map(|(text, start_ms)| TimedToken {
+                text: (*text).into(),
+                start_ms: *start_ms,
+                end_ms: None,
+                confidence: None,
+                timing_source: TimingSource::NativeTokenEmission,
+            })
+            .collect(),
+    };
+    transcript.asr_timing_json = Some(serde_json::to_string(&timing).unwrap());
+}
+
+fn reconstruct_v2(transcripts: &[Transcript], turns: &[SpeakerTurn]) -> ReconstructionResult {
+    let config = UtteranceReconstructionConfig::default();
+    let v1 = normalize_timeline(transcripts, turns, &[]);
+    let enhanced = super::timing::enhance_timeline(transcripts, turns, &v1, &config);
+    assert!(enhanced.valid_timing_chunks > 0);
+    super::assembler::reconstruct_with_details(
+        "meeting-test",
+        &enhanced.spans,
+        &config,
+        ALGORITHM_VERSION_V2,
+        enhanced.metrics,
+        enhanced.alignment_diagnostics,
+        enhanced.timing_diagnostics,
+    )
 }

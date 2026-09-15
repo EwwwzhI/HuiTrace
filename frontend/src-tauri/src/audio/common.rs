@@ -74,6 +74,7 @@ pub(crate) fn create_transcript_segments(
                 audio_source: None,
                 speaker_assignment_method: None,
                 speaker_overlap: None,
+                timing: None,
             }
         })
         .collect()
@@ -84,9 +85,27 @@ pub(crate) fn create_transcript_segments(
 pub(crate) fn create_transcript_segments_with_confidence(
     transcripts: &[(String, f64, f64, Option<f64>)],
 ) -> Vec<TranscriptSegment> {
-    transcripts
+    let timed = transcripts
         .iter()
         .map(|(text, start_ms, end_ms, asr_confidence)| {
+            (text.clone(), *start_ms, *end_ms, *asr_confidence, None)
+        })
+        .collect::<Vec<_>>();
+    create_transcript_segments_with_timing(&timed)
+}
+
+pub(crate) fn create_transcript_segments_with_timing(
+    transcripts: &[(
+        String,
+        f64,
+        f64,
+        Option<f64>,
+        Option<crate::audio::transcription::TranscriptTiming>,
+    )],
+) -> Vec<TranscriptSegment> {
+    transcripts
+        .iter()
+        .map(|(text, start_ms, end_ms, asr_confidence, timing)| {
             let start_seconds = start_ms / 1000.0;
             let end_seconds = end_ms / 1000.0;
             TranscriptSegment {
@@ -105,6 +124,7 @@ pub(crate) fn create_transcript_segments_with_confidence(
                 audio_source: None,
                 speaker_assignment_method: None,
                 speaker_overlap: None,
+                timing: timing.clone(),
             }
         })
         .collect()
@@ -136,6 +156,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_source": s.audio_source,
                 "speaker_assignment_method": s.speaker_assignment_method,
                 "speaker_overlap": s.speaker_overlap,
+                "timing": s.timing,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()

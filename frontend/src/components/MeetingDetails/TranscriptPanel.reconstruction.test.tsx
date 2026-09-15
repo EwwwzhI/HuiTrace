@@ -50,7 +50,7 @@ describe('utterance reconstruction view', () => {
         speaker_attribution: { kind: 'single', speaker_key: 'a' },
         text: '合并后的语句',
         source_transcript_ids: ['raw-1', 'raw-2'],
-        reconstruction_confidence: 0.9,
+        mean_asr_confidence: 0.9,
         reconstruction_reasons: ['same_speaker'],
         overlap: false,
         mixed: false,

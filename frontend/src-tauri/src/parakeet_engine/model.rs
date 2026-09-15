@@ -450,18 +450,7 @@ impl ParakeetModel {
             })
             .collect();
 
-        let text = match &*DECODE_SPACE_RE {
-            Ok(regex) => regex
-                .replace_all(&tokens.join(""), |caps: &regex::Captures| {
-                    if caps.get(1).is_some() {
-                        " "
-                    } else {
-                        ""
-                    }
-                })
-                .to_string(),
-            Err(_) => tokens.join(""), // Fallback if regex failed to compile
-        };
+        let text = decode_token_text(&tokens);
 
         let float_timestamps: Vec<f32> = timestamps
             .iter()
@@ -500,5 +489,23 @@ impl ParakeetModel {
         })?;
 
         Ok(timestamped_result)
+    }
+}
+
+/// Decode native vocabulary pieces exactly as the recognizer does. Kept public
+/// so the provider adapter can retain a per-token surface mapping whose
+/// concatenation is identical to `TimestampedResult.text`.
+pub fn decode_token_text(tokens: &[String]) -> String {
+    match &*DECODE_SPACE_RE {
+        Ok(regex) => regex
+            .replace_all(&tokens.join(""), |caps: &regex::Captures| {
+                if caps.get(1).is_some() {
+                    " "
+                } else {
+                    ""
+                }
+            })
+            .to_string(),
+        Err(_) => tokens.join(""),
     }
 }

@@ -51,9 +51,9 @@ pub fn normalize_timeline(
                 .filter(|key| !key.is_empty())
                 .collect::<BTreeSet<_>>();
 
-            let attribution = if transcript.speaker_overlap != 0 || keys.len() > 1 {
+            let attribution = if transcript.speaker_overlap != 0 {
                 SpeakerAttribution::Mixed {
-                    speaker_keys: keys.into_iter().collect(),
+                    speaker_keys: keys.iter().cloned().collect(),
                 }
             } else if transcript.speaker_assignment_method == "manual" {
                 transcript
@@ -61,7 +61,11 @@ pub fn normalize_timeline(
                     .clone()
                     .map(|speaker_key| SpeakerAttribution::Single { speaker_key })
                     .unwrap_or(SpeakerAttribution::Unknown)
-            } else if let Some(speaker_key) = keys.into_iter().next() {
+            } else if keys.len() > 1 {
+                SpeakerAttribution::Mixed {
+                    speaker_keys: keys.iter().cloned().collect(),
+                }
+            } else if let Some(speaker_key) = keys.iter().next().cloned() {
                 SpeakerAttribution::Single { speaker_key }
             } else {
                 transcript
@@ -88,6 +92,7 @@ pub fn normalize_timeline(
                 overlap: transcript.speaker_overlap != 0,
                 segment_kind,
                 short_turn_confidence: linked_event.map(|(_, confidence)| *confidence),
+                lexical_range: None,
             }
         })
         .collect()

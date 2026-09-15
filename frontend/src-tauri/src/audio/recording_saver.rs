@@ -10,6 +10,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::audio_processing::create_meeting_folder;
 use super::incremental_saver::IncrementalAudioSaver;
 use super::recording_state::AudioChunk;
+use super::transcription::TranscriptTiming;
 
 /// Structured transcript segment for JSON export
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +38,8 @@ pub struct TranscriptSegment {
     pub segment_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<TranscriptTiming>,
 }
 
 /// Meeting metadata structure
@@ -186,6 +189,7 @@ impl RecordingSaver {
             speaker_revision: None,
             segment_kind: None,
             audio_source: None,
+            timing: None,
         };
         self.add_transcript_segment(segment);
     }

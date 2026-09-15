@@ -1242,5 +1242,7 @@
   "Transcription run ID": "Transcription run ID",
   "Transcript view": "Transcript view",
   "Reordered": "Reordered",
-  "Raw": "Raw"
+  "Raw": "Raw",
+  "Unknown speaker": "Unknown speaker",
+  "Mixed speakers": "Mixed speakers"
 }

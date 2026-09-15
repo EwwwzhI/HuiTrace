@@ -274,6 +274,8 @@ pub struct TranscriptSegment {
     pub speaker_assignment_method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_overlap: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<crate::audio::transcription::TranscriptTiming>,
 }
 
 // Helper function to get auth token from store (optional)
@@ -981,6 +983,9 @@ pub async fn api_save_transcript<R: Runtime>(
         Ok(cfg) if cfg.is_active() => {
             for seg in transcripts_to_save.iter_mut() {
                 seg.text = crate::redaction::redact(&seg.text, &cfg);
+                // Redaction changes lexical content, so native timing can no
+                // longer satisfy the preservation invariant.
+                seg.timing = None;
             }
             log_info!(
                 "Applied redaction to {} transcript segment(s) before persistence",

@@ -44,6 +44,7 @@ pub struct Transcript {
     pub audio_source: Option<String>,
     pub speaker_assignment_method: String,
     pub speaker_overlap: i64,
+    pub asr_timing_json: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

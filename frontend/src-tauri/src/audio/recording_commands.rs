@@ -352,6 +352,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     speaker_revision: update.speaker_revision,
                     segment_kind: update.segment_kind.clone(),
                     audio_source: update.audio_source.clone(),
+                    timing: update.timing.clone(),
                 };
 
                 // Save to recording manager
@@ -557,6 +558,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     speaker_revision: update.speaker_revision,
                     segment_kind: update.segment_kind.clone(),
                     audio_source: update.audio_source.clone(),
+                    timing: update.timing.clone(),
                 };
 
                 // Save to recording manager

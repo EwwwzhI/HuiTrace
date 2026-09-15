@@ -19,6 +19,12 @@ pub struct UtteranceReconstructionConfig {
     pub backchannel_min_confidence: f64,
     pub backchannel_max_duration_ms: i64,
     pub backchannel_max_side_gap_ms: i64,
+    pub assignment_min_overlap_ratio: f64,
+    pub assignment_min_margin: f64,
+    pub alignment_tolerance_ms: i64,
+    pub max_alignment_tolerance_ms: i64,
+    pub timing_bounds_tolerance_ms: i64,
+    pub true_overlap_min_ms: i64,
 }
 
 impl Default for UtteranceReconstructionConfig {
@@ -41,9 +47,24 @@ impl Default for UtteranceReconstructionConfig {
             backchannel_min_confidence: 0.75,
             backchannel_max_duration_ms: 1_200,
             backchannel_max_side_gap_ms: 700,
+            assignment_min_overlap_ratio: 0.60,
+            assignment_min_margin: 0.20,
+            alignment_tolerance_ms: 50,
+            max_alignment_tolerance_ms: 200,
+            timing_bounds_tolerance_ms: 200,
+            true_overlap_min_ms: 100,
         }
     }
 }
+
+impl UtteranceReconstructionConfig {
+    pub fn effective_alignment_tolerance_ms(&self) -> i64 {
+        self.alignment_tolerance_ms
+            .clamp(0, self.max_alignment_tolerance_ms.max(0))
+    }
+}
+
+pub const CONFIG_VERSION: &str = "utterance-reconstruction-config-v2";
 
 pub const CONTINUATION_PREFIXES: &[&str] = &[
     "但是",

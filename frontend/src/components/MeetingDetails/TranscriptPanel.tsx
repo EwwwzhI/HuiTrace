@@ -155,8 +155,8 @@ export function TranscriptPanel({
       timestamp: utterance.start_ms / 1000,
       endTime: utterance.end_ms / 1000,
       text: utterance.text,
-      confidence: utterance.reconstruction_confidence,
-      asr_confidence: utterance.reconstruction_confidence,
+      confidence: utterance.mean_asr_confidence ?? undefined,
+      asr_confidence: utterance.mean_asr_confidence ?? undefined,
       speaker_id: utterance.speaker_attribution.kind === 'single'
         ? utterance.speaker_attribution.speaker_key
         : undefined,
@@ -165,6 +165,7 @@ export function TranscriptPanel({
       source_chunk_ids: utterance.source_transcript_ids,
       reconstructed: true,
       embedded_events: utterance.embedded_events,
+      speaker_attribution: utterance.speaker_attribution,
     }));
     const standaloneEvents = reconstruction.events.map((event) => ({
       id: event.id,
@@ -180,6 +181,7 @@ export function TranscriptPanel({
       speaker_overlap: event.overlap,
       source_chunk_ids: event.source_transcript_ids,
       reconstructed: true,
+      speaker_attribution: event.speaker_attribution,
     }));
     return [...utterances, ...standaloneEvents].sort((left, right) =>
       left.timestamp - right.timestamp || left.id.localeCompare(right.id)

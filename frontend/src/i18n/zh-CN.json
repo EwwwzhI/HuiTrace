@@ -1264,5 +1264,7 @@
   "Transcription run ID": "转写运行 ID",
   "Transcript view": "转写视图",
   "Reordered": "语句重排",
-  "Raw": "原始转写"
+  "Raw": "原始转写",
+  "Unknown speaker": "未知 Speaker",
+  "Mixed speakers": "多个 Speakers"
 }
