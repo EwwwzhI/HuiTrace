@@ -1,10 +1,11 @@
 "use client";
 
-import { Transcript, TranscriptSegmentData } from '@/types';
+import { Transcript, TranscriptSegmentData, UtteranceReconstructionResult } from '@/types';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { FileText, ChevronDown, Users } from 'lucide-react';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { TOUR_ANCHORS } from '@/lib/tour';
 import { TalkTimePanel } from '@/components/report/SpeakerTurns';
 import { useDiarization } from '@/hooks/useDiarization';
@@ -71,7 +72,7 @@ export function TranscriptPanel({
 }: TranscriptPanelProps) {
   useUiTranslation();
   // Convert transcripts to segments if pagination is not used but we want virtualization
-  const convertedSegments = useMemo(() => {
+  const convertedSegments = useMemo<TranscriptSegmentData[]>(() => {
     if (usePagination && segments) {
       return segments;
     }
@@ -99,7 +100,113 @@ export function TranscriptPanel({
   // would advertise an action that cannot run yet.
   const diarization = useDiarization(isRecording ? undefined : meetingId);
   const [isSpeakersOpen, setIsSpeakersOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'reconstructed' | 'raw'>('reconstructed');
+  const [reconstruction, setReconstruction] = useState<UtteranceReconstructionResult | null>(null);
+  const [isReconstructionLoading, setIsReconstructionLoading] = useState(false);
   const speakerPanelId = `speaker-panel-${useId().replace(/:/g, '')}`;
+
+  const loadReconstruction = useCallback(async () => {
+    if (!meetingId || isRecording) return;
+    setIsReconstructionLoading(true);
+    try {
+      const result = await invoke<UtteranceReconstructionResult>('api_get_reconstructed_utterances', {
+        meetingId,
+      });
+      if (!result || !Array.isArray(result.utterances)) {
+        throw new Error('Invalid utterance reconstruction response');
+      }
+      setReconstruction(result);
+    } catch (error) {
+      // Presentation enhancement is fail-open: raw ASR evidence remains usable.
+      console.warn('[TranscriptPanel] Utterance reconstruction unavailable; showing raw transcript', error);
+      setReconstruction(null);
+      setViewMode('raw');
+    } finally {
+      setIsReconstructionLoading(false);
+    }
+  }, [isRecording, meetingId]);
+
+  const diarizationSignature = useMemo(
+    () => diarization.turns
+      .map((turn) => `${turn.start_ms}:${turn.end_ms}:${turn.speaker_key}`)
+      .join('|'),
+    [diarization.turns]
+  );
+  const shortTurnSignature = useMemo(
+    () => diarization.events
+      .map((event) => `${event.id}:${event.revision}:${event.kind}:${event.speaker_key ?? ''}`)
+      .join('|'),
+    [diarization.events]
+  );
+
+  useEffect(() => {
+    setReconstruction(null);
+    setViewMode('reconstructed');
+  }, [meetingId]);
+
+  useEffect(() => {
+    void loadReconstruction();
+  }, [loadReconstruction, diarizationSignature, shortTurnSignature]);
+
+  const reconstructedSegments = useMemo<TranscriptSegmentData[]>(() => {
+    if (!reconstruction) return [];
+    const utterances = reconstruction.utterances.map((utterance) => ({
+      id: utterance.id,
+      timestamp: utterance.start_ms / 1000,
+      endTime: utterance.end_ms / 1000,
+      text: utterance.text,
+      confidence: utterance.reconstruction_confidence,
+      asr_confidence: utterance.reconstruction_confidence,
+      speaker_id: utterance.speaker_attribution.kind === 'single'
+        ? utterance.speaker_attribution.speaker_key
+        : undefined,
+      segment_kind: 'speech',
+      speaker_overlap: utterance.overlap,
+      source_chunk_ids: utterance.source_transcript_ids,
+      reconstructed: true,
+      embedded_events: utterance.embedded_events,
+    }));
+    const standaloneEvents = reconstruction.events.map((event) => ({
+      id: event.id,
+      timestamp: event.start_ms / 1000,
+      endTime: event.end_ms / 1000,
+      text: event.text,
+      confidence: event.confidence ?? undefined,
+      asr_confidence: event.confidence ?? undefined,
+      speaker_id: event.speaker_attribution.kind === 'single'
+        ? event.speaker_attribution.speaker_key
+        : undefined,
+      segment_kind: event.kind,
+      speaker_overlap: event.overlap,
+      source_chunk_ids: event.source_transcript_ids,
+      reconstructed: true,
+    }));
+    return [...utterances, ...standaloneEvents].sort((left, right) =>
+      left.timestamp - right.timestamp || left.id.localeCompare(right.id)
+    );
+  }, [reconstruction]);
+
+  const showingReconstructed = viewMode === 'reconstructed' && reconstructedSegments.length > 0;
+  const displaySegments = showingReconstructed ? reconstructedSegments : convertedSegments;
+  const displayCount = showingReconstructed
+    ? reconstructedSegments.length
+    : usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0);
+
+  const handleCopyDisplayedTranscript = useCallback(() => {
+    if (!showingReconstructed) {
+      onCopyTranscript();
+      return;
+    }
+    const text = displaySegments
+      .flatMap((segment) => [segment.text, ...(segment.embedded_events ?? []).map((event) => event.text)])
+      .join('\n');
+    void navigator.clipboard.writeText(text);
+  }, [displaySegments, onCopyTranscript, showingReconstructed]);
+
+  const refreshTranscriptsAndReconstruction = useCallback(async () => {
+    await onRefetchTranscripts?.();
+    await loadReconstruction();
+  }, [loadReconstruction, onRefetchTranscripts]);
 
   useEffect(() => {
     setIsSpeakersOpen(false);
@@ -120,18 +227,39 @@ export function TranscriptPanel({
           </span>
           <h2 className="truncate text-sm font-semibold text-foreground">{translateUI("Transcript")}</h2>
           <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
-            {usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
+            {displayCount}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {!isRecording && meetingId && convertedSegments.length > 0 && (
+            <div className="mr-1 flex rounded-md bg-muted p-0.5" aria-label={translateUI('Transcript view')}>
+              <button
+                type="button"
+                aria-pressed={showingReconstructed}
+                disabled={isReconstructionLoading || !reconstruction?.utterances.length}
+                onClick={() => setViewMode('reconstructed')}
+                className={`rounded px-2 py-1 text-xs transition-colors ${showingReconstructed ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'} disabled:opacity-50`}
+              >
+                {translateUI('Reordered')}
+              </button>
+              <button
+                type="button"
+                aria-pressed={!showingReconstructed}
+                onClick={() => setViewMode('raw')}
+                className={`rounded px-2 py-1 text-xs transition-colors ${!showingReconstructed ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {translateUI('Raw')}
+              </button>
+            </div>
+          )}
           <EvaluationToolsMenu meetingId={meetingId} diarizationState={diarization.state} />
           <TranscriptButtonGroup
-            transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
-            onCopyTranscript={onCopyTranscript}
+            transcriptCount={displayCount}
+            onCopyTranscript={handleCopyDisplayedTranscript}
             onOpenMeetingFolder={onOpenMeetingFolder}
             meetingId={meetingId}
             meetingFolderPath={meetingFolderPath}
-            onRefetchTranscripts={onRefetchTranscripts}
+            onRefetchTranscripts={refreshTranscriptsAndReconstruction}
           />
         </div>
       </div>
@@ -187,10 +315,10 @@ export function TranscriptPanel({
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 min-h-0 overflow-hidden pb-4">
         <VirtualizedTranscriptView
-          segments={convertedSegments}
+          segments={displaySegments}
           speakerTurns={diarization.turns}
           shortTurnEvents={diarization.events}
-          onAssignSpeaker={async (transcriptId, speakerKey) => { await diarization.assignTranscriptSpeaker(transcriptId, speakerKey); await onRefetchTranscripts?.(); await diarization.refresh(); }}
+          onAssignSpeaker={showingReconstructed ? undefined : async (transcriptId, speakerKey) => { await diarization.assignTranscriptSpeaker(transcriptId, speakerKey); await onRefetchTranscripts?.(); await diarization.refresh(); await loadReconstruction(); }}
           onAssignShortTurnEventSpeaker={diarization.assignShortTurnEventSpeaker}
           isRecording={isRecording}
           isPaused={false}
@@ -199,11 +327,11 @@ export function TranscriptPanel({
           enableStreaming={false}
           showConfidence={true}
           disableAutoScroll={disableAutoScroll}
-          hasMore={hasMore}
+          hasMore={showingReconstructed ? false : hasMore}
           isLoadingMore={isLoadingMore}
-          totalCount={totalCount}
-          loadedCount={loadedCount}
-          onLoadMore={onLoadMore}
+          totalCount={showingReconstructed ? reconstructedSegments.length : totalCount}
+          loadedCount={showingReconstructed ? reconstructedSegments.length : loadedCount}
+          onLoadMore={showingReconstructed ? undefined : onLoadMore}
           scrollToSegmentId={scrollToSegmentId}
           scrollNonce={scrollNonce}
           onRequestSegment={onRequestSegment}
@@ -212,7 +340,7 @@ export function TranscriptPanel({
       </div>
 
       {/* Custom prompt input at bottom of transcript section */}
-      {!isRecording && convertedSegments.length > 0 && (
+      {!isRecording && displaySegments.length > 0 && (
         <div className="shrink-0 border-t border-border p-3">
           <textarea
             placeholder={translateUI("Add context for the AI summary — people involved, meeting overview, objective…")}

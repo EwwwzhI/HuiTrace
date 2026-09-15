@@ -1261,5 +1261,8 @@
   "Open existing annotation project": "打开已有标注项目",
   "Existing Meeting ID": "已有项目 Meeting ID",
   "Artifact ID": "Artifact ID",
-  "Transcription run ID": "转写运行 ID"
+  "Transcription run ID": "转写运行 ID",
+  "Transcript view": "转写视图",
+  "Reordered": "语句重排",
+  "Raw": "原始转写"
 }

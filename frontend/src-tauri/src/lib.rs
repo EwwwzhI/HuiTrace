@@ -98,6 +98,7 @@ pub mod text;
 pub mod tray;
 mod ui_language;
 pub mod utils;
+pub mod utterance_reconstruction;
 pub mod whisper_engine;
 
 use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
@@ -742,6 +743,7 @@ pub fn run() {
             api::api_get_meeting,
             api::api_get_meeting_metadata,
             api::api_get_meeting_transcripts,
+            utterance_reconstruction::api_get_reconstructed_utterances,
             api::api_save_meeting_title,
             api::api_save_transcript,
             api::api_acknowledge_recording_post_processing,

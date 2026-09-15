@@ -152,6 +152,77 @@ export interface TranscriptSegmentData {
   audio_source?: string;
   speaker_assignment_method?: string;
   speaker_overlap?: boolean;
+  /** Raw transcript ids represented by a derived utterance. Raw rows omit it. */
+  source_chunk_ids?: string[];
+  reconstructed?: boolean;
+  embedded_events?: ReconstructedEvent[];
+}
+
+export type SpeakerAttribution =
+  | { kind: 'single'; speaker_key: string }
+  | { kind: 'mixed'; speaker_keys: string[] }
+  | { kind: 'unknown' };
+
+export type BoundaryReason =
+  | 'same_speaker'
+  | 'speaker_changed'
+  | 'speaker_unknown'
+  | 'short_gap'
+  | 'medium_gap'
+  | 'long_silence'
+  | 'strong_terminal_punctuation'
+  | 'weak_punctuation'
+  | 'continuation_prefix'
+  | 'mixed_attribution'
+  | 'overlap'
+  | 'overlapping_timeline'
+  | 'unreliable_timing'
+  | 'maximum_duration'
+  | 'maximum_length'
+  | 'backchannel_bridge'
+  | 'score_threshold'
+  | 'below_score_threshold';
+
+export interface ReconstructedEvent {
+  id: string;
+  meeting_id: string;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  speaker_attribution: SpeakerAttribution;
+  source_transcript_ids: string[];
+  kind: 'speech' | 'backchannel' | 'noise' | 'non_speech_vocalization' | 'unknown';
+  confidence?: number | null;
+  overlap: boolean;
+  algorithm_version: string;
+}
+
+export interface ReconstructedUtterance {
+  id: string;
+  meeting_id: string;
+  start_ms: number;
+  end_ms: number;
+  speaker_attribution: SpeakerAttribution;
+  text: string;
+  source_transcript_ids: string[];
+  reconstruction_confidence: number;
+  reconstruction_reasons: BoundaryReason[];
+  overlap: boolean;
+  mixed: boolean;
+  embedded_events: ReconstructedEvent[];
+  algorithm_version: string;
+}
+
+export interface UtteranceReconstructionResult {
+  meeting_id: string;
+  algorithm_version: string;
+  utterances: ReconstructedUtterance[];
+  events: ReconstructedEvent[];
+  boundaries: Array<{
+    score: number;
+    decision: 'split' | 'merge';
+    reasons: BoundaryReason[];
+  }>;
 }
 
 export type ShortTurnCandidateSource = 'transcript' | 'diarizer_turn' | 'vad_event';

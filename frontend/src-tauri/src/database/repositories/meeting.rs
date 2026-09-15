@@ -209,6 +209,30 @@ impl MeetingsRepository {
         Ok((transcripts, total.0))
     }
 
+    /// Complete raw ASR evidence for derived timeline views. This deliberately
+    /// returns source rows rather than persisting or replacing a presentation
+    /// layer such as reconstructed utterances.
+    pub async fn get_all_meeting_transcripts(
+        pool: &SqlitePool,
+        ctx: &AuthContext,
+        meeting_id: &str,
+    ) -> Result<Vec<Transcript>, SqlxError> {
+        if meeting_id.trim().is_empty() {
+            return Err(SqlxError::Protocol(
+                "meeting_id cannot be empty".to_string(),
+            ));
+        }
+        sqlx::query_as::<_, Transcript>(
+            "SELECT * FROM transcripts
+             WHERE meeting_id = ? AND workspace_id = ?
+             ORDER BY audio_start_time ASC, id ASC",
+        )
+        .bind(meeting_id)
+        .bind(ctx.tenant_id.as_str())
+        .fetch_all(pool)
+        .await
+    }
+
     pub async fn update_meeting_title(
         pool: &SqlitePool,
         ctx: &AuthContext,

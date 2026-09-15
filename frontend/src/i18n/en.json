@@ -1239,5 +1239,8 @@
   "Open existing annotation project": "Open existing annotation project",
   "Existing Meeting ID": "Existing Meeting ID",
   "Artifact ID": "Artifact ID",
-  "Transcription run ID": "Transcription run ID"
+  "Transcription run ID": "Transcription run ID",
+  "Transcript view": "Transcript view",
+  "Reordered": "Reordered",
+  "Raw": "Raw"
 }

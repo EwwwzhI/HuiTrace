@@ -8,7 +8,7 @@ import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
-import { ShortTurnEvent, TranscriptSegmentData } from "@/types";
+import { ReconstructedEvent, ShortTurnEvent, TranscriptSegmentData } from "@/types";
 import { SpeakerChips } from "./report/SpeakerTurns";
 import { hasCrosstalk, speakersForRow, talkTime, type SpeakerTurn } from "@/lib/speakerTurns";
 import { translateUI } from '@/i18n';
@@ -114,6 +114,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerChoices,
     onAssignSpeaker,
     shortTurnEvents,
+    reconstructedEvents,
     onAssignShortTurnEventSpeaker,
 }: {
     id: string;
@@ -141,6 +142,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerChoices?: Array<{ key: string; label: string }>;
     onAssignSpeaker?: (segmentId: string, speakerKey: string | null) => Promise<void> | void;
     shortTurnEvents?: ShortTurnEvent[];
+    reconstructedEvents?: ReconstructedEvent[];
     onAssignShortTurnEventSpeaker?: (eventId: string, speakerKey: string | null) => Promise<void> | void;
 }) {
   useUiTranslation();
@@ -236,6 +238,36 @@ const TranscriptSegment = memo(function TranscriptSegment({
                             ))}
                         </div>
                     )}
+                    {reconstructedEvents && reconstructedEvents.length > 0 && (
+                        <div className="mt-2 space-y-1 border-l-2 border-primary/25 pl-3">
+                            {reconstructedEvents.map((event) => {
+                                const eventSpeakerKey = event.speaker_attribution.kind === 'single'
+                                    ? event.speaker_attribution.speaker_key
+                                    : undefined;
+                                const eventSpeaker = speakerChoices?.find((choice) => choice.key === eventSpeakerKey)?.label;
+                                return (
+                                    <div key={event.id} className="rounded-md bg-muted/45 px-2.5 py-2 text-xs text-muted-foreground">
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => onSeek?.(event.start_ms / 1000)}
+                                                disabled={!onSeek}
+                                                className="tabular-nums hover:text-primary disabled:cursor-default"
+                                                aria-label={translateUI('Play short event')}
+                                            >
+                                                ↳ {formatPreciseRecordingTime(event.start_ms)}
+                                            </button>
+                                            <span className="font-medium text-foreground/85">
+                                                {eventSpeaker ?? translateUI('Unconfirmed speaker')}
+                                            </span>
+                                            <span>· {shortEventLabel(event.kind)}</span>
+                                        </div>
+                                        <p className="mt-1 text-sm leading-6 text-foreground">{event.text}</p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -316,6 +348,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     .sort((left, right) => right.overlap - left.overlap || left.id.localeCompare(right.id))[0];
                 segmentId = best?.id;
             }
+            if (segmentId && !segments.some((segment) => segment.id === segmentId)) {
+                segmentId = segments.find((segment) => segment.source_chunk_ids?.includes(segmentId!))?.id;
+            }
             if (!segmentId) continue;
             const events = result.get(segmentId) ?? [];
             events.push(event);
@@ -374,8 +409,13 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // it still needs to be loaded (caller keeps the pending target and retries).
     const tryScrollToSegment = useCallback(
         (id: string): boolean => {
-            const index = segments.findIndex((s) => s.id === id);
+            const index = segments.findIndex((s) =>
+                s.id === id
+                || s.source_chunk_ids?.includes(id)
+                || s.embedded_events?.some((event) => event.source_transcript_ids.includes(id))
+            );
             if (index === -1) return false;
+            const renderedId = segments[index].id;
 
             // For virtualized lists, drive the virtualizer; for small lists the
             // node is already in the DOM. In both cases scroll the DOM anchor into
@@ -386,11 +426,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
             // Defer to the next frame so the (possibly just-mounted) node exists.
             requestAnimationFrame(() => {
-                const node = document.getElementById(`segment-${id}`);
+                const node = document.getElementById(`segment-${renderedId}`);
                 node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                setHighlightedSegmentId(id);
+                setHighlightedSegmentId(renderedId);
                 window.setTimeout(() => {
-                    setHighlightedSegmentId((current) => (current === id ? null : current));
+                    setHighlightedSegmentId((current) => (current === renderedId ? null : current));
                 }, 2000);
             });
             return true;
@@ -572,6 +612,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
                                         shortTurnEvents={shortEventsBySegment.get(segment.id)}
+                                        reconstructedEvents={segment.embedded_events}
                                         onAssignShortTurnEventSpeaker={onAssignShortTurnEventSpeaker}
                                     />
                                 </div>
@@ -637,6 +678,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerChoices={speakerChoices}
                                         onAssignSpeaker={onAssignSpeaker}
                                         shortTurnEvents={shortEventsBySegment.get(segment.id)}
+                                        reconstructedEvents={segment.embedded_events}
                                         onAssignShortTurnEventSpeaker={onAssignShortTurnEventSpeaker}
                                     />
                                 </motion.div>
