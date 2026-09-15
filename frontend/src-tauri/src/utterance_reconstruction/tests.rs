@@ -49,6 +49,54 @@ fn same_speaker_and_250ms_pause_merges_with_continuation_hint() {
 }
 
 #[test]
+fn same_speaker_medium_gap_and_incomplete_left_merges() {
+    let result = reconstruct_spans(&[
+        span("t1", 0, 1_000, "我觉得这个", "a"),
+        span("t2", 1_900, 3_000, "方案还可以继续推进", "a"),
+    ]);
+    assert_eq!(result.utterances.len(), 1);
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::SentenceIncomplete));
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::SemanticContinuity));
+}
+
+#[test]
+fn same_speaker_continuation_prefix_merges_across_vad_fragmentation() {
+    let result = reconstruct_spans(&[
+        span("t1", 0, 1_000, "我觉得这个方案", "a"),
+        span("t2", 1_900, 3_000, "其实问题不大", "a"),
+    ]);
+    assert_eq!(result.utterances.len(), 1);
+    assert!(result.boundaries[0]
+        .evidence
+        .semantic
+        .cross_boundary_continuity
+        .is_some_and(|score| score > 0.8));
+    assert!(result.boundaries[0].score_components.semantic_score < 0);
+}
+
+#[test]
+fn complete_same_speaker_sentences_can_split_without_creating_one_card_per_period() {
+    let split = reconstruct_spans(&[
+        span("t1", 0, 1_000, "这个方案今天先确定下来。", "a"),
+        span("t2", 1_900, 3_000, "下一项我们讨论预算问题。", "a"),
+    ]);
+    assert_eq!(split.utterances.len(), 2);
+    assert!(split.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::SentenceComplete));
+
+    let merged = reconstruct_spans(&[
+        span("t1", 0, 1_000, "第一版先这样做。", "a"),
+        span("t2", 1_200, 2_000, "第二阶段再优化性能。", "a"),
+    ]);
+    assert_eq!(merged.utterances.len(), 1);
+}
+
+#[test]
 fn same_speaker_and_2000ms_silence_splits() {
     let result = reconstruct_spans(&[
         span("t1", 0, 1_000, "第一句", "a"),
@@ -71,6 +119,52 @@ fn reliable_speaker_change_splits() {
     assert!(result.boundaries[0]
         .reasons
         .contains(&BoundaryReason::SpeakerChanged));
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::ReliableSpeakerChange));
+}
+
+#[test]
+fn ambiguous_speaker_change_does_not_destroy_strongly_continuous_speech() {
+    let mut left = span("t1", 0, 1_000, "我觉得这个方案", "a");
+    let mut right = span("t2", 1_100, 2_000, "其实问题不大", "b");
+    left.speaker_confidence = Some(0.40);
+    right.speaker_confidence = Some(0.45);
+    let result = reconstruct_spans(&[left, right]);
+    assert_eq!(result.utterances.len(), 1);
+    assert_eq!(
+        result.utterances[0].speaker_attribution,
+        SpeakerAttribution::Unknown
+    );
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::AmbiguousSpeakerChange));
+    assert!(!result.boundaries[0].evidence.speaker_change_reliable);
+}
+
+#[test]
+fn unreliable_timing_uses_semantic_fallback_instead_of_hard_split() {
+    let mut left = span("t1", 0, 0, "我觉得这个", "a");
+    let mut right = span("t2", 0, 0, "方案可以继续推进", "a");
+    left.timing_reliable = false;
+    right.timing_reliable = false;
+    let result = reconstruct_spans(&[left, right]);
+    assert_eq!(result.utterances.len(), 1);
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::UnreliableTiming));
+}
+
+#[test]
+fn maximum_duration_remains_a_hard_safety_boundary() {
+    let result = reconstruct_spans(&[
+        span("t1", 0, 19_900, "一段很长的连续表达", "a"),
+        span("t2", 20_000, 20_100, "继续", "a"),
+    ]);
+    assert_eq!(result.utterances.len(), 2);
+    assert!(result.boundaries[0]
+        .reasons
+        .contains(&BoundaryReason::MaximumDuration));
 }
 
 #[test]
@@ -108,16 +202,21 @@ fn short_speech_remains_three_normal_speaker_utterances() {
 }
 
 #[test]
-fn mixed_or_overlap_is_not_force_assigned_or_merged() {
+fn mixed_or_overlap_is_not_force_assigned_but_uncertainty_does_not_force_a_boundary() {
     let mut mixed = span("t1", 0, 2_000, "无法可靠内部切分", "a");
     mixed.speaker_attribution = SpeakerAttribution::Mixed {
         speaker_keys: vec!["a".into(), "b".into()],
     };
     mixed.overlap = true;
     let result = reconstruct_spans(&[mixed, span("t2", 2_100, 3_000, "后续", "b")]);
-    assert_eq!(result.utterances.len(), 2);
+    assert_eq!(result.utterances.len(), 1);
+    assert_eq!(
+        result.utterances[0].speaker_attribution,
+        SpeakerAttribution::Unknown
+    );
     assert!(result.utterances[0].mixed);
-    assert_eq!(result.utterances[0].text, "无法可靠内部切分");
+    assert!(result.utterances[0].overlap);
+    assert_eq!(result.utterances[0].text, "无法可靠内部切分后续");
 }
 
 #[test]
@@ -239,7 +338,7 @@ fn one_raw_chunk_can_resolve_an_a_to_b_handoff_with_source_ranges() {
     );
     let turns = vec![turn(10_000, 13_800, "a"), turn(14_100, 18_000, "b")];
     let result = reconstruct_v2(&[transcript], &turns);
-    assert_eq!(result.algorithm_version, ALGORITHM_VERSION_V2);
+    assert_eq!(result.algorithm_version, ALGORITHM_VERSION_V3);
     assert_eq!(result.utterances.len(), 2);
     assert_eq!(result.utterances[0].text, "我觉得这个方案可以");
     assert_eq!(result.utterances[1].text, "但是我不同意");
@@ -488,7 +587,7 @@ fn reconstruct_v2(transcripts: &[Transcript], turns: &[SpeakerTurn]) -> Reconstr
         "meeting-test",
         &enhanced.spans,
         &config,
-        ALGORITHM_VERSION_V2,
+        ALGORITHM_VERSION_V3,
         enhanced.metrics,
         enhanced.alignment_diagnostics,
         enhanced.timing_diagnostics,

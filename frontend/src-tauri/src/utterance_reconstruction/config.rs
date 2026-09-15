@@ -9,11 +9,19 @@ pub struct UtteranceReconstructionConfig {
     pub max_text_length: usize,
     pub split_score_threshold: i32,
     pub speaker_changed_score: i32,
+    pub ambiguous_speaker_changed_score: i32,
+    pub reliable_speaker_change_confidence: f64,
     pub medium_gap_score: i32,
     pub terminal_punctuation_score: i32,
     pub same_speaker_score: i32,
     pub short_gap_score: i32,
     pub continuation_prefix_score: i32,
+    pub semantic_boundary_enabled: bool,
+    pub completeness_split_threshold: f32,
+    pub continuity_merge_threshold: f32,
+    pub completeness_split_score: i32,
+    pub incomplete_merge_score: i32,
+    pub continuity_merge_score: i32,
     pub weak_punctuation_score: i32,
     pub backchannel_bridge_score: i32,
     pub backchannel_min_confidence: f64,
@@ -37,11 +45,19 @@ impl Default for UtteranceReconstructionConfig {
             max_text_length: 90,
             split_score_threshold: 3,
             speaker_changed_score: 4,
+            ambiguous_speaker_changed_score: 1,
+            reliable_speaker_change_confidence: 0.75,
             medium_gap_score: 2,
             terminal_punctuation_score: 2,
             same_speaker_score: -3,
             short_gap_score: -2,
             continuation_prefix_score: -1,
+            semantic_boundary_enabled: true,
+            completeness_split_threshold: 0.80,
+            continuity_merge_threshold: 0.70,
+            completeness_split_score: 2,
+            incomplete_merge_score: -1,
+            continuity_merge_score: -3,
             weak_punctuation_score: -1,
             backchannel_bridge_score: -2,
             backchannel_min_confidence: 0.75,
@@ -64,7 +80,7 @@ impl UtteranceReconstructionConfig {
     }
 }
 
-pub const CONFIG_VERSION: &str = "utterance-reconstruction-config-v2";
+pub const CONFIG_VERSION: &str = "utterance-reconstruction-config-v3";
 
 pub const CONTINUATION_PREFIXES: &[&str] = &[
     "但是",

@@ -11,13 +11,14 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::audio::transcription::{TimingSource, TranscriptTiming};
 use crate::database::models::Transcript;
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::short_turn_event::ShortTurnEventsRepository;
 use crate::database::repositories::speaker_turn::{SpeakerTurn, SpeakerTurnsRepository};
 use crate::diarization::short_turn_event::ShortTurnEvent;
 use crate::evaluation::production_artifact::{
-    app_commit_sha, read_and_validate_artifact, ArtifactBackend,
+    app_commit_sha, read_and_validate_artifact, ArtifactBackend, ARTIFACT_SCHEMA_VERSION,
 };
 use crate::utterance_reconstruction::{
     reconstruct_v2_with_config, ReconstructedUtterance, ReconstructionResult, SpeakerAttribution,
@@ -98,6 +99,9 @@ impl UtteranceReconstructionArtifact {
         )?;
         validate_sha256("source media", &self.source_media.sha256)?;
         validate_sha256("artifact integrity", &self.integrity_sha256)?;
+        if self.source_production_artifact.schema_version != ARTIFACT_SCHEMA_VERSION {
+            bail!("reconstruction artifact must reference Production Artifact schema v2");
+        }
         if let Some(expected) = expected_meeting_id {
             if self.meeting_id != expected {
                 bail!(
@@ -110,6 +114,17 @@ impl UtteranceReconstructionArtifact {
         if self.v1.meeting_id != self.meeting_id || self.v2.meeting_id != self.meeting_id {
             bail!("reconstruction outputs belong to another meeting");
         }
+        for (label, result) in [("V1", &self.v1), ("V2", &self.v2)] {
+            require_id(
+                &format!("{label} algorithm_version"),
+                &result.algorithm_version,
+            )?;
+            require_id(&format!("{label} config_version"), &result.config_version)?;
+            validate_sha256(&format!("{label} config"), &result.config_hash)?;
+            if payload_hash(&result.config)? != result.config_hash {
+                bail!("{label} config snapshot does not match its hash");
+            }
+        }
         if self
             .transcripts
             .iter()
@@ -120,6 +135,21 @@ impl UtteranceReconstructionArtifact {
                 .any(|event| event.meeting_id != self.meeting_id)
         {
             bail!("frozen evidence belongs to another meeting");
+        }
+        for transcript in &self.transcripts {
+            let Some(json) = transcript.asr_timing_json.as_deref() else {
+                continue;
+            };
+            let timing: TranscriptTiming =
+                serde_json::from_str(json).context("parse frozen transcript timing")?;
+            if timing.tokens.iter().any(|token| {
+                token.start_ms < 0
+                    || token.end_ms.is_some_and(|end| end < token.start_ms)
+                    || (self.asr.backend.to_ascii_lowercase().contains("parakeet")
+                        && token.timing_source != TimingSource::NativeTokenEmission)
+            }) {
+                bail!("frozen transcript contains invalid or mislabelled ASR timing");
+            }
         }
         let mut unsigned = self.clone();
         unsigned.integrity_sha256.clear();
@@ -146,6 +176,10 @@ pub enum DatasetSplit {
 #[serde(rename_all = "snake_case")]
 pub enum ScenarioBucket {
     CleanSingleSpeaker,
+    SameSpeakerContinuity,
+    SameSpeakerBoundary,
+    AsrFragmentation,
+    VadFragmentation,
     SpeakerHandoff,
     Backchannel,
     ShortSpeech,
@@ -174,6 +208,17 @@ pub struct GtSpeakerInterval {
     pub overlap: bool,
     #[serde(default)]
     pub uncertain: bool,
+    #[serde(default)]
+    pub status: GtAnnotationStatus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GtAnnotationStatus {
+    #[default]
+    Pending,
+    ConfirmedBlind,
+    Reviewed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +236,8 @@ pub struct GtUtteranceBoundary {
     pub boundary_kind: GtBoundaryKind,
     #[serde(default)]
     pub uncertain: bool,
+    #[serde(default)]
+    pub status: GtAnnotationStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +256,8 @@ pub struct GtUtterance {
     pub overlap: bool,
     #[serde(default)]
     pub buckets: BTreeSet<ScenarioBucket>,
+    #[serde(default)]
+    pub status: GtAnnotationStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,18 +280,53 @@ pub struct UtteranceGroundTruth {
 
 impl UtteranceGroundTruth {
     pub fn validate(&self, artifact: &UtteranceReconstructionArtifact) -> Result<()> {
+        self.validate_structure(artifact)?;
+        if !self.blind_complete || !self.review_complete || !self.qa_passed {
+            bail!("pending annotation blocks benchmark/export");
+        }
+        if self.speakers.is_empty()
+            || self.speaker_intervals.is_empty()
+            || self.utterances.is_empty()
+        {
+            bail!(
+                "completed ground truth must contain speakers, speaker intervals, and utterances"
+            );
+        }
+        if self
+            .speaker_intervals
+            .iter()
+            .any(|item| item.status != GtAnnotationStatus::Reviewed)
+            || self
+                .utterances
+                .iter()
+                .any(|item| item.status != GtAnnotationStatus::Reviewed)
+            || self
+                .boundaries
+                .iter()
+                .any(|item| item.status != GtAnnotationStatus::Reviewed)
+        {
+            bail!("pending annotation blocks benchmark/export");
+        }
+        Ok(())
+    }
+
+    fn validate_structure(&self, artifact: &UtteranceReconstructionArtifact) -> Result<()> {
         artifact.validate(Some(&self.meeting_id))?;
         if self.schema_version != UTTERANCE_GROUND_TRUTH_SCHEMA_VERSION {
             bail!("unsupported utterance ground-truth schema");
         }
+        require_id("annotation_version", &self.annotation_version)?;
         if self.reconstruction_artifact_id != artifact.artifact_id
             || self.reconstruction_artifact_sha256 != artifact.integrity_sha256
             || self.source_audio_sha256 != artifact.source_media.sha256
         {
             bail!("ground truth is bound to a different frozen artifact or source media");
         }
-        if !self.blind_complete || !self.review_complete || !self.qa_passed {
-            bail!("pending annotation blocks benchmark/export");
+        if self.review_complete && !self.blind_complete {
+            bail!("Review cannot complete before Blind");
+        }
+        if self.qa_passed && !self.review_complete {
+            bail!("QA cannot pass before Review");
         }
         let speakers = self
             .speakers
@@ -360,6 +444,10 @@ pub struct BoundaryMetrics {
     pub f1: f64,
     pub over_segmentation_rate: f64,
     pub under_segmentation_rate: f64,
+    /// User-facing aliases: an unmatched predicted boundary fragments speech.
+    pub false_split_rate: f64,
+    /// An unmatched reference boundary merges distinct utterances.
+    pub false_merge_rate: f64,
     pub error_mae_ms: Option<f64>,
     pub error_median_ms: Option<f64>,
     pub error_p90_ms: Option<f64>,
@@ -383,6 +471,12 @@ pub struct AlgorithmMetrics {
     pub utterance_boundary_500ms: BoundaryMetrics,
     pub special_cases: SpecialCaseMetrics,
     pub lexical_preservation: f64,
+    /// Selective accuracy counts abstentions as incorrect, unlike assigned-only accuracy.
+    pub speaker_attribution_accuracy: f64,
+    /// Recall of reference speaker handoffs within the documented 500 ms collar.
+    pub speaker_boundary_accuracy: f64,
+    /// Signed prediction count minus selected Ground Truth utterance count.
+    pub utterance_count_error: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,10 +532,18 @@ pub struct UtteranceReconstructionReport {
     pub artifact_id: String,
     pub artifact_sha256: String,
     pub app_commit_sha: String,
+    pub source_production_artifact: SourceProductionArtifactIdentity,
+    pub source_media: FrozenFileIdentity,
+    pub transcription_run_id: String,
+    pub asr: ArtifactBackend,
     pub v1_algorithm_version: String,
     pub v1_config_hash: String,
+    pub v1_config: UtteranceReconstructionConfig,
+    pub v1_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
     pub v2_algorithm_version: String,
     pub v2_config_hash: String,
+    pub v2_config: UtteranceReconstructionConfig,
+    pub v2_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
     pub v1: AlgorithmMetrics,
     pub v2: AlgorithmMetrics,
     pub per_bucket_v1: BTreeMap<ScenarioBucket, AlgorithmMetrics>,
@@ -451,6 +553,7 @@ pub struct UtteranceReconstructionReport {
     pub errors: BTreeMap<String, usize>,
     pub worst_cases: Vec<WorstCase>,
     pub diagnostic_metrics_are_not_accuracy: bool,
+    pub known_limitations: Vec<String>,
 }
 
 pub fn benchmark(
@@ -504,10 +607,18 @@ pub fn benchmark(
         artifact_id: artifact.artifact_id.clone(),
         artifact_sha256: artifact.integrity_sha256.clone(),
         app_commit_sha: artifact.app_commit_sha.clone(),
+        source_production_artifact: artifact.source_production_artifact.clone(),
+        source_media: artifact.source_media.clone(),
+        transcription_run_id: artifact.transcription_run_id.clone(),
+        asr: artifact.asr.clone(),
         v1_algorithm_version: artifact.v1.algorithm_version.clone(),
         v1_config_hash: artifact.v1.config_hash.clone(),
+        v1_config: artifact.v1.config.clone(),
+        v1_self_diagnostics: artifact.v1.metrics.clone(),
         v2_algorithm_version: artifact.v2.algorithm_version.clone(),
         v2_config_hash: artifact.v2.config_hash.clone(),
+        v2_config: artifact.v2.config.clone(),
+        v2_self_diagnostics: artifact.v2.metrics.clone(),
         v1,
         v2,
         per_bucket_v1,
@@ -517,6 +628,11 @@ pub fn benchmark(
         errors,
         worst_cases: worst_cases(artifact, ground_truth, &mapping),
         diagnostic_metrics_are_not_accuracy: true,
+        known_limitations: vec![
+            "True multi-speaker overlap text streams are not reconstructed".into(),
+            "Whisper remains text-only without word-level timing".into(),
+            "ASR lexical correctness is outside this benchmark".into(),
+        ],
     })
 }
 
@@ -542,17 +658,13 @@ fn emission_handoff_metrics(
             (left != right).then_some(pair[1].start_ms)
         })
         .collect::<Vec<_>>();
-    let mut errors = ground_truth
+    let handoffs = ground_truth
         .boundaries
         .iter()
         .filter(|item| !item.uncertain && item.boundary_kind == GtBoundaryKind::SpeakerHandoff)
-        .filter_map(|boundary| {
-            transitions
-                .iter()
-                .map(|transition| (transition - boundary.timestamp_ms).abs() as f64)
-                .min_by(f64::total_cmp)
-        })
+        .map(|boundary| boundary.timestamp_ms)
         .collect::<Vec<_>>();
+    let mut errors = match_boundary_errors(&handoffs, &transitions, None);
     errors.sort_by(f64::total_cmp);
     EmissionHandoffMetrics {
         matched_handoffs: errors.len(),
@@ -721,6 +833,7 @@ pub fn api_save_utterance_ground_truth(request: SaveGroundTruthRequest) -> Resul
 pub struct LoadGroundTruthRequest {
     pub artifact_path: PathBuf,
     pub ground_truth_path: PathBuf,
+    pub source_media_path: PathBuf,
     pub mode: AnnotationViewMode,
 }
 
@@ -785,6 +898,11 @@ pub fn api_load_utterance_ground_truth(
             .map_err(|error| format!("read utterance ground truth: {error}"))?,
     )
     .map_err(|error| format!("parse utterance ground truth: {error}"))?;
+    let media_sha = file_hash(&request.source_media_path)
+        .map_err(|error| format!("hash source media: {error:#}"))?;
+    if media_sha != artifact.source_media.sha256 {
+        return Err("source media SHA-256 does not match reconstruction artifact".into());
+    }
     validate_ground_truth_draft(&ground_truth, &artifact)
         .map_err(|error| format!("validate utterance ground truth: {error:#}"))?;
     annotation_view(request.mode, &artifact, ground_truth)
@@ -795,11 +913,31 @@ fn validate_ground_truth_draft(
     ground_truth: &UtteranceGroundTruth,
     artifact: &UtteranceReconstructionArtifact,
 ) -> Result<()> {
-    let mut draft = ground_truth.clone();
-    draft.blind_complete = true;
-    draft.review_complete = true;
-    draft.qa_passed = true;
-    draft.validate(artifact)
+    ground_truth.validate_structure(artifact)?;
+    let statuses = ground_truth
+        .speaker_intervals
+        .iter()
+        .map(|item| item.status)
+        .chain(ground_truth.utterances.iter().map(|item| item.status))
+        .chain(ground_truth.boundaries.iter().map(|item| item.status));
+    if ground_truth.blind_complete
+        && statuses
+            .clone()
+            .any(|status| status == GtAnnotationStatus::Pending)
+    {
+        bail!("pending annotation blocks Blind completion");
+    }
+    if ground_truth.review_complete
+        && statuses
+            .clone()
+            .any(|status| status != GtAnnotationStatus::Reviewed)
+    {
+        bail!("Review completion requires every annotation to be reviewed");
+    }
+    if ground_truth.qa_passed {
+        ground_truth.validate(artifact)?;
+    }
+    Ok(())
 }
 
 pub fn run_benchmark_files(
@@ -866,7 +1004,7 @@ pub fn validate_meeting_level_split(
 }
 
 fn render_markdown(report: &UtteranceReconstructionReport) -> String {
-    format!(
+    let mut rendered = format!(
         "# Utterance Reconstruction Evaluation\n\n- Meeting: `{}`\n- Artifact: `{}`\n- Split: `{:?}`\n- App commit: `{}`\n\n| Metric | V1 | V2 | Delta |\n|---|---:|---:|---:|\n| Speaker coverage | {:.4} | {:.4} | {:+.4} |\n| Assigned-only accuracy | {:.4} | {:.4} | {:+.4} |\n| Handoff F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @500ms | {:.4} | {:.4} | {:+.4} |\n| Backchannel preservation | {:.4} | {:.4} | {:+.4} |\n| Short-speech recall | {:.4} | {:.4} | {:+.4} |\n| Overlap false-single rate | {:.4} | {:.4} | {:+.4} |\n| Lexical preservation | {:.4} | {:.4} | {:+.4} |\n\nDiagnostic coverage metrics are not accuracy. Parameter sweep rows are stored in the JSON report and must be calibrated only on calibration meetings.\n",
         report.meeting_id,
         report.artifact_id,
@@ -899,7 +1037,45 @@ fn render_markdown(report: &UtteranceReconstructionReport) -> String {
         report.v1.lexical_preservation,
         report.v2.lexical_preservation,
         report.v2.lexical_preservation - report.v1.lexical_preservation,
-    )
+    );
+    rendered.push_str(&format!(
+        "\n## Mainline quality indicators @500ms\n\n| Metric | V1 | V2/V3 latest | Delta |\n|---|---:|---:|---:|\n| False split rate | {:.4} | {:.4} | {:+.4} |\n| False merge rate | {:.4} | {:.4} | {:+.4} |\n| Speaker attribution accuracy | {:.4} | {:.4} | {:+.4} |\n| Speaker boundary accuracy | {:.4} | {:.4} | {:+.4} |\n| Utterance count error | {} | {} | {:+} |\n",
+        report.v1.utterance_boundary_500ms.false_split_rate,
+        report.v2.utterance_boundary_500ms.false_split_rate,
+        report.v2.utterance_boundary_500ms.false_split_rate
+            - report.v1.utterance_boundary_500ms.false_split_rate,
+        report.v1.utterance_boundary_500ms.false_merge_rate,
+        report.v2.utterance_boundary_500ms.false_merge_rate,
+        report.v2.utterance_boundary_500ms.false_merge_rate
+            - report.v1.utterance_boundary_500ms.false_merge_rate,
+        report.v1.speaker_attribution_accuracy,
+        report.v2.speaker_attribution_accuracy,
+        report.v2.speaker_attribution_accuracy - report.v1.speaker_attribution_accuracy,
+        report.v1.speaker_boundary_accuracy,
+        report.v2.speaker_boundary_accuracy,
+        report.v2.speaker_boundary_accuracy - report.v1.speaker_boundary_accuracy,
+        report.v1.utterance_count_error,
+        report.v2.utterance_count_error,
+        report.v2.utterance_count_error - report.v1.utterance_count_error,
+    ));
+    rendered.push_str("\n## Frozen identity\n\n");
+    rendered.push_str(&format!(
+        "- Production artifact: `{}` (`{}`)\n- Source media: `{}`\n- Transcription run: `{}`\n- ASR: `{}` / `{}` / `{}`\n- V1 config: `{}`\n- V2 config: `{}`\n",
+        report.source_production_artifact.artifact_id,
+        report.source_production_artifact.sha256,
+        report.source_media.sha256,
+        report.transcription_run_id,
+        report.asr.backend,
+        report.asr.model,
+        report.asr.version_or_hash.as_deref().unwrap_or("unknown"),
+        report.v1_config_hash,
+        report.v2_config_hash,
+    ));
+    rendered.push_str("\n## Known limitations\n\n");
+    for limitation in &report.known_limitations {
+        rendered.push_str(&format!("- {limitation}\n"));
+    }
+    rendered
 }
 
 fn file_hash(path: &Path) -> Result<String> {
@@ -926,7 +1102,26 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     std::fs::write(&temp, bytes)?;
-    std::fs::rename(&temp, path).with_context(|| format!("atomically replace {}", path.display()))
+    if !path.exists() {
+        return std::fs::rename(&temp, path)
+            .with_context(|| format!("atomically create {}", path.display()));
+    }
+    // `rename(temp, existing)` is not portable to Windows. Keep a same-directory
+    // rollback copy so repeated autosaves replace the prior revision safely.
+    let backup = path.with_extension(format!("bak-{}", uuid::Uuid::new_v4()));
+    std::fs::rename(path, &backup)
+        .with_context(|| format!("stage prior revision of {}", path.display()))?;
+    match std::fs::rename(&temp, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::rename(&backup, path);
+            let _ = std::fs::remove_file(temp);
+            Err(error).with_context(|| format!("replace {}", path.display()))
+        }
+    }
 }
 
 fn score_algorithm(
@@ -939,7 +1134,7 @@ fn score_algorithm(
     let selected = gt
         .utterances
         .iter()
-        .filter(|item| bucket.is_none_or(|wanted| item.buckets.contains(&wanted)))
+        .filter(|item| bucket.map_or(true, |wanted| item.buckets.contains(&wanted)))
         .collect::<Vec<_>>();
     let speaker_attribution = speaker_metrics(&selected, &result.utterances, mapping);
     let utterance_boundaries = gt
@@ -956,14 +1151,32 @@ fn score_algorithm(
         .filter(|boundary| boundary_in_selected(boundary.timestamp_ms, &selected, bucket))
         .map(|item| item.timestamp_ms)
         .collect::<Vec<_>>();
-    let predicted = predicted_boundaries(&result.utterances, false);
-    let predicted_handoffs = predicted_boundaries(&result.utterances, true);
+    let predicted = predicted_boundaries(&result.utterances, false)
+        .into_iter()
+        .filter(|timestamp| boundary_in_selected(*timestamp, &selected, bucket))
+        .collect::<Vec<_>>();
+    let predicted_handoffs = predicted_boundaries(&result.utterances, true)
+        .into_iter()
+        .filter(|timestamp| boundary_in_selected(*timestamp, &selected, bucket))
+        .collect::<Vec<_>>();
+    let handoff_250ms = boundary_metrics(&handoffs, &predicted_handoffs, 250);
+    let handoff_500ms = boundary_metrics(&handoffs, &predicted_handoffs, 500);
+    let utterance_boundary_250ms = boundary_metrics(&utterance_boundaries, &predicted, 250);
+    let utterance_boundary_500ms = boundary_metrics(&utterance_boundaries, &predicted, 500);
     AlgorithmMetrics {
+        speaker_attribution_accuracy: speaker_attribution.selective_accuracy,
+        speaker_boundary_accuracy: handoff_500ms.recall,
+        utterance_count_error: (if selected.is_empty() {
+            0
+        } else {
+            predicted.len() + 1
+        }) as i64
+            - selected.len() as i64,
         speaker_attribution,
-        handoff_250ms: boundary_metrics(&handoffs, &predicted_handoffs, 250),
-        handoff_500ms: boundary_metrics(&handoffs, &predicted_handoffs, 500),
-        utterance_boundary_250ms: boundary_metrics(&utterance_boundaries, &predicted, 250),
-        utterance_boundary_500ms: boundary_metrics(&utterance_boundaries, &predicted, 500),
+        handoff_250ms,
+        handoff_500ms,
+        utterance_boundary_250ms,
+        utterance_boundary_500ms,
         special_cases: special_case_metrics(gt, &selected, result, mapping),
         lexical_preservation: if lexically_preserved(artifact, result) {
             1.0
@@ -1009,21 +1222,7 @@ fn speaker_metrics(
 }
 
 fn boundary_metrics(reference: &[i64], predicted: &[i64], collar_ms: i64) -> BoundaryMetrics {
-    let mut available = predicted.iter().copied().collect::<BTreeSet<_>>();
-    let mut errors = Vec::new();
-    for expected in reference {
-        let closest = available
-            .iter()
-            .filter_map(|actual| {
-                let error = (actual - expected).abs();
-                (error <= collar_ms).then_some((*actual, error))
-            })
-            .min_by_key(|(actual, error)| (*error, *actual));
-        if let Some((actual, error)) = closest {
-            available.remove(&actual);
-            errors.push(error as f64);
-        }
-    }
+    let mut errors = match_boundary_errors(reference, predicted, Some(collar_ms));
     errors.sort_by(f64::total_cmp);
     let matched = errors.len();
     let precision = ratio(matched, predicted.len());
@@ -1037,11 +1236,36 @@ fn boundary_metrics(reference: &[i64], predicted: &[i64], collar_ms: i64) -> Bou
         f1: harmonic(precision, recall),
         over_segmentation_rate: ratio(predicted.len().saturating_sub(matched), predicted.len()),
         under_segmentation_rate: ratio(reference.len().saturating_sub(matched), reference.len()),
+        false_split_rate: ratio(predicted.len().saturating_sub(matched), predicted.len()),
+        false_merge_rate: ratio(reference.len().saturating_sub(matched), reference.len()),
         error_mae_ms: mean(&errors),
         error_median_ms: percentile(&errors, 0.50),
         error_p90_ms: percentile(&errors, 0.90),
         error_p95_ms: percentile(&errors, 0.95),
     }
+}
+
+fn match_boundary_errors(reference: &[i64], predicted: &[i64], collar_ms: Option<i64>) -> Vec<f64> {
+    let mut used = vec![false; predicted.len()];
+    let mut errors = Vec::new();
+    for expected in reference {
+        let closest = predicted
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !used[*index])
+            .filter_map(|(index, actual)| {
+                let error = (actual - expected).abs();
+                collar_ms
+                    .map_or(true, |collar| error <= collar)
+                    .then_some((index, error, *actual))
+            })
+            .min_by_key(|(_, error, actual)| (*error, *actual));
+        if let Some((index, error, _)) = closest {
+            used[index] = true;
+            errors.push(error as f64);
+        }
+    }
+    errors
 }
 
 fn special_case_metrics(
@@ -1159,20 +1383,75 @@ fn align_speakers(
             }
         }
     }
-    let mut candidates = weights
+    let gt_keys = weights
+        .keys()
+        .map(|(gt, _)| gt.clone())
+        .collect::<BTreeSet<_>>()
         .into_iter()
-        .filter(|(_, weight)| *weight > 0)
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-    let mut used_gt = HashSet::new();
-    let mut used_system = HashSet::new();
-    let mut mapping = BTreeMap::new();
-    for ((gt, system), _) in candidates {
-        if used_gt.insert(gt.clone()) && used_system.insert(system.clone()) {
-            mapping.insert(gt, system);
+    let system_keys = weights
+        .keys()
+        .map(|(_, system)| system.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    // Exact maximum-weight one-to-one assignment. A greedy largest-edge pass
+    // can choose the wrong speaker permutation even in a two-speaker meeting.
+    let mut states = BTreeMap::from([(vec![false; system_keys.len()], (0_i64, Vec::new()))]);
+    for gt in &gt_keys {
+        let mut next = BTreeMap::new();
+        for (used, (score, assignment)) in states {
+            update_assignment_state(&mut next, used.clone(), score, &assignment, None);
+            for (index, system_key) in system_keys.iter().enumerate() {
+                if used[index] {
+                    continue;
+                }
+                let weight = *weights.get(&(gt.clone(), system_key.clone())).unwrap_or(&0);
+                if weight <= 0 {
+                    continue;
+                }
+                let mut newly_used = used.clone();
+                newly_used[index] = true;
+                update_assignment_state(
+                    &mut next,
+                    newly_used,
+                    score + weight,
+                    &assignment,
+                    Some(index),
+                );
+            }
         }
+        states = next;
     }
-    mapping
+    let (_, (_, assignment)) = states
+        .into_iter()
+        .max_by(|left, right| {
+            left.1
+                 .0
+                .cmp(&right.1 .0)
+                .then_with(|| right.0.cmp(&left.0))
+        })
+        .unwrap_or_default();
+    gt_keys
+        .into_iter()
+        .zip(assignment)
+        .filter_map(|(gt, system_index)| system_index.map(|index| (gt, system_keys[index].clone())))
+        .collect()
+}
+
+fn update_assignment_state(
+    states: &mut BTreeMap<Vec<bool>, (i64, Vec<Option<usize>>)>,
+    used: Vec<bool>,
+    score: i64,
+    assignment: &[Option<usize>],
+    selected: Option<usize>,
+) {
+    let entry = states.entry(used).or_insert_with(|| (i64::MIN, Vec::new()));
+    if score > entry.0 {
+        let mut next_assignment = assignment.to_vec();
+        next_assignment.push(selected);
+        *entry = (score, next_assignment);
+    }
 }
 
 fn predicted_boundaries(utterances: &[ReconstructedUtterance], handoff_only: bool) -> Vec<i64> {
@@ -1428,6 +1707,7 @@ mod tests {
                 gt_speaker_key: "gt_speaker_01".into(),
                 overlap: false,
                 uncertain: false,
+                status: GtAnnotationStatus::Reviewed,
             }],
             utterances: vec![GtUtterance {
                 id: "u1".into(),
@@ -1439,6 +1719,7 @@ mod tests {
                 contains_backchannel: false,
                 overlap: false,
                 buckets: BTreeSet::from([ScenarioBucket::English]),
+                status: GtAnnotationStatus::Reviewed,
             }],
             boundaries: vec![],
         }
@@ -1496,9 +1777,13 @@ mod tests {
         assert_eq!(boundary.matched, 1);
         assert_eq!(boundary.precision, 0.5);
         assert_eq!(boundary.recall, 0.5);
+        assert_eq!(boundary.false_split_rate, 0.5);
+        assert_eq!(boundary.false_merge_rate, 0.5);
         let report = benchmark(&artifact(), &ground_truth()).unwrap();
         assert_eq!(report.v2.speaker_attribution.coverage, 1.0);
         assert_eq!(report.v2.speaker_attribution.assigned_only_accuracy, 1.0);
+        assert_eq!(report.v2.speaker_attribution_accuracy, 1.0);
+        assert_eq!(report.v2.utterance_count_error, 0);
         assert_eq!(report.parameter_sweep.len(), 144);
     }
 
@@ -1538,8 +1823,16 @@ mod tests {
             ground_truth: gt.clone(),
         })
         .unwrap();
+        gt.annotation_version = "v2-after-autosave".into();
+        api_save_utterance_ground_truth(SaveGroundTruthRequest {
+            artifact_path,
+            ground_truth_path: gt_path.clone(),
+            ground_truth: gt.clone(),
+        })
+        .unwrap();
         let reopened: UtteranceGroundTruth =
             serde_json::from_slice(&std::fs::read(gt_path).unwrap()).unwrap();
+        assert_eq!(reopened.annotation_version, "v2-after-autosave");
         assert_eq!(reopened.speakers, gt.speakers);
         assert_eq!(reopened.utterances, gt.utterances);
         let _ = std::fs::remove_dir_all(directory);
@@ -1564,5 +1857,86 @@ mod tests {
         let calibration = manifest_row(&artifact, &calibration_gt).unwrap();
         let evaluation = manifest_row(&artifact, &ground_truth()).unwrap();
         assert!(validate_meeting_level_split(&[calibration], &[evaluation]).is_err());
+    }
+
+    #[test]
+    fn pending_items_and_empty_completed_ground_truth_fail_closed() {
+        let artifact = artifact();
+        let mut pending = ground_truth();
+        pending.utterances[0].status = GtAnnotationStatus::Pending;
+        assert!(pending.validate(&artifact).is_err());
+
+        let mut empty = ground_truth();
+        empty.speakers.clear();
+        empty.speaker_intervals.clear();
+        empty.utterances.clear();
+        assert!(empty.validate(&artifact).is_err());
+    }
+
+    #[test]
+    fn duplicate_boundary_predictions_are_not_deduplicated() {
+        let metrics = boundary_metrics(&[1_000, 1_000], &[1_000, 1_000], 0);
+        assert_eq!(metrics.predicted, 2);
+        assert_eq!(metrics.matched, 2);
+        assert_eq!(metrics.f1, 1.0);
+    }
+
+    #[test]
+    fn speaker_mapping_is_global_maximum_weight_not_greedy() {
+        let reference = |id: &str, start_ms, end_ms, speaker: &str| GtSpeakerInterval {
+            id: id.into(),
+            start_ms,
+            end_ms,
+            gt_speaker_key: speaker.into(),
+            overlap: false,
+            uncertain: false,
+            status: GtAnnotationStatus::Reviewed,
+        };
+        let turn = |start_ms, end_ms, speaker: &str| SpeakerTurn {
+            start_ms,
+            end_ms,
+            speaker_label: speaker.into(),
+            confidence: None,
+            speaker_key: speaker.into(),
+        };
+        let mapping = align_speakers(
+            &[
+                reference("g1a", 0, 9, "gt_speaker_01"),
+                reference("g1b", 20, 28, "gt_speaker_01"),
+                reference("g2", 2, 9, "gt_speaker_02"),
+            ],
+            &[turn(0, 9, "A"), turn(20, 28, "B")],
+        );
+        assert_eq!(mapping.get("gt_speaker_01").map(String::as_str), Some("B"));
+        assert_eq!(mapping.get("gt_speaker_02").map(String::as_str), Some("A"));
+    }
+
+    #[test]
+    fn annotation_load_rejects_wrong_source_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact_path = directory.path().join("artifact.json");
+        let gt_path = directory.path().join("gt.json");
+        let expected_media = directory.path().join("expected.wav");
+        let wrong_media = directory.path().join("wrong.wav");
+        std::fs::write(&expected_media, b"expected media").unwrap();
+        std::fs::write(&wrong_media, b"different media").unwrap();
+
+        let mut artifact = artifact();
+        artifact.source_media.sha256 = file_hash(&expected_media).unwrap();
+        artifact = artifact.seal().unwrap();
+        let mut gt = ground_truth();
+        gt.reconstruction_artifact_sha256 = artifact.integrity_sha256.clone();
+        gt.source_audio_sha256 = artifact.source_media.sha256.clone();
+        std::fs::write(&artifact_path, artifact.deterministic_json().unwrap()).unwrap();
+        std::fs::write(&gt_path, serde_json::to_vec(&gt).unwrap()).unwrap();
+
+        let error = api_load_utterance_ground_truth(LoadGroundTruthRequest {
+            artifact_path,
+            ground_truth_path: gt_path,
+            source_media_path: wrong_media,
+            mode: AnnotationViewMode::Blind,
+        })
+        .unwrap_err();
+        assert!(error.contains("source media SHA-256"));
     }
 }

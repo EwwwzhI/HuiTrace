@@ -5,6 +5,7 @@ use crate::diarization::types::SegmentKind;
 
 pub const ALGORITHM_VERSION: &str = "utterance-reconstruction-v1";
 pub const ALGORITHM_VERSION_V2: &str = "utterance-reconstruction-v2";
+pub const ALGORITHM_VERSION_V3: &str = "utterance-reconstruction-v3-semantic-baseline";
 
 /// Reserved word-level seam for V2. V1 never manufactures these timings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +168,8 @@ pub enum BoundaryDecision {
 pub enum BoundaryReason {
     SameSpeaker,
     SpeakerChanged,
+    ReliableSpeakerChange,
+    AmbiguousSpeakerChange,
     SpeakerUnknown,
     ShortGap,
     MediumGap,
@@ -174,6 +177,9 @@ pub enum BoundaryReason {
     StrongTerminalPunctuation,
     WeakPunctuation,
     ContinuationPrefix,
+    SentenceComplete,
+    SentenceIncomplete,
+    SemanticContinuity,
     MixedAttribution,
     Overlap,
     OverlappingTimeline,
@@ -185,12 +191,40 @@ pub enum BoundaryReason {
     BelowScoreThreshold,
 }
 
+/// Model-ready semantic seam. V3 currently fills this with the deterministic
+/// baseline in `semantic.rs`; `None` means that no trustworthy feature exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticBoundaryEvidence {
+    pub baseline_version: String,
+    pub left_completeness: Option<f32>,
+    pub cross_boundary_continuity: Option<f32>,
+}
+
+/// Reserved for future acoustic/prosodic features. An unavailable signal is
+/// represented explicitly instead of manufacturing a score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProsodicBoundaryEvidence {
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryScoreComponents {
+    pub timing_score: i32,
+    pub speaker_score: i32,
+    pub punctuation_score: i32,
+    pub semantic_score: i32,
+    pub structural_score: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoundaryEvidence {
     pub left_source_transcript_id: String,
     pub right_source_transcript_id: String,
     pub gap_ms: Option<i64>,
     pub same_speaker: Option<bool>,
+    pub speaker_change_confidence: Option<f64>,
+    pub speaker_change_reliable: bool,
+    pub timing_reliable: bool,
     pub strong_terminal_punctuation: bool,
     pub weak_punctuation: bool,
     pub continuation_prefix: bool,
@@ -199,6 +233,8 @@ pub struct BoundaryEvidence {
     pub mixed_attribution: bool,
     pub overlap: bool,
     pub backchannel_between: bool,
+    pub semantic: SemanticBoundaryEvidence,
+    pub prosody: ProsodicBoundaryEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -207,6 +243,7 @@ pub struct BoundaryOutcome {
     pub score: i32,
     pub decision: BoundaryDecision,
     pub reasons: Vec<BoundaryReason>,
+    pub score_components: BoundaryScoreComponents,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

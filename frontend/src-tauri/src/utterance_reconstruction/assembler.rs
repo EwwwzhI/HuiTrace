@@ -63,6 +63,7 @@ pub(crate) fn reconstruct_with_details(
         let outcome = decide_boundary(
             previous,
             span,
+            &builder.text,
             builder.start_ms,
             projected_text.chars().count(),
             backchannel_between,
@@ -190,6 +191,7 @@ struct UtteranceBuilder {
     source_ids: Vec<String>,
     reasons: Vec<BoundaryReason>,
     overlap: bool,
+    mixed: bool,
     confidence_sum: f64,
     confidence_count: usize,
     source_ranges: Vec<SourceLexicalRange>,
@@ -205,6 +207,7 @@ impl UtteranceBuilder {
             source_ids: span.source_transcript_ids.clone(),
             reasons: Vec::new(),
             overlap: span.overlap,
+            mixed: span.speaker_attribution.is_mixed(),
             confidence_sum: span.asr_confidence.unwrap_or_default(),
             confidence_count: usize::from(span.asr_confidence.is_some()),
             source_ranges: span.lexical_range.clone().into_iter().collect(),
@@ -220,6 +223,7 @@ impl UtteranceBuilder {
         self.source_ids.extend(span.source_transcript_ids.clone());
         self.reasons.extend(reasons.iter().cloned());
         self.overlap |= span.overlap;
+        self.mixed |= span.speaker_attribution.is_mixed();
         if let Some(confidence) = span.asr_confidence {
             self.confidence_sum += confidence;
             self.confidence_count += 1;
@@ -228,7 +232,6 @@ impl UtteranceBuilder {
     }
 
     fn finish(self, meeting_id: &str, algorithm_version: &str) -> ReconstructedUtterance {
-        let mixed = self.attribution.is_mixed();
         ReconstructedUtterance {
             id: stable_id(
                 "utterance",
@@ -247,7 +250,7 @@ impl UtteranceBuilder {
                 .then(|| (self.confidence_sum / self.confidence_count as f64).clamp(0.0, 1.0)),
             reconstruction_reasons: self.reasons,
             overlap: self.overlap,
-            mixed,
+            mixed: self.mixed,
             embedded_events: Vec::new(),
             algorithm_version: algorithm_version.to_string(),
             source_ranges: self.source_ranges,
@@ -319,11 +322,21 @@ fn config_hash(config: &UtteranceReconstructionConfig) -> String {
 fn trace_boundary(outcome: &BoundaryOutcome) {
     log::debug!(
         target: "utterance_reconstruction",
-        "boundary left={} right={} gap_ms={:?} same_speaker={:?} score={} decision={:?} reasons={:?}",
+        "boundary left={} right={} gap_ms={:?} timing_reliable={} same_speaker={:?} speaker_confidence={:?} speaker_reliable={} completeness={:?} continuity={:?} timing_score={} speaker_score={} punctuation_score={} semantic_score={} structural_score={} final_score={} decision={:?} reasons={:?}",
         outcome.evidence.left_source_transcript_id,
         outcome.evidence.right_source_transcript_id,
         outcome.evidence.gap_ms,
+        outcome.evidence.timing_reliable,
         outcome.evidence.same_speaker,
+        outcome.evidence.speaker_change_confidence,
+        outcome.evidence.speaker_change_reliable,
+        outcome.evidence.semantic.left_completeness,
+        outcome.evidence.semantic.cross_boundary_continuity,
+        outcome.score_components.timing_score,
+        outcome.score_components.speaker_score,
+        outcome.score_components.punctuation_score,
+        outcome.score_components.semantic_score,
+        outcome.score_components.structural_score,
         outcome.score,
         outcome.decision,
         outcome.reasons

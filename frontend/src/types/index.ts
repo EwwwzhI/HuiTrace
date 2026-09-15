@@ -198,6 +198,8 @@ export interface SourceLexicalRange {
 export type BoundaryReason =
   | 'same_speaker'
   | 'speaker_changed'
+  | 'reliable_speaker_change'
+  | 'ambiguous_speaker_change'
   | 'speaker_unknown'
   | 'short_gap'
   | 'medium_gap'
@@ -205,6 +207,9 @@ export type BoundaryReason =
   | 'strong_terminal_punctuation'
   | 'weak_punctuation'
   | 'continuation_prefix'
+  | 'sentence_complete'
+  | 'sentence_incomplete'
+  | 'semantic_continuity'
   | 'mixed_attribution'
   | 'overlap'
   | 'overlapping_timeline'
@@ -277,10 +282,40 @@ export interface UtteranceReconstructionResult {
     score: number;
     decision: 'split' | 'merge';
     reasons: BoundaryReason[];
+    evidence: {
+      left_source_transcript_id: string;
+      right_source_transcript_id: string;
+      gap_ms?: number | null;
+      same_speaker?: boolean | null;
+      speaker_change_confidence?: number | null;
+      speaker_change_reliable: boolean;
+      timing_reliable: boolean;
+      strong_terminal_punctuation: boolean;
+      weak_punctuation: boolean;
+      continuation_prefix: boolean;
+      projected_duration_ms: number;
+      projected_text_length: number;
+      mixed_attribution: boolean;
+      overlap: boolean;
+      backchannel_between: boolean;
+      semantic: {
+        baseline_version: string;
+        left_completeness?: number | null;
+        cross_boundary_continuity?: number | null;
+      };
+      prosody: { available: boolean };
+    };
+    score_components: {
+      timing_score: number;
+      speaker_score: number;
+      punctuation_score: number;
+      semantic_score: number;
+      structural_score: number;
+    };
   }>;
   config_version: string;
   config_hash: string;
-  config: Record<string, number>;
+  config: Record<string, number | boolean>;
   metrics: ReconstructionMetrics;
 }
 

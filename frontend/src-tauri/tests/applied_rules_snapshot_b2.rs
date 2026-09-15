@@ -62,6 +62,7 @@ async fn seed_meeting(pool: &SqlitePool, ctx: &AuthContext) -> String {
         audio_source: None,
         speaker_assignment_method: None,
         speaker_overlap: None,
+        timing: None,
     }];
     TranscriptsRepository::create_meeting_with_segments(pool, ctx, "Saha", &segments, None)
         .await

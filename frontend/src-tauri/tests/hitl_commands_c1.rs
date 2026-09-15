@@ -102,6 +102,7 @@ fn segment(id: &str, text: &str, start: f64, end: f64) -> TranscriptSegment {
         audio_source: None,
         speaker_assignment_method: None,
         speaker_overlap: None,
+        timing: None,
     }
 }
 

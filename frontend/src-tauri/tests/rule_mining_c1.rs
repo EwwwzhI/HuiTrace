@@ -56,6 +56,7 @@ async fn seed(pool: &SqlitePool, ctx: &AuthContext, n: usize, content: &str) -> 
         audio_source: None,
         speaker_assignment_method: None,
         speaker_overlap: None,
+        timing: None,
     }];
     let meeting = TranscriptsRepository::create_meeting_with_segments(
         pool,

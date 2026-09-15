@@ -3,6 +3,7 @@ mod assembler;
 mod boundary;
 mod config;
 mod normalizer;
+mod semantic;
 mod timing;
 mod types;
 
@@ -51,7 +52,7 @@ pub fn reconstruct_v2_with_config(
         meeting_id,
         &enhanced.spans,
         config,
-        ALGORITHM_VERSION_V2,
+        ALGORITHM_VERSION_V3,
         enhanced.metrics,
         enhanced.alignment_diagnostics,
         enhanced.timing_diagnostics,

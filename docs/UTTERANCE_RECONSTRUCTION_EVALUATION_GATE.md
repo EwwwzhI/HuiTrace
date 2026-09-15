@@ -2,10 +2,12 @@
 
 ## Scope
 
-Phase 3 measures the existing V1 and V2 reconstruction pipelines. It does not
-add ASR, diarization, forced alignment, punctuation, language-model rewriting,
-or speech-separation inference. Raw transcript text remains the source of truth;
-reconstruction remains derived-on-read.
+The gate compares the frozen V1 baseline with the latest timing-aware,
+semantic-baseline reconstruction. It does not add ASR, diarization, forced
+alignment, language-model rewriting, or speech-separation inference. Raw
+transcript text remains the source of truth; reconstruction remains
+derived-on-read. See `UTTERANCE_RECONSTRUCTION_V3.md` for the current pipeline
+and deterministic semantic evidence contract.
 
 ## Frozen architecture
 
@@ -49,6 +51,14 @@ sweeps replay only deterministic utterance reconstruction over frozen evidence.
   boundary. Uncertain boundaries are excluded from strict scoring.
 - `dataset_split`: `calibration` or `evaluation`, assigned at meeting level.
 
+Every interval, utterance and boundary has a `pending`, `confirmed_blind`, or
+`reviewed` workflow status. Pending items block Blind completion; Review
+completion requires every item to be reviewed. Empty GT and checkbox-only
+completion fail closed. Repeated autosaves use same-directory replacement with
+rollback so Windows can safely replace an existing draft. Client saves are
+serialized with monotonic edit revisions, so an older completion cannot mark a
+newer edit as saved.
+
 Annotators never edit ASR text. Blind mode receives no raw ASR, diarizer, V1,
 V2, timing, alignment, or boundary suggestions. Review is locked until Blind is
 complete and labels all system data as non-Ground-Truth evidence.
@@ -61,7 +71,9 @@ The development workbench is available at:
 
 It reuses the existing WaveSurfer timeline, region editing, seek/zoom,
 meeting-local speaker allocation, autosave, reopen, undo/redo, overlap and
-uncertainty controls. Artifact and GT paths stay local.
+uncertainty controls. Artifact and GT paths stay local. Every Blind or Review
+open hashes the selected media and rejects it unless it matches the frozen
+artifact's source-media identity.
 
 ## Metrics and matching
 
@@ -73,9 +85,10 @@ Assigned-only Accuracy = correct assigned / assigned
 Selective Accuracy = correct assigned / eligible GT utterances
 ```
 
-GT speakers are mapped one-to-one to production clusters using temporal overlap
-from non-overlap, non-uncertain GT speaker intervals. Unknown, Ambiguous and
-Mixed are abstentions, never silently converted to Single.
+GT speakers are mapped one-to-one to production clusters with a global
+maximum-weight assignment using temporal overlap from non-overlap,
+non-uncertain GT speaker intervals. Unknown, Ambiguous and Mixed are
+abstentions, never silently converted to Single.
 
 Boundary matching is deterministic nearest-neighbour, one-to-one matching.
 Reports include separate ±250 ms and ±500 ms collars:
@@ -86,7 +99,15 @@ Recall = matched references / references
 F1 = harmonic mean
 Over-segmentation = unmatched predictions / predictions
 Under-segmentation = unmatched references / references
+False Split Rate = Over-segmentation
+False Merge Rate = Under-segmentation
 ```
+
+The report also emits selective Speaker Attribution Accuracy, speaker-handoff
+recall within the 500 ms collar as Speaker Boundary Accuracy, and signed
+Utterance Count Error. Mainline annotation buckets include same-speaker
+continuity, real same-speaker boundaries, ASR fragmentation, and VAD
+fragmentation so backchannel cases do not dominate the primary quality view.
 
 Matched timing errors report MAE, median, P90 and P95. Handoff boundaries are
 scored separately. Parakeet NativeTokenEmission transitions also report median,
