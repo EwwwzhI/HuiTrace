@@ -10,7 +10,7 @@ pub struct UtteranceReconstructionConfig {
     pub split_score_threshold: i32,
     pub speaker_changed_score: i32,
     pub ambiguous_speaker_changed_score: i32,
-    pub reliable_speaker_change_confidence: f64,
+    pub reliable_speaker_change_threshold: f64,
     pub medium_gap_score: i32,
     pub terminal_punctuation_score: i32,
     pub same_speaker_score: i32,
@@ -46,7 +46,7 @@ impl Default for UtteranceReconstructionConfig {
             split_score_threshold: 3,
             speaker_changed_score: 4,
             ambiguous_speaker_changed_score: 1,
-            reliable_speaker_change_confidence: 0.75,
+            reliable_speaker_change_threshold: 0.75,
             medium_gap_score: 2,
             terminal_punctuation_score: 2,
             same_speaker_score: -3,
@@ -74,13 +74,22 @@ impl Default for UtteranceReconstructionConfig {
 }
 
 impl UtteranceReconstructionConfig {
+    /// Immutable benchmark baseline reconstructed from commit 416b807.
+    pub fn frozen_v1() -> Self {
+        Self {
+            semantic_boundary_enabled: false,
+            ..Self::default()
+        }
+    }
+
     pub fn effective_alignment_tolerance_ms(&self) -> i64 {
         self.alignment_tolerance_ms
             .clamp(0, self.max_alignment_tolerance_ms.max(0))
     }
 }
 
-pub const CONFIG_VERSION: &str = "utterance-reconstruction-config-v3";
+pub const CONFIG_VERSION: &str = "utterance-reconstruction-config-v4";
+pub const FROZEN_V1_CONFIG_VERSION: &str = "utterance-reconstruction-config-v1-frozen";
 
 pub const CONTINUATION_PREFIXES: &[&str] = &[
     "但是",

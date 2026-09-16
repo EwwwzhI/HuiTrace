@@ -268,27 +268,38 @@ export interface ReconstructionMetrics {
   cross_speaker_raw_chunk_count: number;
   resolved_cross_speaker_chunk_count: number;
   resolved_cross_speaker_chunk_rate: number;
-  fallback_to_v1_count: number;
-  fallback_to_v1_rate: number;
+  chunk_fallback_count: number;
+  chunk_fallback_rate: number;
   lexical_preservation_failure_count: number;
 }
 
 export interface UtteranceReconstructionResult {
   meeting_id: string;
   algorithm_version: string;
+  profile: {
+    algorithm_version: string;
+    timing_mode: 'chunk_fallback' | 'native_lexical_timing';
+    boundary_policy: 'v1_frozen' | 'v3_semantic_baseline';
+    boundary_policy_version: string;
+    semantic_model_version?: string | null;
+    alignment_version?: string | null;
+  };
   utterances: ReconstructedUtterance[];
   events: ReconstructedEvent[];
   boundaries: Array<{
     score: number;
     decision: 'split' | 'merge';
+    decision_source: 'hard_safety_constraint' | 'reliable_speaker_handoff' | 'frozen_policy_hard_split' | 'scored_decision';
     reasons: BoundaryReason[];
     evidence: {
       left_source_transcript_id: string;
       right_source_transcript_id: string;
       gap_ms?: number | null;
       same_speaker?: boolean | null;
-      speaker_change_confidence?: number | null;
+      speaker_change_reliability?: number | null;
       speaker_change_reliable: boolean;
+      left_speaker_attribution_source: 'manual' | 'lexical_temporal_overlap' | 'chunk_temporal_overlap' | 'persisted_fallback' | 'unknown';
+      right_speaker_attribution_source: 'manual' | 'lexical_temporal_overlap' | 'chunk_temporal_overlap' | 'persisted_fallback' | 'unknown';
       timing_reliable: boolean;
       strong_terminal_punctuation: boolean;
       weak_punctuation: boolean;
@@ -298,11 +309,11 @@ export interface UtteranceReconstructionResult {
       mixed_attribution: boolean;
       overlap: boolean;
       backchannel_between: boolean;
-      semantic: {
+      semantic?: {
         baseline_version: string;
         left_completeness?: number | null;
         cross_boundary_continuity?: number | null;
-      };
+      } | null;
       prosody: { available: boolean };
     };
     score_components: {

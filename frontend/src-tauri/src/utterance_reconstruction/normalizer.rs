@@ -5,12 +5,14 @@ use crate::database::repositories::speaker_turn::SpeakerTurn;
 use crate::diarization::short_turn_event::ShortTurnEvent;
 use crate::diarization::types::SegmentKind;
 
-use super::types::{AtomicSpan, SpeakerAttribution};
+use super::config::UtteranceReconstructionConfig;
+use super::types::{AtomicSpan, SpeakerAttribution, SpeakerAttributionSource};
 
 pub fn normalize_timeline(
     transcripts: &[Transcript],
     speaker_turns: &[SpeakerTurn],
     short_turn_events: &[ShortTurnEvent],
+    config: &UtteranceReconstructionConfig,
 ) -> Vec<AtomicSpan> {
     let mut event_confidence = BTreeMap::new();
     for event in short_turn_events {
@@ -51,6 +53,21 @@ pub fn normalize_timeline(
                 .filter(|key| !key.is_empty())
                 .collect::<BTreeSet<_>>();
 
+            let chunk_duration_ms = end_ms.saturating_sub(start_ms);
+            let overlap_by_speaker = keys
+                .iter()
+                .map(|key| {
+                    let mut intervals = overlapping_turns
+                        .iter()
+                        .filter(|turn| &turn.speaker_key == key)
+                        .map(|turn| (turn.start_ms.max(start_ms), turn.end_ms.min(end_ms)))
+                        .collect::<Vec<_>>();
+                    intervals.sort_unstable();
+                    let overlap_ms = union_duration(&intervals);
+                    (key, overlap_ms)
+                })
+                .collect::<Vec<_>>();
+
             let attribution = if transcript.speaker_overlap != 0 {
                 SpeakerAttribution::Mixed {
                     speaker_keys: keys.iter().cloned().collect(),
@@ -75,6 +92,28 @@ pub fn normalize_timeline(
                     .unwrap_or(SpeakerAttribution::Unknown)
             };
 
+            let (speaker_assignment_reliability, speaker_attribution_source) =
+                if transcript.speaker_assignment_method == "manual" {
+                    (None, SpeakerAttributionSource::Manual)
+                } else if matches!(attribution, SpeakerAttribution::Single { .. })
+                    && chunk_duration_ms > 0
+                    && overlap_by_speaker.len() == 1
+                {
+                    let best_ratio = overlap_by_speaker[0].1 as f64 / chunk_duration_ms as f64;
+                    let reliability = (best_ratio >= config.assignment_min_overlap_ratio
+                        && best_ratio >= config.assignment_min_margin)
+                        .then_some(best_ratio.clamp(0.0, 1.0));
+                    (reliability, SpeakerAttributionSource::ChunkTemporalOverlap)
+                } else if !keys.is_empty() {
+                    (None, SpeakerAttributionSource::ChunkTemporalOverlap)
+                } else if transcript.speaker_id.is_some() {
+                    // Persisted confidence describes an earlier assignment procedure. It
+                    // must not masquerade as reliability recomputed from accepted turns.
+                    (None, SpeakerAttributionSource::PersistedFallback)
+                } else {
+                    (None, SpeakerAttributionSource::Unknown)
+                };
+
             let linked_event = event_confidence.get(&transcript.id);
             let segment_kind = linked_event
                 .map(|(kind, _)| kind.clone())
@@ -88,7 +127,8 @@ pub fn normalize_timeline(
                 speaker_attribution: attribution,
                 source_transcript_ids: vec![transcript.id.clone()],
                 asr_confidence: transcript.asr_confidence,
-                speaker_confidence: transcript.speaker_confidence,
+                speaker_assignment_reliability,
+                speaker_attribution_source,
                 overlap: transcript.speaker_overlap != 0,
                 segment_kind,
                 short_turn_confidence: linked_event.map(|(_, confidence)| *confidence),
@@ -96,6 +136,25 @@ pub fn normalize_timeline(
             }
         })
         .collect()
+}
+
+fn union_duration(intervals: &[(i64, i64)]) -> i64 {
+    let Some(&(first_start, first_end)) = intervals.first() else {
+        return 0;
+    };
+    let mut total = 0_i64;
+    let mut start = first_start;
+    let mut end = first_end;
+    for &(next_start, next_end) in &intervals[1..] {
+        if next_start <= end {
+            end = end.max(next_end);
+        } else {
+            total = total.saturating_add(end.saturating_sub(start));
+            start = next_start;
+            end = next_end;
+        }
+    }
+    total.saturating_add(end.saturating_sub(start))
 }
 
 pub fn normalize_whitespace(text: &str) -> String {

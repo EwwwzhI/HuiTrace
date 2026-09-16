@@ -41,7 +41,15 @@ describe('utterance reconstruction view', () => {
   it('defaults to reconstructed utterances and retains raw source provenance', async () => {
     invoke.mockResolvedValue({
       meeting_id: 'm1',
-      algorithm_version: 'utterance-reconstruction-v1',
+      algorithm_version: 'utterance-reconstruction-v3-semantic-baseline',
+      profile: {
+        algorithm_version: 'utterance-reconstruction-v3-semantic-baseline',
+        timing_mode: 'chunk_fallback',
+        boundary_policy: 'v3_semantic_baseline',
+        boundary_policy_version: 'boundary-policy-v3-semantic-baseline',
+        semantic_model_version: 'deterministic-semantic-baseline-v1',
+        alignment_version: 'lexical-temporal-alignment-v1',
+      },
       utterances: [{
         id: 'utterance-1',
         meeting_id: 'm1',
@@ -55,7 +63,7 @@ describe('utterance reconstruction view', () => {
         overlap: false,
         mixed: false,
         embedded_events: [],
-        algorithm_version: 'utterance-reconstruction-v1',
+        algorithm_version: 'utterance-reconstruction-v3-semantic-baseline',
       }],
       events: [],
       boundaries: [],

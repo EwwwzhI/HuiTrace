@@ -27,32 +27,52 @@ pub fn reconstruct_v1_with_config(
     transcripts: &[Transcript],
     speaker_turns: &[SpeakerTurn],
     short_turn_events: &[ShortTurnEvent],
-    config: &UtteranceReconstructionConfig,
+    _config: &UtteranceReconstructionConfig,
 ) -> ReconstructionResult {
-    let spans = normalize_timeline(transcripts, speaker_turns, short_turn_events);
-    reconstruct(meeting_id, &spans, config)
+    let frozen_config = UtteranceReconstructionConfig::frozen_v1();
+    let spans = normalize_timeline(
+        transcripts,
+        speaker_turns,
+        short_turn_events,
+        &frozen_config,
+    );
+    reconstruct(meeting_id, &spans, &frozen_config)
 }
 
-pub fn reconstruct_v2_with_config(
+pub fn reconstruct_v3_with_config(
     meeting_id: &str,
     transcripts: &[Transcript],
     speaker_turns: &[SpeakerTurn],
     short_turn_events: &[ShortTurnEvent],
     config: &UtteranceReconstructionConfig,
 ) -> ReconstructionResult {
-    let v1_spans = normalize_timeline(transcripts, speaker_turns, short_turn_events);
-    let enhanced = timing::enhance_timeline(transcripts, speaker_turns, &v1_spans, config);
-    if enhanced.valid_timing_chunks == 0 {
-        let mut result = reconstruct(meeting_id, &v1_spans, config);
-        result.metrics = enhanced.metrics;
-        result.timing_diagnostics = enhanced.timing_diagnostics;
-        return result;
-    }
+    let chunk_spans = normalize_timeline(transcripts, speaker_turns, short_turn_events, config);
+    let enhanced = timing::enhance_timeline(transcripts, speaker_turns, &chunk_spans, config);
+    let timing_mode = if enhanced.valid_timing_chunks == 0 {
+        ReconstructionTimingMode::ChunkFallback
+    } else {
+        ReconstructionTimingMode::NativeLexicalTiming
+    };
+    let spans = if enhanced.valid_timing_chunks == 0 {
+        &chunk_spans
+    } else {
+        &enhanced.spans
+    };
     assembler::reconstruct_with_details(
         meeting_id,
-        &enhanced.spans,
+        spans,
         config,
-        ALGORITHM_VERSION_V3,
+        ReconstructionProfile {
+            algorithm_version: ALGORITHM_VERSION_V3.to_string(),
+            timing_mode,
+            boundary_policy: BoundaryPolicy::V3SemanticBaseline,
+            boundary_policy_version: BOUNDARY_POLICY_VERSION_V3.to_string(),
+            semantic_model_version: config
+                .semantic_boundary_enabled
+                .then(|| SEMANTIC_MODEL_VERSION_V1.to_string()),
+            alignment_version: (timing_mode == ReconstructionTimingMode::NativeLexicalTiming)
+                .then(|| ALIGNMENT_VERSION_V1.to_string()),
+        },
         enhanced.metrics,
         enhanced.alignment_diagnostics,
         enhanced.timing_diagnostics,
@@ -79,7 +99,7 @@ pub async fn api_get_reconstructed_utterances(
     let short_turn_events = short_turn_events
         .map_err(|error| format!("load short-turn events for reconstruction: {error:#}"))?;
     let config = UtteranceReconstructionConfig::default();
-    Ok(reconstruct_v2_with_config(
+    Ok(reconstruct_v3_with_config(
         &meeting_id,
         &transcripts,
         &speaker_turns,

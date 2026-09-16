@@ -14,7 +14,7 @@ and deterministic semantic evidence contract.
 ```text
 Production Meeting
        ↓
-UtteranceReconstructionArtifact v1
+UtteranceReconstructionArtifact v2
        ↓
 Blind Annotation
        ↓
@@ -26,14 +26,14 @@ QA
        ↓
 Frozen Benchmark
        ↓
-V1 vs V2 + Error Taxonomy
+Frozen Baseline vs Candidate + Error Taxonomy
        ↓
 Phase 4 Decision
 ```
 
 The reconstruction artifact embeds the exact persisted transcripts (including
-provider-native timing), accepted speaker turns, ShortTurn events, V1 output,
-V2 output, algorithm/config provenance, diagnostics, and diagnostic coverage
+provider-native timing), accepted speaker turns, ShortTurn events, Frozen
+Baseline output, Candidate output, full reconstruction profiles, diagnostics, and diagnostic coverage
 metrics. It binds the source Production Artifact and source media by SHA-256.
 An internal integrity hash covers deterministic JSON with the hash field blank;
 modified artifacts fail closed.
@@ -59,8 +59,8 @@ rollback so Windows can safely replace an existing draft. Client saves are
 serialized with monotonic edit revisions, so an older completion cannot mark a
 newer edit as saved.
 
-Annotators never edit ASR text. Blind mode receives no raw ASR, diarizer, V1,
-V2, timing, alignment, or boundary suggestions. Review is locked until Blind is
+Annotators never edit ASR text. Blind mode receives no raw ASR, diarizer,
+Frozen Baseline, Candidate, timing, alignment, or boundary suggestions. Review is locked until Blind is
 complete and labels all system data as non-Ground-Truth evidence.
 
 The development workbench is available at:
@@ -152,7 +152,7 @@ It writes:
 2. Include handoff, backchannel, short speech, overlap, noise, Chinese, English,
    mixed language, and timing-unavailable examples across the set.
 3. Finish normal production ASR, diarization and ShortTurn processing.
-4. Export Production Artifact v2, then export Reconstruction Artifact v1 bound
+4. Export Production Artifact v2, then export Reconstruction Artifact v2 bound
    to that artifact and source-media hash.
 5. Initialize one meeting-level GT file as Calibration or Evaluation.
 6. Complete Blind speaker intervals, utterances and boundaries; close/reopen to
@@ -160,7 +160,7 @@ It writes:
 7. Unlock Review, inspect system evidence only for annotation mistakes, and do
    not automatically apply suggestions.
 8. Complete Review and QA, then run the benchmark.
-9. Verify V1 and V2 share the same artifact identity and lexical preservation is
+9. Verify Frozen Baseline and Candidate share the same artifact identity and lexical preservation is
    100% before interpreting any metric.
 10. Treat this as workflow/metric smoke only, not a formal quality conclusion.
 

@@ -1,0 +1,9 @@
+[
+  {"name":"unreliable_timing","left_speaker":"a","right_speaker":"a","gap_ms":100,"left_text":"甲","right_text":"乙","timing_reliable":false,"mixed":false,"overlap":false,"expected_utterances":2,"expected_score":2147483647,"expected_reason":"unreliable_timing"},
+  {"name":"mixed_attribution","left_speaker":"a","right_speaker":"a","gap_ms":100,"left_text":"甲","right_text":"乙","timing_reliable":true,"mixed":true,"overlap":false,"expected_utterances":2,"expected_score":2147483647,"expected_reason":"mixed_attribution"},
+  {"name":"overlap","left_speaker":"a","right_speaker":"a","gap_ms":100,"left_text":"甲","right_text":"乙","timing_reliable":true,"mixed":false,"overlap":true,"expected_utterances":2,"expected_score":2147483647,"expected_reason":"overlap"},
+  {"name":"speaker_change","left_speaker":"a","right_speaker":"b","gap_ms":100,"left_text":"甲","right_text":"乙","timing_reliable":true,"mixed":false,"overlap":false,"expected_utterances":2,"expected_score":2147483647,"expected_reason":"speaker_changed"},
+  {"name":"long_silence","left_speaker":"a","right_speaker":"a","gap_ms":2000,"left_text":"甲","right_text":"乙","timing_reliable":true,"mixed":false,"overlap":false,"expected_utterances":2,"expected_score":2147483647,"expected_reason":"long_silence"},
+  {"name":"terminal_medium_gap","left_speaker":"a","right_speaker":"a","gap_ms":900,"left_text":"已经完成。","right_text":"下一项","timing_reliable":true,"mixed":false,"overlap":false,"expected_utterances":1,"expected_score":1,"expected_reason":"below_score_threshold"},
+  {"name":"continuation_short_gap","left_speaker":"a","right_speaker":"a","gap_ms":100,"left_text":"这个方案","right_text":"所以继续推进","timing_reliable":true,"mixed":false,"overlap":false,"expected_utterances":1,"expected_score":-6,"expected_reason":"continuation_prefix"}
+]

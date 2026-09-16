@@ -25,11 +25,11 @@ The derived read path is:
 
 ```text
 api_get_reconstructed_utterances
-  -> normalize_timeline (raw-row fallback attribution)
+  -> normalize_timeline (chunk fallback attribution + recomputed reliability)
   -> timing::enhance_timeline (validated provider timing only)
   -> alignment::align_words (lexical timing x accepted speaker turns)
   -> AtomicSpan
-  -> semantic::evaluate + boundary::decide_boundary
+  -> BoundaryPolicy::V3SemanticBaseline + optional semantic::evaluate
   -> assembler::reconstruct_with_details
   -> ReconstructionResult
 ```
@@ -53,7 +53,18 @@ post-hoc diarization is not yet available during capture.
   `WhisperProvider` therefore advertises no timing capability and returns
   `timing: None`.
 - Missing, malformed, non-monotonic, or out-of-bounds provider timing falls
-  back to the exact V1 span. No lexical timestamps are inferred or fabricated.
+  back to the raw chunk span. This is still the V3 algorithm with
+  `timing_mode=chunk_fallback`; it never changes identity to V1. No lexical
+  timestamps are inferred or fabricated.
+
+## Version model
+
+Every result carries a `ReconstructionProfile` with independent versions for
+the algorithm, timing mode, boundary policy, semantic model and alignment.
+`BoundaryPolicy::V1Frozen` replays the boundary behavior from commit `416b807`
+and never calls the semantic baseline. `BoundaryPolicy::V3SemanticBaseline`
+is the current Candidate. Configuration schema is v4; the unchanged semantic
+baseline remains `deterministic-semantic-baseline-v1`.
 
 ## Root causes addressed
 
@@ -84,9 +95,11 @@ false single-speaker claim.
 
 This is not presented as an NLP model. It uses no transcript rewriting and has
 a versioned interface that a future local model can replace. Every boundary
-now includes timing reliability, speaker-change confidence/reliability,
+now includes timing reliability, speaker-assignment reliability and source,
 semantic values, unavailable prosody state, per-family score components, final
-score, decision, and reasons. Debug builds log these values.
+score, decision source, decision, and reasons. Raw punctuation/prefix features
+remain visible, but when semantic scoring is enabled they are not scored again.
+Debug builds log these values.
 
 ## Final pipeline
 
@@ -113,7 +126,10 @@ Audio -> VAD fragments -> ASR raw text (source of truth)
 
 ## Benchmark policy
 
-The Ground Truth schema supports explicit mainline buckets for
+Reconstruction Artifact schema v2 names the two outputs `baseline` and
+`candidate`; schema v1 artifacts with ambiguous `v1`/`v2` fields are rejected
+and must be regenerated. The Frozen Baseline is immutable and parameter sweeps
+tune only the Candidate. The Ground Truth schema supports explicit buckets for
 `same_speaker_continuity`, `same_speaker_boundary`, `asr_fragmentation`, and
 `vad_fragmentation`, in addition to speaker handoff and existing diagnostic
 buckets. Reports expose Boundary Precision/Recall/F1, False Split Rate, False

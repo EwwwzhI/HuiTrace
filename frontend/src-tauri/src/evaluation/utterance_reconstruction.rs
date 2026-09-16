@@ -21,14 +21,14 @@ use crate::evaluation::production_artifact::{
     app_commit_sha, read_and_validate_artifact, ArtifactBackend, ARTIFACT_SCHEMA_VERSION,
 };
 use crate::utterance_reconstruction::{
-    reconstruct_v2_with_config, ReconstructedUtterance, ReconstructionResult, SpeakerAttribution,
+    reconstruct_v3_with_config, ReconstructedUtterance, ReconstructionResult, SpeakerAttribution,
     UtteranceReconstructionConfig,
 };
 use crate::{context, state::AppState};
 
-pub const RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION: u32 = 2;
 pub const UTTERANCE_GROUND_TRUTH_SCHEMA_VERSION: u32 = 1;
-pub const RECONSTRUCTION_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const RECONSTRUCTION_REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UtteranceGroundTruthManifestRow {
@@ -68,8 +68,8 @@ pub struct UtteranceReconstructionArtifact {
     pub transcripts: Vec<Transcript>,
     pub speaker_turns: Vec<SpeakerTurn>,
     pub short_turn_events: Vec<ShortTurnEvent>,
-    pub v1: ReconstructionResult,
-    pub v2: ReconstructionResult,
+    pub baseline: ReconstructionResult,
+    pub candidate: ReconstructionResult,
     /// SHA-256 of deterministic JSON with this field set to an empty string.
     pub integrity_sha256: String,
 }
@@ -83,7 +83,11 @@ impl UtteranceReconstructionArtifact {
 
     pub fn validate(&self, expected_meeting_id: Option<&str>) -> Result<()> {
         if self.schema_version != RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION {
-            bail!("unsupported reconstruction artifact schema");
+            bail!(
+                "unsupported reconstruction artifact schema {} (expected {}; schema v1 used ambiguous v1/v2 fields and must be regenerated)",
+                self.schema_version,
+                RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION
+            );
         }
         require_id("artifact_id", &self.artifact_id)?;
         require_id("meeting_id", &self.meeting_id)?;
@@ -111,10 +115,22 @@ impl UtteranceReconstructionArtifact {
                 );
             }
         }
-        if self.v1.meeting_id != self.meeting_id || self.v2.meeting_id != self.meeting_id {
+        if self.baseline.meeting_id != self.meeting_id
+            || self.candidate.meeting_id != self.meeting_id
+        {
             bail!("reconstruction outputs belong to another meeting");
         }
-        for (label, result) in [("V1", &self.v1), ("V2", &self.v2)] {
+        if self.baseline.profile.boundary_policy
+            != crate::utterance_reconstruction::BoundaryPolicy::V1Frozen
+            || self.candidate.profile.boundary_policy
+                != crate::utterance_reconstruction::BoundaryPolicy::V3SemanticBaseline
+        {
+            bail!("artifact must contain Frozen Baseline and Candidate profiles in their named fields");
+        }
+        for (label, result) in [
+            ("Frozen Baseline", &self.baseline),
+            ("Candidate", &self.candidate),
+        ] {
             require_id(
                 &format!("{label} algorithm_version"),
                 &result.algorithm_version,
@@ -381,8 +397,8 @@ pub struct ReconstructionReviewEvidence {
     pub raw_transcripts: Vec<Transcript>,
     pub speaker_turns: Vec<SpeakerTurn>,
     pub short_turn_events: Vec<ShortTurnEvent>,
-    pub v1: ReconstructionResult,
-    pub v2: ReconstructionResult,
+    pub baseline: ReconstructionResult,
+    pub candidate: ReconstructionResult,
     pub system_label: String,
 }
 
@@ -410,8 +426,8 @@ pub fn annotation_view(
                 raw_transcripts: artifact.transcripts.clone(),
                 speaker_turns: artifact.speaker_turns.clone(),
                 short_turn_events: artifact.short_turn_events.clone(),
-                v1: artifact.v1.clone(),
-                v2: artifact.v2.clone(),
+                baseline: artifact.baseline.clone(),
+                candidate: artifact.candidate.clone(),
                 system_label: "SYSTEM SUGGESTION — NOT GROUND TRUTH".into(),
             })
         }
@@ -536,18 +552,18 @@ pub struct UtteranceReconstructionReport {
     pub source_media: FrozenFileIdentity,
     pub transcription_run_id: String,
     pub asr: ArtifactBackend,
-    pub v1_algorithm_version: String,
-    pub v1_config_hash: String,
-    pub v1_config: UtteranceReconstructionConfig,
-    pub v1_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
-    pub v2_algorithm_version: String,
-    pub v2_config_hash: String,
-    pub v2_config: UtteranceReconstructionConfig,
-    pub v2_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
-    pub v1: AlgorithmMetrics,
-    pub v2: AlgorithmMetrics,
-    pub per_bucket_v1: BTreeMap<ScenarioBucket, AlgorithmMetrics>,
-    pub per_bucket_v2: BTreeMap<ScenarioBucket, AlgorithmMetrics>,
+    pub baseline_profile: crate::utterance_reconstruction::ReconstructionProfile,
+    pub baseline_config_hash: String,
+    pub baseline_config: UtteranceReconstructionConfig,
+    pub baseline_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
+    pub candidate_profile: crate::utterance_reconstruction::ReconstructionProfile,
+    pub candidate_config_hash: String,
+    pub candidate_config: UtteranceReconstructionConfig,
+    pub candidate_self_diagnostics: crate::utterance_reconstruction::ReconstructionMetrics,
+    pub baseline: AlgorithmMetrics,
+    pub candidate: AlgorithmMetrics,
+    pub per_bucket_baseline: BTreeMap<ScenarioBucket, AlgorithmMetrics>,
+    pub per_bucket_candidate: BTreeMap<ScenarioBucket, AlgorithmMetrics>,
     pub parameter_sweep: Vec<SweepPoint>,
     pub parakeet_emission_to_handoff_error: EmissionHandoffMetrics,
     pub errors: BTreeMap<String, usize>,
@@ -561,43 +577,63 @@ pub fn benchmark(
     ground_truth: &UtteranceGroundTruth,
 ) -> Result<UtteranceReconstructionReport> {
     ground_truth.validate(artifact)?;
-    if !lexically_preserved(artifact, &artifact.v1) || !lexically_preserved(artifact, &artifact.v2)
+    if !lexically_preserved(artifact, &artifact.baseline)
+        || !lexically_preserved(artifact, &artifact.candidate)
     {
         bail!("LEXICAL_GROUPING_ERROR: lexical preservation must be 100%");
     }
     let mapping = align_speakers(&ground_truth.speaker_intervals, &artifact.speaker_turns);
-    let v1 = score_algorithm(artifact, ground_truth, &artifact.v1, &mapping, None);
-    let v2 = score_algorithm(artifact, ground_truth, &artifact.v2, &mapping, None);
-    let mut per_bucket_v1 = BTreeMap::new();
-    let mut per_bucket_v2 = BTreeMap::new();
+    let baseline = score_algorithm(artifact, ground_truth, &artifact.baseline, &mapping, None);
+    let candidate = score_algorithm(artifact, ground_truth, &artifact.candidate, &mapping, None);
+    let mut per_bucket_baseline = BTreeMap::new();
+    let mut per_bucket_candidate = BTreeMap::new();
     for bucket in all_buckets(ground_truth) {
-        per_bucket_v1.insert(
+        per_bucket_baseline.insert(
             bucket,
-            score_algorithm(artifact, ground_truth, &artifact.v1, &mapping, Some(bucket)),
+            score_algorithm(
+                artifact,
+                ground_truth,
+                &artifact.baseline,
+                &mapping,
+                Some(bucket),
+            ),
         );
-        per_bucket_v2.insert(
+        per_bucket_candidate.insert(
             bucket,
-            score_algorithm(artifact, ground_truth, &artifact.v2, &mapping, Some(bucket)),
+            score_algorithm(
+                artifact,
+                ground_truth,
+                &artifact.candidate,
+                &mapping,
+                Some(bucket),
+            ),
         );
     }
-    let parameter_sweep = parameter_sweep(artifact, ground_truth, &mapping);
+    let parameter_sweep = if ground_truth.dataset_split == DatasetSplit::Calibration {
+        parameter_sweep(artifact, ground_truth, &mapping)
+    } else {
+        // Evaluation is a frozen holdout: never tune candidate parameters on it.
+        Vec::new()
+    };
     let mut errors = BTreeMap::new();
-    if v2.utterance_boundary_500ms.over_segmentation_rate > 0.0 {
+    if candidate.utterance_boundary_500ms.over_segmentation_rate > 0.0 {
         errors.insert(
             format!("{:?}", ErrorTaxonomy::BoundaryOverSegmentation),
-            v2.utterance_boundary_500ms.predicted - v2.utterance_boundary_500ms.matched,
+            candidate.utterance_boundary_500ms.predicted
+                - candidate.utterance_boundary_500ms.matched,
         );
     }
-    if v2.utterance_boundary_500ms.under_segmentation_rate > 0.0 {
+    if candidate.utterance_boundary_500ms.under_segmentation_rate > 0.0 {
         errors.insert(
             format!("{:?}", ErrorTaxonomy::BoundaryUnderSegmentation),
-            v2.utterance_boundary_500ms.reference - v2.utterance_boundary_500ms.matched,
+            candidate.utterance_boundary_500ms.reference
+                - candidate.utterance_boundary_500ms.matched,
         );
     }
-    if artifact.v2.metrics.fallback_to_v1_count > 0 {
+    if artifact.candidate.metrics.chunk_fallback_count > 0 {
         errors.insert(
             format!("{:?}", ErrorTaxonomy::TimingUnavailable),
-            artifact.v2.metrics.fallback_to_v1_count,
+            artifact.candidate.metrics.chunk_fallback_count,
         );
     }
     Ok(UtteranceReconstructionReport {
@@ -611,18 +647,18 @@ pub fn benchmark(
         source_media: artifact.source_media.clone(),
         transcription_run_id: artifact.transcription_run_id.clone(),
         asr: artifact.asr.clone(),
-        v1_algorithm_version: artifact.v1.algorithm_version.clone(),
-        v1_config_hash: artifact.v1.config_hash.clone(),
-        v1_config: artifact.v1.config.clone(),
-        v1_self_diagnostics: artifact.v1.metrics.clone(),
-        v2_algorithm_version: artifact.v2.algorithm_version.clone(),
-        v2_config_hash: artifact.v2.config_hash.clone(),
-        v2_config: artifact.v2.config.clone(),
-        v2_self_diagnostics: artifact.v2.metrics.clone(),
-        v1,
-        v2,
-        per_bucket_v1,
-        per_bucket_v2,
+        baseline_profile: artifact.baseline.profile.clone(),
+        baseline_config_hash: artifact.baseline.config_hash.clone(),
+        baseline_config: artifact.baseline.config.clone(),
+        baseline_self_diagnostics: artifact.baseline.metrics.clone(),
+        candidate_profile: artifact.candidate.profile.clone(),
+        candidate_config_hash: artifact.candidate.config_hash.clone(),
+        candidate_config: artifact.candidate.config.clone(),
+        candidate_self_diagnostics: artifact.candidate.metrics.clone(),
+        baseline,
+        candidate,
+        per_bucket_baseline,
+        per_bucket_candidate,
         parameter_sweep,
         parakeet_emission_to_handoff_error: emission_handoff_metrics(artifact, ground_truth),
         errors,
@@ -648,7 +684,11 @@ fn emission_handoff_metrics(
     {
         return EmissionHandoffMetrics::default();
     }
-    let mut diagnostics = artifact.v2.alignment_diagnostics.iter().collect::<Vec<_>>();
+    let mut diagnostics = artifact
+        .candidate
+        .alignment_diagnostics
+        .iter()
+        .collect::<Vec<_>>();
     diagnostics.sort_by_key(|item| (item.start_ms, item.end_ms));
     let transitions = diagnostics
         .windows(2)
@@ -711,14 +751,14 @@ pub async fn build_artifact_from_persisted_meeting(
         bail!("persisted transcripts no longer match the source Production Artifact");
     }
     let config = UtteranceReconstructionConfig::default();
-    let v1 = crate::utterance_reconstruction::reconstruct_v1_with_config(
+    let baseline = crate::utterance_reconstruction::reconstruct_v1_with_config(
         meeting_id,
         &transcripts,
         &speaker_turns,
         &short_turn_events,
         &config,
     );
-    let v2 = reconstruct_v2_with_config(
+    let candidate = reconstruct_v3_with_config(
         meeting_id,
         &transcripts,
         &speaker_turns,
@@ -745,8 +785,8 @@ pub async fn build_artifact_from_persisted_meeting(
         transcripts,
         speaker_turns,
         short_turn_events,
-        v1,
-        v2,
+        baseline,
+        candidate,
         integrity_sha256: String::new(),
     }
     .seal()
@@ -812,11 +852,8 @@ pub struct SaveGroundTruthRequest {
 
 #[tauri::command]
 pub fn api_save_utterance_ground_truth(request: SaveGroundTruthRequest) -> Result<(), String> {
-    let artifact: UtteranceReconstructionArtifact = serde_json::from_slice(
-        &std::fs::read(&request.artifact_path)
-            .map_err(|error| format!("read reconstruction artifact: {error}"))?,
-    )
-    .map_err(|error| format!("parse reconstruction artifact: {error}"))?;
+    let artifact = read_reconstruction_artifact(&request.artifact_path)
+        .map_err(|error| format!("read reconstruction artifact: {error:#}"))?;
     // Draft autosave permits incomplete pass state, but never invalid identity,
     // speaker membership, timings, or a modified artifact.
     validate_ground_truth_draft(&request.ground_truth, &artifact)
@@ -852,11 +889,8 @@ pub fn api_initialize_utterance_ground_truth(
     if request.ground_truth_path.exists() {
         return Err("ground-truth file already exists; reopen it instead".into());
     }
-    let artifact: UtteranceReconstructionArtifact = serde_json::from_slice(
-        &std::fs::read(&request.artifact_path)
-            .map_err(|error| format!("read reconstruction artifact: {error}"))?,
-    )
-    .map_err(|error| format!("parse reconstruction artifact: {error}"))?;
+    let artifact = read_reconstruction_artifact(&request.artifact_path)
+        .map_err(|error| format!("read reconstruction artifact: {error:#}"))?;
     artifact
         .validate(None)
         .map_err(|error| format!("validate reconstruction artifact: {error:#}"))?;
@@ -888,11 +922,8 @@ pub fn api_initialize_utterance_ground_truth(
 pub fn api_load_utterance_ground_truth(
     request: LoadGroundTruthRequest,
 ) -> Result<UtteranceAnnotationView, String> {
-    let artifact: UtteranceReconstructionArtifact = serde_json::from_slice(
-        &std::fs::read(&request.artifact_path)
-            .map_err(|error| format!("read reconstruction artifact: {error}"))?,
-    )
-    .map_err(|error| format!("parse reconstruction artifact: {error}"))?;
+    let artifact = read_reconstruction_artifact(&request.artifact_path)
+        .map_err(|error| format!("read reconstruction artifact: {error:#}"))?;
     let ground_truth: UtteranceGroundTruth = serde_json::from_slice(
         &std::fs::read(&request.ground_truth_path)
             .map_err(|error| format!("read utterance ground truth: {error}"))?,
@@ -945,8 +976,7 @@ pub fn run_benchmark_files(
     ground_truth_path: &Path,
     output_directory: &Path,
 ) -> Result<UtteranceReconstructionReport> {
-    let artifact: UtteranceReconstructionArtifact =
-        serde_json::from_slice(&std::fs::read(artifact_path)?)?;
+    let artifact = read_reconstruction_artifact(artifact_path)?;
     let ground_truth: UtteranceGroundTruth =
         serde_json::from_slice(&std::fs::read(ground_truth_path)?)?;
     let report = benchmark(&artifact, &ground_truth)?;
@@ -1005,62 +1035,60 @@ pub fn validate_meeting_level_split(
 
 fn render_markdown(report: &UtteranceReconstructionReport) -> String {
     let mut rendered = format!(
-        "# Utterance Reconstruction Evaluation\n\n- Meeting: `{}`\n- Artifact: `{}`\n- Split: `{:?}`\n- App commit: `{}`\n\n| Metric | V1 | V2 | Delta |\n|---|---:|---:|---:|\n| Speaker coverage | {:.4} | {:.4} | {:+.4} |\n| Assigned-only accuracy | {:.4} | {:.4} | {:+.4} |\n| Handoff F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @500ms | {:.4} | {:.4} | {:+.4} |\n| Backchannel preservation | {:.4} | {:.4} | {:+.4} |\n| Short-speech recall | {:.4} | {:.4} | {:+.4} |\n| Overlap false-single rate | {:.4} | {:.4} | {:+.4} |\n| Lexical preservation | {:.4} | {:.4} | {:+.4} |\n\nDiagnostic coverage metrics are not accuracy. Parameter sweep rows are stored in the JSON report and must be calibrated only on calibration meetings.\n",
+        "# Utterance Reconstruction Evaluation\n\n- Meeting: `{}`\n- Artifact: `{}`\n- Split: `{:?}`\n- App commit: `{}`\n\n| Metric | Frozen Baseline | Candidate | Delta |\n|---|---:|---:|---:|\n| Speaker coverage | {:.4} | {:.4} | {:+.4} |\n| Assigned-only accuracy | {:.4} | {:.4} | {:+.4} |\n| Handoff F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @250ms | {:.4} | {:.4} | {:+.4} |\n| Boundary F1 @500ms | {:.4} | {:.4} | {:+.4} |\n| Backchannel preservation | {:.4} | {:.4} | {:+.4} |\n| Short-speech recall | {:.4} | {:.4} | {:+.4} |\n| Overlap false-single rate | {:.4} | {:.4} | {:+.4} |\n| Lexical preservation | {:.4} | {:.4} | {:+.4} |\n\nDiagnostic coverage metrics are not accuracy. Parameter sweep rows are stored in the JSON report and tune only the Candidate on calibration meetings.\n",
         report.meeting_id,
         report.artifact_id,
         report.dataset_split,
         report.app_commit_sha,
-        report.v1.speaker_attribution.coverage,
-        report.v2.speaker_attribution.coverage,
-        report.v2.speaker_attribution.coverage - report.v1.speaker_attribution.coverage,
-        report.v1.speaker_attribution.assigned_only_accuracy,
-        report.v2.speaker_attribution.assigned_only_accuracy,
-        report.v2.speaker_attribution.assigned_only_accuracy - report.v1.speaker_attribution.assigned_only_accuracy,
-        report.v1.handoff_250ms.f1,
-        report.v2.handoff_250ms.f1,
-        report.v2.handoff_250ms.f1 - report.v1.handoff_250ms.f1,
-        report.v1.utterance_boundary_250ms.f1,
-        report.v2.utterance_boundary_250ms.f1,
-        report.v2.utterance_boundary_250ms.f1 - report.v1.utterance_boundary_250ms.f1,
-        report.v1.utterance_boundary_500ms.f1,
-        report.v2.utterance_boundary_500ms.f1,
-        report.v2.utterance_boundary_500ms.f1 - report.v1.utterance_boundary_500ms.f1,
-        report.v1.special_cases.backchannel_main_utterance_preservation_rate,
-        report.v2.special_cases.backchannel_main_utterance_preservation_rate,
-        report.v2.special_cases.backchannel_main_utterance_preservation_rate - report.v1.special_cases.backchannel_main_utterance_preservation_rate,
-        report.v1.special_cases.short_speech_boundary_recall,
-        report.v2.special_cases.short_speech_boundary_recall,
-        report.v2.special_cases.short_speech_boundary_recall - report.v1.special_cases.short_speech_boundary_recall,
-        report.v1.special_cases.overlap_false_single_speaker_rate,
-        report.v2.special_cases.overlap_false_single_speaker_rate,
-        report.v2.special_cases.overlap_false_single_speaker_rate - report.v1.special_cases.overlap_false_single_speaker_rate,
-        report.v1.lexical_preservation,
-        report.v2.lexical_preservation,
-        report.v2.lexical_preservation - report.v1.lexical_preservation,
+        report.baseline.speaker_attribution.coverage,
+        report.candidate.speaker_attribution.coverage,
+        report.candidate.speaker_attribution.coverage - report.baseline.speaker_attribution.coverage,
+        report.baseline.speaker_attribution.assigned_only_accuracy,
+        report.candidate.speaker_attribution.assigned_only_accuracy,
+        report.candidate.speaker_attribution.assigned_only_accuracy - report.baseline.speaker_attribution.assigned_only_accuracy,
+        report.baseline.handoff_250ms.f1,
+        report.candidate.handoff_250ms.f1,
+        report.candidate.handoff_250ms.f1 - report.baseline.handoff_250ms.f1,
+        report.baseline.utterance_boundary_250ms.f1,
+        report.candidate.utterance_boundary_250ms.f1,
+        report.candidate.utterance_boundary_250ms.f1 - report.baseline.utterance_boundary_250ms.f1,
+        report.baseline.utterance_boundary_500ms.f1,
+        report.candidate.utterance_boundary_500ms.f1,
+        report.candidate.utterance_boundary_500ms.f1 - report.baseline.utterance_boundary_500ms.f1,
+        report.baseline.special_cases.backchannel_main_utterance_preservation_rate,
+        report.candidate.special_cases.backchannel_main_utterance_preservation_rate,
+        report.candidate.special_cases.backchannel_main_utterance_preservation_rate - report.baseline.special_cases.backchannel_main_utterance_preservation_rate,
+        report.baseline.special_cases.short_speech_boundary_recall,
+        report.candidate.special_cases.short_speech_boundary_recall,
+        report.candidate.special_cases.short_speech_boundary_recall - report.baseline.special_cases.short_speech_boundary_recall,
+        report.baseline.special_cases.overlap_false_single_speaker_rate,
+        report.candidate.special_cases.overlap_false_single_speaker_rate,
+        report.candidate.special_cases.overlap_false_single_speaker_rate - report.baseline.special_cases.overlap_false_single_speaker_rate,
+        report.baseline.lexical_preservation,
+        report.candidate.lexical_preservation,
+        report.candidate.lexical_preservation - report.baseline.lexical_preservation,
     );
     rendered.push_str(&format!(
-        "\n## Mainline quality indicators @500ms\n\n| Metric | V1 | V2/V3 latest | Delta |\n|---|---:|---:|---:|\n| False split rate | {:.4} | {:.4} | {:+.4} |\n| False merge rate | {:.4} | {:.4} | {:+.4} |\n| Speaker attribution accuracy | {:.4} | {:.4} | {:+.4} |\n| Speaker boundary accuracy | {:.4} | {:.4} | {:+.4} |\n| Utterance count error | {} | {} | {:+} |\n",
-        report.v1.utterance_boundary_500ms.false_split_rate,
-        report.v2.utterance_boundary_500ms.false_split_rate,
-        report.v2.utterance_boundary_500ms.false_split_rate
-            - report.v1.utterance_boundary_500ms.false_split_rate,
-        report.v1.utterance_boundary_500ms.false_merge_rate,
-        report.v2.utterance_boundary_500ms.false_merge_rate,
-        report.v2.utterance_boundary_500ms.false_merge_rate
-            - report.v1.utterance_boundary_500ms.false_merge_rate,
-        report.v1.speaker_attribution_accuracy,
-        report.v2.speaker_attribution_accuracy,
-        report.v2.speaker_attribution_accuracy - report.v1.speaker_attribution_accuracy,
-        report.v1.speaker_boundary_accuracy,
-        report.v2.speaker_boundary_accuracy,
-        report.v2.speaker_boundary_accuracy - report.v1.speaker_boundary_accuracy,
-        report.v1.utterance_count_error,
-        report.v2.utterance_count_error,
-        report.v2.utterance_count_error - report.v1.utterance_count_error,
+        "\n## Mainline quality indicators @500ms\n\n| Metric | Frozen Baseline | Candidate | Delta |\n|---|---:|---:|---:|\n| False split rate | {:.4} | {:.4} | {:+.4} |\n| False merge rate | {:.4} | {:.4} | {:+.4} |\n| Speaker attribution accuracy | {:.4} | {:.4} | {:+.4} |\n| Speaker boundary accuracy | {:.4} | {:.4} | {:+.4} |\n| Utterance count error | {} | {} | {:+} |\n",
+        report.baseline.utterance_boundary_500ms.false_split_rate,
+        report.candidate.utterance_boundary_500ms.false_split_rate,
+        report.candidate.utterance_boundary_500ms.false_split_rate - report.baseline.utterance_boundary_500ms.false_split_rate,
+        report.baseline.utterance_boundary_500ms.false_merge_rate,
+        report.candidate.utterance_boundary_500ms.false_merge_rate,
+        report.candidate.utterance_boundary_500ms.false_merge_rate - report.baseline.utterance_boundary_500ms.false_merge_rate,
+        report.baseline.speaker_attribution_accuracy,
+        report.candidate.speaker_attribution_accuracy,
+        report.candidate.speaker_attribution_accuracy - report.baseline.speaker_attribution_accuracy,
+        report.baseline.speaker_boundary_accuracy,
+        report.candidate.speaker_boundary_accuracy,
+        report.candidate.speaker_boundary_accuracy - report.baseline.speaker_boundary_accuracy,
+        report.baseline.utterance_count_error,
+        report.candidate.utterance_count_error,
+        report.candidate.utterance_count_error - report.baseline.utterance_count_error,
     ));
     rendered.push_str("\n## Frozen identity\n\n");
     rendered.push_str(&format!(
-        "- Production artifact: `{}` (`{}`)\n- Source media: `{}`\n- Transcription run: `{}`\n- ASR: `{}` / `{}` / `{}`\n- V1 config: `{}`\n- V2 config: `{}`\n",
+        "- Production artifact: `{}` (`{}`)\n- Source media: `{}`\n- Transcription run: `{}`\n- ASR: `{}` / `{}` / `{}`\n- Frozen Baseline config: `{}`\n- Candidate config: `{}`\n",
         report.source_production_artifact.artifact_id,
         report.source_production_artifact.sha256,
         report.source_media.sha256,
@@ -1068,8 +1096,8 @@ fn render_markdown(report: &UtteranceReconstructionReport) -> String {
         report.asr.backend,
         report.asr.model,
         report.asr.version_or_hash.as_deref().unwrap_or("unknown"),
-        report.v1_config_hash,
-        report.v2_config_hash,
+        report.baseline_config_hash,
+        report.candidate_config_hash,
     ));
     rendered.push_str("\n## Known limitations\n\n");
     for limitation in &report.known_limitations {
@@ -1080,6 +1108,23 @@ fn render_markdown(report: &UtteranceReconstructionReport) -> String {
 
 fn file_hash(path: &Path) -> Result<String> {
     Ok(format!("sha256:{:x}", Sha256::digest(std::fs::read(path)?)))
+}
+
+fn read_reconstruction_artifact(path: &Path) -> Result<UtteranceReconstructionArtifact> {
+    let bytes = std::fs::read(path)?;
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parse reconstruction artifact envelope")?;
+    let schema_version = envelope
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .context("reconstruction artifact schema_version is missing")?;
+    if schema_version != u64::from(RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION) {
+        bail!(
+            "unsupported reconstruction artifact schema {schema_version} (expected {}; schema v1 used ambiguous v1/v2 fields and must be regenerated)",
+            RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION
+        );
+    }
+    serde_json::from_slice(&bytes).context("parse reconstruction artifact schema v2")
 }
 
 fn normalize_sha(value: &str) -> String {
@@ -1332,12 +1377,13 @@ fn parameter_sweep(
         for margin in [0.10, 0.20, 0.30] {
             for tolerance in [25, 50, 75, 100] {
                 for true_overlap in [50, 100, 150] {
-                    let mut config = artifact.v2.config.clone();
+                    // Sweep only the Candidate. The Frozen Baseline is immutable.
+                    let mut config = artifact.candidate.config.clone();
                     config.assignment_min_overlap_ratio = overlap;
                     config.assignment_min_margin = margin;
                     config.alignment_tolerance_ms = tolerance;
                     config.true_overlap_min_ms = true_overlap;
-                    let replay = reconstruct_v2_with_config(
+                    let replay = reconstruct_v3_with_config(
                         &artifact.meeting_id,
                         &artifact.transcripts,
                         &artifact.speaker_turns,
@@ -1511,7 +1557,7 @@ fn worst_cases(
             let hypothesis = best_overlapping(
                 reference.start_ms,
                 reference.end_ms,
-                &artifact.v2.utterances,
+                &artifact.candidate.utterances,
             )?;
             let wrong_single = hypothesis.speaker_attribution.single_key().is_some()
                 && (reference.overlap
@@ -1650,10 +1696,10 @@ mod tests {
             speaker_key: "system_a".into(),
         }];
         let config = UtteranceReconstructionConfig::default();
-        let v1 = reconstruct_v1_with_config("m1", &transcripts, &turns, &[], &config);
-        let v2 = reconstruct_v2_with_config("m1", &transcripts, &turns, &[], &config);
+        let baseline = reconstruct_v1_with_config("m1", &transcripts, &turns, &[], &config);
+        let candidate = reconstruct_v3_with_config("m1", &transcripts, &turns, &[], &config);
         UtteranceReconstructionArtifact {
-            schema_version: 1,
+            schema_version: RECONSTRUCTION_ARTIFACT_SCHEMA_VERSION,
             artifact_id: "artifact-1".into(),
             meeting_id: "m1".into(),
             created_at: "2026-09-15T00:00:00Z".into(),
@@ -1676,8 +1722,8 @@ mod tests {
             transcripts,
             speaker_turns: turns,
             short_turn_events: vec![],
-            v1,
-            v2,
+            baseline,
+            candidate,
             integrity_sha256: String::new(),
         }
         .seal()
@@ -1738,6 +1784,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_v1_v2_artifact_schema_is_rejected_explicitly() {
+        let mut legacy = artifact();
+        legacy.schema_version = 1;
+        let error = legacy.validate(None).unwrap_err().to_string();
+        assert!(error.contains("ambiguous v1/v2 fields"));
+    }
+
+    #[test]
     fn wrong_meeting_and_wrong_artifact_are_rejected() {
         let artifact = artifact();
         assert!(artifact.validate(Some("m2")).is_err());
@@ -1780,11 +1834,14 @@ mod tests {
         assert_eq!(boundary.false_split_rate, 0.5);
         assert_eq!(boundary.false_merge_rate, 0.5);
         let report = benchmark(&artifact(), &ground_truth()).unwrap();
-        assert_eq!(report.v2.speaker_attribution.coverage, 1.0);
-        assert_eq!(report.v2.speaker_attribution.assigned_only_accuracy, 1.0);
-        assert_eq!(report.v2.speaker_attribution_accuracy, 1.0);
-        assert_eq!(report.v2.utterance_count_error, 0);
-        assert_eq!(report.parameter_sweep.len(), 144);
+        assert_eq!(report.candidate.speaker_attribution.coverage, 1.0);
+        assert_eq!(
+            report.candidate.speaker_attribution.assigned_only_accuracy,
+            1.0
+        );
+        assert_eq!(report.candidate.speaker_attribution_accuracy, 1.0);
+        assert_eq!(report.candidate.utterance_count_error, 0);
+        assert!(report.parameter_sweep.is_empty());
     }
 
     #[test]
@@ -1798,7 +1855,18 @@ mod tests {
             benchmark(&artifact, &calibration).unwrap().dataset_split,
             benchmark(&artifact, &evaluation).unwrap().dataset_split
         );
-        assert_eq!(artifact.v1.algorithm_version, ALGORITHM_VERSION);
+        assert_eq!(
+            benchmark(&artifact, &calibration)
+                .unwrap()
+                .parameter_sweep
+                .len(),
+            144
+        );
+        assert!(benchmark(&artifact, &evaluation)
+            .unwrap()
+            .parameter_sweep
+            .is_empty());
+        assert_eq!(artifact.baseline.algorithm_version, ALGORITHM_VERSION);
     }
 
     #[test]

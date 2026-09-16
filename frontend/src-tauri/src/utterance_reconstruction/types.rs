@@ -3,11 +3,38 @@ use serde::{Deserialize, Serialize};
 use crate::audio::transcription::TimingSource;
 use crate::diarization::types::SegmentKind;
 
-pub const ALGORITHM_VERSION: &str = "utterance-reconstruction-v1";
-pub const ALGORITHM_VERSION_V2: &str = "utterance-reconstruction-v2";
+pub const ALGORITHM_VERSION: &str = "utterance-reconstruction-v1-frozen";
 pub const ALGORITHM_VERSION_V3: &str = "utterance-reconstruction-v3-semantic-baseline";
+pub const BOUNDARY_POLICY_VERSION_V1_FROZEN: &str = "boundary-policy-v1-frozen";
+pub const BOUNDARY_POLICY_VERSION_V3: &str = "boundary-policy-v3-semantic-baseline";
+pub const SEMANTIC_MODEL_VERSION_V1: &str = "deterministic-semantic-baseline-v1";
+pub const ALIGNMENT_VERSION_V1: &str = "lexical-temporal-alignment-v1";
 
-/// Reserved word-level seam for V2. V1 never manufactures these timings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconstructionTimingMode {
+    ChunkFallback,
+    NativeLexicalTiming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryPolicy {
+    V1Frozen,
+    V3SemanticBaseline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReconstructionProfile {
+    pub algorithm_version: String,
+    pub timing_mode: ReconstructionTimingMode,
+    pub boundary_policy: BoundaryPolicy,
+    pub boundary_policy_version: String,
+    pub semantic_model_version: Option<String>,
+    pub alignment_version: Option<String>,
+}
+
+/// Reserved word-level seam for timing-aware reconstruction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimedWord {
     pub id: String,
@@ -106,14 +133,14 @@ pub struct ReconstructionMetrics {
     pub mixed_count: usize,
     pub mixed_rate: f64,
     pub cross_speaker_raw_chunk_count: usize,
-    /// Diagnostic-only: V2 emitted more than one assigned speaker for the raw
+    /// Diagnostic-only: the Candidate emitted more than one assigned speaker for the raw
     /// chunk. This is resolution coverage, not correctness or handoff recall.
     pub resolved_cross_speaker_chunk_count: usize,
     /// Diagnostic coverage metric. Ground Truth evaluation is required before
     /// this value may be interpreted as a correct resolution rate.
     pub resolved_cross_speaker_chunk_rate: f64,
-    pub fallback_to_v1_count: usize,
-    pub fallback_to_v1_rate: f64,
+    pub chunk_fallback_count: usize,
+    pub chunk_fallback_rate: f64,
     pub lexical_preservation_failure_count: usize,
 }
 
@@ -122,6 +149,16 @@ pub struct ReconstructionMetrics {
 pub enum SpeakerAttribution {
     Single { speaker_key: String },
     Mixed { speaker_keys: Vec<String> },
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeakerAttributionSource {
+    Manual,
+    LexicalTemporalOverlap,
+    ChunkTemporalOverlap,
+    PersistedFallback,
     Unknown,
 }
 
@@ -138,7 +175,7 @@ impl SpeakerAttribution {
     }
 }
 
-/// The smallest V1 text-bearing unit. It always maps to exactly one raw row.
+/// The smallest reconstruction text-bearing unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AtomicSpan {
     pub start_ms: i64,
@@ -148,7 +185,8 @@ pub struct AtomicSpan {
     pub speaker_attribution: SpeakerAttribution,
     pub source_transcript_ids: Vec<String>,
     pub asr_confidence: Option<f64>,
-    pub speaker_confidence: Option<f64>,
+    pub speaker_assignment_reliability: Option<f64>,
+    pub speaker_attribution_source: SpeakerAttributionSource,
     pub overlap: bool,
     pub segment_kind: SegmentKind,
     pub short_turn_confidence: Option<f64>,
@@ -161,6 +199,15 @@ pub struct AtomicSpan {
 pub enum BoundaryDecision {
     Split,
     Merge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryDecisionSource {
+    HardSafetyConstraint,
+    ReliableSpeakerHandoff,
+    FrozenPolicyHardSplit,
+    ScoredDecision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,8 +269,10 @@ pub struct BoundaryEvidence {
     pub right_source_transcript_id: String,
     pub gap_ms: Option<i64>,
     pub same_speaker: Option<bool>,
-    pub speaker_change_confidence: Option<f64>,
+    pub speaker_change_reliability: Option<f64>,
     pub speaker_change_reliable: bool,
+    pub left_speaker_attribution_source: SpeakerAttributionSource,
+    pub right_speaker_attribution_source: SpeakerAttributionSource,
     pub timing_reliable: bool,
     pub strong_terminal_punctuation: bool,
     pub weak_punctuation: bool,
@@ -233,7 +282,7 @@ pub struct BoundaryEvidence {
     pub mixed_attribution: bool,
     pub overlap: bool,
     pub backchannel_between: bool,
-    pub semantic: SemanticBoundaryEvidence,
+    pub semantic: Option<SemanticBoundaryEvidence>,
     pub prosody: ProsodicBoundaryEvidence,
 }
 
@@ -242,6 +291,7 @@ pub struct BoundaryOutcome {
     pub evidence: BoundaryEvidence,
     pub score: i32,
     pub decision: BoundaryDecision,
+    pub decision_source: BoundaryDecisionSource,
     pub reasons: Vec<BoundaryReason>,
     pub score_components: BoundaryScoreComponents,
 }
@@ -286,6 +336,7 @@ pub struct ReconstructedUtterance {
 pub struct ReconstructionResult {
     pub meeting_id: String,
     pub algorithm_version: String,
+    pub profile: ReconstructionProfile,
     pub utterances: Vec<ReconstructedUtterance>,
     /// Events that could not safely be embedded in a surrounding utterance.
     pub events: Vec<ReconstructedEvent>,

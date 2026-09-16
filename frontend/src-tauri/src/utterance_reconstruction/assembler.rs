@@ -8,9 +8,10 @@ use super::boundary::decide_boundary;
 use super::config::UtteranceReconstructionConfig;
 use super::normalizer::join_text;
 use super::types::{
-    AtomicSpan, BoundaryDecision, BoundaryOutcome, BoundaryReason, ReconstructedEvent,
-    ReconstructedUtterance, ReconstructionMetrics, ReconstructionResult, SourceLexicalRange,
-    SpeakerAttribution, ALGORITHM_VERSION,
+    AtomicSpan, BoundaryDecision, BoundaryOutcome, BoundaryPolicy, BoundaryReason,
+    ReconstructedEvent, ReconstructedUtterance, ReconstructionMetrics, ReconstructionProfile,
+    ReconstructionResult, ReconstructionTimingMode, SourceLexicalRange, SpeakerAttribution,
+    ALGORITHM_VERSION, BOUNDARY_POLICY_VERSION_V1_FROZEN,
 };
 
 pub fn reconstruct(
@@ -22,7 +23,14 @@ pub fn reconstruct(
         meeting_id,
         spans,
         config,
-        ALGORITHM_VERSION,
+        ReconstructionProfile {
+            algorithm_version: ALGORITHM_VERSION.to_string(),
+            timing_mode: ReconstructionTimingMode::ChunkFallback,
+            boundary_policy: BoundaryPolicy::V1Frozen,
+            boundary_policy_version: BOUNDARY_POLICY_VERSION_V1_FROZEN.to_string(),
+            semantic_model_version: None,
+            alignment_version: None,
+        },
         ReconstructionMetrics::default(),
         Vec::new(),
         Vec::new(),
@@ -33,7 +41,7 @@ pub(crate) fn reconstruct_with_details(
     meeting_id: &str,
     spans: &[AtomicSpan],
     config: &UtteranceReconstructionConfig,
-    algorithm_version: &str,
+    profile: ReconstructionProfile,
     metrics: ReconstructionMetrics,
     alignment_diagnostics: Vec<super::types::AlignmentDiagnostic>,
     timing_diagnostics: Vec<super::types::TimingDiagnostic>,
@@ -61,6 +69,7 @@ pub(crate) fn reconstruct_with_details(
             .any(|bridge| bridge.left_index == previous_index && bridge.right_index == index);
         let projected_text = join_text(&builder.text, &span.text);
         let outcome = decide_boundary(
+            profile.boundary_policy,
             previous,
             span,
             &builder.text,
@@ -81,18 +90,19 @@ pub(crate) fn reconstruct_with_details(
                 current
                     .take()
                     .expect("builder exists")
-                    .finish(meeting_id, algorithm_version),
+                    .finish(meeting_id, &profile.algorithm_version),
             );
             current = Some(UtteranceBuilder::new(span));
         }
     }
     if let Some(builder) = current {
-        utterances.push(builder.finish(meeting_id, algorithm_version));
+        utterances.push(builder.finish(meeting_id, &profile.algorithm_version));
     }
 
     let mut unembedded_events = Vec::new();
     for (event_index, bridge) in bridges {
-        let event = reconstructed_event(meeting_id, &spans[event_index], algorithm_version);
+        let event =
+            reconstructed_event(meeting_id, &spans[event_index], &profile.algorithm_version);
         if let Some(utterance) = utterances.iter_mut().find(|utterance| {
             utterance
                 .source_transcript_ids
@@ -114,11 +124,16 @@ pub(crate) fn reconstruct_with_details(
 
     ReconstructionResult {
         meeting_id: meeting_id.to_string(),
-        algorithm_version: algorithm_version.to_string(),
+        algorithm_version: profile.algorithm_version.clone(),
+        profile: profile.clone(),
         utterances,
         events: unembedded_events,
         boundaries,
-        config_version: super::config::CONFIG_VERSION.to_string(),
+        config_version: match profile.boundary_policy {
+            BoundaryPolicy::V1Frozen => super::config::FROZEN_V1_CONFIG_VERSION,
+            BoundaryPolicy::V3SemanticBaseline => super::config::CONFIG_VERSION,
+        }
+        .to_string(),
         config_hash: config_hash(config),
         config: config.clone(),
         metrics,
@@ -322,16 +337,16 @@ fn config_hash(config: &UtteranceReconstructionConfig) -> String {
 fn trace_boundary(outcome: &BoundaryOutcome) {
     log::debug!(
         target: "utterance_reconstruction",
-        "boundary left={} right={} gap_ms={:?} timing_reliable={} same_speaker={:?} speaker_confidence={:?} speaker_reliable={} completeness={:?} continuity={:?} timing_score={} speaker_score={} punctuation_score={} semantic_score={} structural_score={} final_score={} decision={:?} reasons={:?}",
+        "boundary left={} right={} gap_ms={:?} timing_reliable={} same_speaker={:?} speaker_reliability={:?} speaker_reliable={} completeness={:?} continuity={:?} timing_score={} speaker_score={} punctuation_score={} semantic_score={} structural_score={} final_score={} decision={:?} decision_source={:?} reasons={:?}",
         outcome.evidence.left_source_transcript_id,
         outcome.evidence.right_source_transcript_id,
         outcome.evidence.gap_ms,
         outcome.evidence.timing_reliable,
         outcome.evidence.same_speaker,
-        outcome.evidence.speaker_change_confidence,
+        outcome.evidence.speaker_change_reliability,
         outcome.evidence.speaker_change_reliable,
-        outcome.evidence.semantic.left_completeness,
-        outcome.evidence.semantic.cross_boundary_continuity,
+        outcome.evidence.semantic.as_ref().and_then(|value| value.left_completeness),
+        outcome.evidence.semantic.as_ref().and_then(|value| value.cross_boundary_continuity),
         outcome.score_components.timing_score,
         outcome.score_components.speaker_score,
         outcome.score_components.punctuation_score,
@@ -339,6 +354,7 @@ fn trace_boundary(outcome: &BoundaryOutcome) {
         outcome.score_components.structural_score,
         outcome.score,
         outcome.decision,
+        outcome.decision_source,
         outcome.reasons
     );
 }

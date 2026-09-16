@@ -18,7 +18,8 @@ fn span(id: &str, start_ms: i64, end_ms: i64, text: &str, speaker: &str) -> Atom
         },
         source_transcript_ids: vec![id.into()],
         asr_confidence: Some(0.9),
-        speaker_confidence: Some(0.9),
+        speaker_assignment_reliability: Some(0.9),
+        speaker_attribution_source: SpeakerAttributionSource::LexicalTemporalOverlap,
         overlap: false,
         segment_kind: SegmentKind::Speech,
         short_turn_confidence: None,
@@ -27,11 +28,88 @@ fn span(id: &str, start_ms: i64, end_ms: i64, text: &str, speaker: &str) -> Atom
 }
 
 fn reconstruct_spans(spans: &[AtomicSpan]) -> ReconstructionResult {
-    reconstruct(
+    let config = UtteranceReconstructionConfig::default();
+    super::assembler::reconstruct_with_details(
         "meeting-test",
         spans,
-        &UtteranceReconstructionConfig::default(),
+        &config,
+        ReconstructionProfile {
+            algorithm_version: ALGORITHM_VERSION_V3.into(),
+            timing_mode: ReconstructionTimingMode::NativeLexicalTiming,
+            boundary_policy: BoundaryPolicy::V3SemanticBaseline,
+            boundary_policy_version: BOUNDARY_POLICY_VERSION_V3.into(),
+            semantic_model_version: Some(SEMANTIC_MODEL_VERSION_V1.into()),
+            alignment_version: Some(ALIGNMENT_VERSION_V1.into()),
+        },
+        ReconstructionMetrics::default(),
+        vec![],
+        vec![],
     )
+}
+
+#[derive(serde::Deserialize)]
+struct FrozenV1GoldenCase {
+    name: String,
+    left_speaker: String,
+    right_speaker: String,
+    gap_ms: i64,
+    left_text: String,
+    right_text: String,
+    timing_reliable: bool,
+    mixed: bool,
+    overlap: bool,
+    expected_utterances: usize,
+    expected_score: i32,
+    expected_reason: BoundaryReason,
+}
+
+#[test]
+fn frozen_v1_replays_historical_golden_cases() {
+    let cases: Vec<FrozenV1GoldenCase> = serde_json::from_str(include_str!(
+        "../../tests/fixtures/utterance_reconstruction/v1/cases.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let mut left = span("left", 0, 1_000, &case.left_text, &case.left_speaker);
+        let mut right = span(
+            "right",
+            1_000 + case.gap_ms,
+            2_000 + case.gap_ms,
+            &case.right_text,
+            &case.right_speaker,
+        );
+        left.timing_reliable = case.timing_reliable;
+        right.timing_reliable = case.timing_reliable;
+        left.overlap = case.overlap;
+        if case.mixed {
+            right.speaker_attribution = SpeakerAttribution::Mixed {
+                speaker_keys: vec!["a".into(), "b".into()],
+            };
+        }
+        let result = reconstruct(
+            "frozen-v1-golden",
+            &[left, right],
+            &UtteranceReconstructionConfig::frozen_v1(),
+        );
+        assert_eq!(
+            result.utterances.len(),
+            case.expected_utterances,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            result.boundaries[0].score, case.expected_score,
+            "{}",
+            case.name
+        );
+        assert!(
+            result.boundaries[0].reasons.contains(&case.expected_reason),
+            "{}",
+            case.name
+        );
+        assert_eq!(result.profile.boundary_policy, BoundaryPolicy::V1Frozen);
+        assert!(result.boundaries[0].evidence.semantic.is_none());
+    }
 }
 
 #[test]
@@ -73,27 +151,72 @@ fn same_speaker_continuation_prefix_merges_across_vad_fragmentation() {
     assert!(result.boundaries[0]
         .evidence
         .semantic
+        .as_ref()
+        .expect("semantic evidence")
         .cross_boundary_continuity
         .is_some_and(|score| score > 0.8));
     assert!(result.boundaries[0].score_components.semantic_score < 0);
+    assert_eq!(result.boundaries[0].score_components.semantic_score, -4);
+    assert_eq!(result.boundaries[0].score_components.punctuation_score, 0);
 }
 
 #[test]
-fn complete_same_speaker_sentences_can_split_without_creating_one_card_per_period() {
-    let split = reconstruct_spans(&[
+fn semantic_scoring_does_not_double_count_terminal_punctuation() {
+    let merged_medium_gap = reconstruct_spans(&[
         span("t1", 0, 1_000, "这个方案今天先确定下来。", "a"),
         span("t2", 1_900, 3_000, "下一项我们讨论预算问题。", "a"),
     ]);
-    assert_eq!(split.utterances.len(), 2);
-    assert!(split.boundaries[0]
+    assert_eq!(merged_medium_gap.utterances.len(), 1);
+    assert!(merged_medium_gap.boundaries[0]
         .reasons
         .contains(&BoundaryReason::SentenceComplete));
+    assert_eq!(
+        merged_medium_gap.boundaries[0]
+            .score_components
+            .punctuation_score,
+        0
+    );
+    assert_eq!(
+        merged_medium_gap.boundaries[0]
+            .score_components
+            .semantic_score,
+        2
+    );
 
     let merged = reconstruct_spans(&[
         span("t1", 0, 1_000, "第一版先这样做。", "a"),
         span("t2", 1_200, 2_000, "第二阶段再优化性能。", "a"),
     ]);
     assert_eq!(merged.utterances.len(), 1);
+}
+
+#[test]
+fn legacy_language_scores_apply_only_when_semantic_is_disabled() {
+    let mut config = UtteranceReconstructionConfig::default();
+    config.semantic_boundary_enabled = false;
+    let spans = [
+        span("t1", 0, 1_000, "已经完成。", "a"),
+        span("t2", 1_100, 2_000, "所以继续", "a"),
+    ];
+    let result = super::assembler::reconstruct_with_details(
+        "legacy-language-score",
+        &spans,
+        &config,
+        ReconstructionProfile {
+            algorithm_version: ALGORITHM_VERSION_V3.into(),
+            timing_mode: ReconstructionTimingMode::ChunkFallback,
+            boundary_policy: BoundaryPolicy::V3SemanticBaseline,
+            boundary_policy_version: BOUNDARY_POLICY_VERSION_V3.into(),
+            semantic_model_version: None,
+            alignment_version: Some(ALIGNMENT_VERSION_V1.into()),
+        },
+        ReconstructionMetrics::default(),
+        vec![],
+        vec![],
+    );
+    assert_eq!(result.boundaries[0].score_components.punctuation_score, 2);
+    assert_eq!(result.boundaries[0].score_components.semantic_score, -1);
+    assert!(result.boundaries[0].evidence.semantic.is_none());
 }
 
 #[test]
@@ -122,14 +245,18 @@ fn reliable_speaker_change_splits() {
     assert!(result.boundaries[0]
         .reasons
         .contains(&BoundaryReason::ReliableSpeakerChange));
+    assert_eq!(
+        result.boundaries[0].decision_source,
+        BoundaryDecisionSource::ReliableSpeakerHandoff
+    );
 }
 
 #[test]
 fn ambiguous_speaker_change_does_not_destroy_strongly_continuous_speech() {
     let mut left = span("t1", 0, 1_000, "我觉得这个方案", "a");
     let mut right = span("t2", 1_100, 2_000, "其实问题不大", "b");
-    left.speaker_confidence = Some(0.40);
-    right.speaker_confidence = Some(0.45);
+    left.speaker_assignment_reliability = Some(0.40);
+    right.speaker_assignment_reliability = Some(0.45);
     let result = reconstruct_spans(&[left, right]);
     assert_eq!(result.utterances.len(), 1);
     assert_eq!(
@@ -140,6 +267,10 @@ fn ambiguous_speaker_change_does_not_destroy_strongly_continuous_speech() {
         .reasons
         .contains(&BoundaryReason::AmbiguousSpeakerChange));
     assert!(!result.boundaries[0].evidence.speaker_change_reliable);
+    assert_eq!(
+        result.boundaries[0].decision_source,
+        BoundaryDecisionSource::ScoredDecision
+    );
 }
 
 #[test]
@@ -256,7 +387,12 @@ fn transcript_crossing_two_speaker_turns_is_marked_mixed_without_text_split() {
             speaker_key: "b".into(),
         },
     ];
-    let spans = normalize_timeline(&[transcript], &turns, &[]);
+    let spans = normalize_timeline(
+        &[transcript],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].text, "我觉得这个方案可以但是目前还有问题");
     assert!(matches!(
@@ -276,7 +412,12 @@ fn persisted_overlap_never_becomes_a_single_speaker_claim() {
         confidence: Some(0.9),
         speaker_key: "a".into(),
     }];
-    let spans = normalize_timeline(&[transcript], &turns, &[]);
+    let spans = normalize_timeline(
+        &[transcript],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
     assert!(matches!(
         spans[0].speaker_attribution,
         SpeakerAttribution::Mixed { .. }
@@ -289,20 +430,68 @@ fn manual_assignment_wins_over_sequential_turn_handoff_but_not_true_overlap() {
     transcript.speaker_id = Some("manual-speaker".into());
     transcript.speaker_assignment_method = "manual".into();
     let turns = vec![turn(10_000, 14_000, "a"), turn(14_000, 18_000, "b")];
-    let spans = normalize_timeline(&[transcript.clone()], &turns, &[]);
+    let spans = normalize_timeline(
+        &[transcript.clone()],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
     assert_eq!(
         spans[0].speaker_attribution,
         SpeakerAttribution::Single {
             speaker_key: "manual-speaker".into()
         }
     );
+    assert_eq!(
+        spans[0].speaker_attribution_source,
+        SpeakerAttributionSource::Manual
+    );
+    assert_eq!(spans[0].speaker_assignment_reliability, None);
 
     transcript.speaker_overlap = 1;
-    let spans = normalize_timeline(&[transcript], &turns, &[]);
+    let spans = normalize_timeline(
+        &[transcript],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
     assert!(matches!(
         spans[0].speaker_attribution,
         SpeakerAttribution::Mixed { .. }
     ));
+}
+
+#[test]
+fn chunk_reliability_is_recomputed_and_stale_persisted_confidence_is_ignored() {
+    let mut transcript = raw_transcript("t1", 10.0, 12.0, "只有一半有说话人证据");
+    transcript.speaker_confidence = Some(0.99);
+    let spans = normalize_timeline(
+        &[transcript],
+        &[turn(10_000, 11_000, "a")],
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+    assert_eq!(
+        spans[0].speaker_attribution_source,
+        SpeakerAttributionSource::ChunkTemporalOverlap
+    );
+    assert_eq!(spans[0].speaker_assignment_reliability, None);
+}
+
+#[test]
+fn persisted_speaker_without_accepted_turn_is_not_a_reliable_handoff() {
+    let transcript = raw_transcript("t1", 10.0, 12.0, "回退说话人");
+    let spans = normalize_timeline(
+        &[transcript],
+        &[],
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+    assert_eq!(
+        spans[0].speaker_attribution_source,
+        SpeakerAttributionSource::PersistedFallback
+    );
+    assert_eq!(spans[0].speaker_assignment_reliability, None);
 }
 
 #[test]
@@ -337,7 +526,7 @@ fn one_raw_chunk_can_resolve_an_a_to_b_handoff_with_source_ranges() {
         ],
     );
     let turns = vec![turn(10_000, 13_800, "a"), turn(14_100, 18_000, "b")];
-    let result = reconstruct_v2(&[transcript], &turns);
+    let result = reconstruct_v3(&[transcript], &turns);
     assert_eq!(result.algorithm_version, ALGORITHM_VERSION_V3);
     assert_eq!(result.utterances.len(), 2);
     assert_eq!(result.utterances[0].text, "我觉得这个方案可以");
@@ -357,8 +546,8 @@ fn timed_single_speaker_chunk_is_single_and_deterministic() {
         &[("单", 300), ("人", 600), ("发", 900), ("言", 1_200)],
     );
     let turns = vec![turn(10_000, 12_000, "a")];
-    let first = reconstruct_v2(&[transcript.clone()], &turns);
-    let second = reconstruct_v2(&[transcript], &turns);
+    let first = reconstruct_v3(&[transcript.clone()], &turns);
+    let second = reconstruct_v3(&[transcript], &turns);
     assert_eq!(first, second);
     assert_eq!(
         first.utterances[0].speaker_attribution,
@@ -367,6 +556,15 @@ fn timed_single_speaker_chunk_is_single_and_deterministic() {
         }
     );
     assert!(first.config_hash.starts_with("sha256:"));
+    assert_eq!(
+        first.profile.timing_mode,
+        ReconstructionTimingMode::NativeLexicalTiming
+    );
+    assert_eq!(
+        first.profile.boundary_policy,
+        BoundaryPolicy::V3SemanticBaseline
+    );
+    assert_eq!(first.config_version, super::config::CONFIG_VERSION);
 }
 
 #[test]
@@ -374,7 +572,7 @@ fn sequential_52_48_temporal_evidence_stays_ambiguous() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "嗯");
     set_timing(&mut transcript, &[("嗯", 1_000)]);
     let turns = vec![turn(10_000, 11_002, "a"), turn(11_002, 12_000, "b")];
-    let result = reconstruct_v2(&[transcript], &turns);
+    let result = reconstruct_v3(&[transcript], &turns);
     assert_eq!(
         result.alignment_diagnostics[0].status,
         WordSpeakerStatus::Ambiguous
@@ -391,7 +589,7 @@ fn simultaneous_turns_stay_mixed() {
     transcript.speaker_overlap = 1;
     set_timing(&mut transcript, &[("重", 500), ("叠", 1_000)]);
     let turns = vec![turn(10_000, 12_000, "a"), turn(10_000, 12_000, "b")];
-    let result = reconstruct_v2(&[transcript], &turns);
+    let result = reconstruct_v3(&[transcript], &turns);
     assert!(result
         .alignment_diagnostics
         .iter()
@@ -407,7 +605,7 @@ fn thirty_millisecond_turn_jitter_is_not_called_true_overlap() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "边界");
     set_timing(&mut transcript, &[("边", 1_000), ("界", 1_050)]);
     let turns = vec![turn(10_000, 11_065, "a"), turn(11_035, 12_000, "b")];
-    let result = reconstruct_v2(&[transcript], &turns);
+    let result = reconstruct_v3(&[transcript], &turns);
     assert_ne!(
         result.alignment_diagnostics[1].status,
         WordSpeakerStatus::Mixed
@@ -415,24 +613,42 @@ fn thirty_millisecond_turn_jitter_is_not_called_true_overlap() {
 }
 
 #[test]
-fn invalid_timing_falls_back_to_the_exact_v1_span() {
+fn invalid_timing_uses_v3_chunk_fallback_profile() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "先后");
     set_timing(&mut transcript, &[("先", 1_000), ("后", 500)]);
     let turns = vec![turn(10_000, 12_000, "a")];
-    let v1 = normalize_timeline(&[transcript.clone()], &turns, &[]);
+    let v1 = normalize_timeline(
+        &[transcript.clone()],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
     let enhanced = super::timing::enhance_timeline(
-        &[transcript],
+        &[transcript.clone()],
         &turns,
         &v1,
         &UtteranceReconstructionConfig::default(),
     );
     assert_eq!(enhanced.valid_timing_chunks, 0);
     assert_eq!(enhanced.spans, v1);
-    assert_eq!(enhanced.metrics.fallback_to_v1_count, 1);
-    let baseline = reconstruct_spans(&v1);
-    let fallback = reconstruct_spans(&enhanced.spans);
-    assert_eq!(fallback, baseline);
-    assert_eq!(fallback.algorithm_version, ALGORITHM_VERSION);
+    assert_eq!(enhanced.metrics.chunk_fallback_count, 1);
+    let fallback = reconstruct_v3_with_config(
+        "meeting-test",
+        &[transcript],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+    assert_eq!(fallback.algorithm_version, ALGORITHM_VERSION_V3);
+    assert_eq!(
+        fallback.profile.timing_mode,
+        ReconstructionTimingMode::ChunkFallback
+    );
+    assert_eq!(
+        fallback.profile.boundary_policy,
+        BoundaryPolicy::V3SemanticBaseline
+    );
+    assert_eq!(fallback.profile.alignment_version, None);
 }
 
 #[test]
@@ -578,16 +794,23 @@ fn set_timing(transcript: &mut Transcript, pieces: &[(&str, i64)]) {
     transcript.asr_timing_json = Some(serde_json::to_string(&timing).unwrap());
 }
 
-fn reconstruct_v2(transcripts: &[Transcript], turns: &[SpeakerTurn]) -> ReconstructionResult {
+fn reconstruct_v3(transcripts: &[Transcript], turns: &[SpeakerTurn]) -> ReconstructionResult {
     let config = UtteranceReconstructionConfig::default();
-    let v1 = normalize_timeline(transcripts, turns, &[]);
-    let enhanced = super::timing::enhance_timeline(transcripts, turns, &v1, &config);
+    let chunk_spans = normalize_timeline(transcripts, turns, &[], &config);
+    let enhanced = super::timing::enhance_timeline(transcripts, turns, &chunk_spans, &config);
     assert!(enhanced.valid_timing_chunks > 0);
     super::assembler::reconstruct_with_details(
         "meeting-test",
         &enhanced.spans,
         &config,
-        ALGORITHM_VERSION_V3,
+        ReconstructionProfile {
+            algorithm_version: ALGORITHM_VERSION_V3.into(),
+            timing_mode: ReconstructionTimingMode::NativeLexicalTiming,
+            boundary_policy: BoundaryPolicy::V3SemanticBaseline,
+            boundary_policy_version: BOUNDARY_POLICY_VERSION_V3.into(),
+            semantic_model_version: Some(SEMANTIC_MODEL_VERSION_V1.into()),
+            alignment_version: Some(ALIGNMENT_VERSION_V1.into()),
+        },
         enhanced.metrics,
         enhanced.alignment_diagnostics,
         enhanced.timing_diagnostics,

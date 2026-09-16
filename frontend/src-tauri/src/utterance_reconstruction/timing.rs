@@ -7,10 +7,11 @@ use super::config::UtteranceReconstructionConfig;
 use super::normalizer::normalize_whitespace;
 use super::types::{
     AlignmentDiagnostic, AtomicSpan, ReconstructionMetrics, SourceLexicalRange, SpeakerAttribution,
-    TimedWord, TimingDiagnostic, WordSpeakerAssignment, WordSpeakerStatus,
+    SpeakerAttributionSource, TimedWord, TimingDiagnostic, WordSpeakerAssignment,
+    WordSpeakerStatus,
 };
 
-pub struct V2Timeline {
+pub struct V3Timeline {
     pub spans: Vec<AtomicSpan>,
     pub metrics: ReconstructionMetrics,
     pub alignment_diagnostics: Vec<AlignmentDiagnostic>,
@@ -21,10 +22,10 @@ pub struct V2Timeline {
 pub fn enhance_timeline(
     transcripts: &[Transcript],
     turns: &[SpeakerTurn],
-    v1_spans: &[AtomicSpan],
+    chunk_spans: &[AtomicSpan],
     config: &UtteranceReconstructionConfig,
-) -> V2Timeline {
-    let mut output = V2Timeline {
+) -> V3Timeline {
+    let mut output = V3Timeline {
         spans: Vec::new(),
         metrics: ReconstructionMetrics {
             total_chunks: transcripts.len(),
@@ -35,7 +36,7 @@ pub fn enhance_timeline(
         valid_timing_chunks: 0,
     };
 
-    for (transcript, fallback) in transcripts.iter().zip(v1_spans) {
+    for (transcript, fallback) in transcripts.iter().zip(chunk_spans) {
         if matches!(
             fallback.speaker_attribution,
             SpeakerAttribution::Mixed { .. }
@@ -45,7 +46,7 @@ pub fn enhance_timeline(
         }
         let Some(encoded) = transcript.asr_timing_json.as_deref() else {
             output.spans.push(fallback.clone());
-            output.metrics.fallback_to_v1_count += 1;
+            output.metrics.chunk_fallback_count += 1;
             continue;
         };
         output.metrics.chunks_with_timing += 1;
@@ -53,7 +54,7 @@ pub fn enhance_timeline(
             Ok(value) => value,
             Err(error) => {
                 output.spans.push(fallback.clone());
-                output.metrics.fallback_to_v1_count += 1;
+                output.metrics.chunk_fallback_count += 1;
                 output.timing_diagnostics.push(TimingDiagnostic {
                     source_transcript_id: transcript.id.clone(),
                     valid: false,
@@ -69,7 +70,7 @@ pub fn enhance_timeline(
                     output.metrics.lexical_preservation_failure_count += 1;
                 }
                 output.spans.push(fallback.clone());
-                output.metrics.fallback_to_v1_count += 1;
+                output.metrics.chunk_fallback_count += 1;
                 output.timing_diagnostics.push(TimingDiagnostic {
                     source_transcript_id: transcript.id.clone(),
                     valid: false,
@@ -107,7 +108,7 @@ pub fn enhance_timeline(
             .collect::<String>();
         if normalize_preservation(&rebuilt) != normalize_preservation(&transcript.transcript) {
             output.metrics.lexical_preservation_failure_count += 1;
-            output.metrics.fallback_to_v1_count += 1;
+            output.metrics.chunk_fallback_count += 1;
             output.metrics.valid_timing_chunks -= 1;
             output.valid_timing_chunks -= 1;
             output.spans.push(fallback.clone());
@@ -326,7 +327,8 @@ fn assignments_to_spans(
             speaker_attribution: attribution,
             source_transcript_ids: fallback.source_transcript_ids.clone(),
             asr_confidence: fallback.asr_confidence,
-            speaker_confidence: assignment.confidence.or(fallback.speaker_confidence),
+            speaker_assignment_reliability: assignment.confidence,
+            speaker_attribution_source: SpeakerAttributionSource::LexicalTemporalOverlap,
             overlap: matches!(assignment.status, WordSpeakerStatus::Mixed),
             segment_kind: fallback.segment_kind.clone(),
             short_turn_confidence: fallback.short_turn_confidence,
@@ -360,7 +362,7 @@ fn attribution_for(assignment: &WordSpeakerAssignment) -> SpeakerAttribution {
     }
 }
 
-fn accumulate_assignments(output: &mut V2Timeline, assignments: &[WordSpeakerAssignment]) {
+fn accumulate_assignments(output: &mut V3Timeline, assignments: &[WordSpeakerAssignment]) {
     for assignment in assignments {
         output.metrics.total_lexical_units += 1;
         match assignment.status {
@@ -405,7 +407,7 @@ fn finalize_rates(metrics: &mut ReconstructionMetrics) {
         metrics.resolved_cross_speaker_chunk_count,
         metrics.cross_speaker_raw_chunk_count,
     );
-    metrics.fallback_to_v1_rate = ratio(metrics.fallback_to_v1_count, metrics.total_chunks);
+    metrics.chunk_fallback_rate = ratio(metrics.chunk_fallback_count, metrics.total_chunks);
 }
 
 fn ratio(numerator: usize, denominator: usize) -> f64 {
