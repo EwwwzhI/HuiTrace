@@ -21,8 +21,11 @@ use crate::evaluation::production_artifact::{
     app_commit_sha, read_and_validate_artifact, ArtifactBackend, ARTIFACT_SCHEMA_VERSION,
 };
 use crate::utterance_reconstruction::{
-    reconstruct_v3_with_config, ReconstructedUtterance, ReconstructionResult, SpeakerAttribution,
-    UtteranceReconstructionConfig,
+    reconstruct_v3_with_config, BoundaryPolicy, ReconstructedUtterance, ReconstructionResult,
+    ReconstructionTimingMode, SpeakerAttribution, UtteranceReconstructionConfig, ALGORITHM_VERSION,
+    ALGORITHM_VERSION_V3, ALIGNMENT_VERSION_V1, BOUNDARY_POLICY_VERSION_V1_FROZEN,
+    BOUNDARY_POLICY_VERSION_V3, CONFIG_VERSION, FROZEN_V1_CONFIG_VERSION,
+    SEMANTIC_MODEL_VERSION_V1,
 };
 use crate::{context, state::AppState};
 
@@ -120,13 +123,8 @@ impl UtteranceReconstructionArtifact {
         {
             bail!("reconstruction outputs belong to another meeting");
         }
-        if self.baseline.profile.boundary_policy
-            != crate::utterance_reconstruction::BoundaryPolicy::V1Frozen
-            || self.candidate.profile.boundary_policy
-                != crate::utterance_reconstruction::BoundaryPolicy::V3SemanticBaseline
-        {
-            bail!("artifact must contain Frozen Baseline and Candidate profiles in their named fields");
-        }
+        validate_frozen_baseline_profile(&self.baseline)?;
+        validate_candidate_profile(&self.candidate)?;
         for (label, result) in [
             ("Frozen Baseline", &self.baseline),
             ("Candidate", &self.candidate),
@@ -179,6 +177,69 @@ impl UtteranceReconstructionArtifact {
         self.validate(Some(&self.meeting_id))?;
         serde_json::to_vec_pretty(self).context("serialize reconstruction artifact")
     }
+}
+
+fn validate_frozen_baseline_profile(result: &ReconstructionResult) -> Result<()> {
+    if result.algorithm_version != ALGORITHM_VERSION
+        || result.profile.algorithm_version != result.algorithm_version
+        || result.profile.boundary_policy != BoundaryPolicy::V1Frozen
+        || result.profile.boundary_policy_version != BOUNDARY_POLICY_VERSION_V1_FROZEN
+        || result.profile.timing_mode != ReconstructionTimingMode::ChunkFallback
+        || result.profile.semantic_model_version.is_some()
+        || result.profile.alignment_version.is_some()
+        || result.config_version != FROZEN_V1_CONFIG_VERSION
+        || result.config != UtteranceReconstructionConfig::frozen_v1()
+    {
+        bail!("Frozen Baseline reconstruction profile invariant failed");
+    }
+    validate_timing_profile("Frozen Baseline", result)
+}
+
+fn validate_candidate_profile(result: &ReconstructionResult) -> Result<()> {
+    if result.algorithm_version != ALGORITHM_VERSION_V3
+        || result.profile.algorithm_version != result.algorithm_version
+        || result.profile.boundary_policy != BoundaryPolicy::V3SemanticBaseline
+        || result.profile.boundary_policy_version != BOUNDARY_POLICY_VERSION_V3
+        || result.config_version != CONFIG_VERSION
+    {
+        bail!("Candidate reconstruction profile invariant failed");
+    }
+    let expected_semantic = result
+        .config
+        .semantic_boundary_enabled
+        .then_some(SEMANTIC_MODEL_VERSION_V1);
+    if result.profile.semantic_model_version.as_deref() != expected_semantic {
+        bail!("Candidate semantic model profile does not match its config");
+    }
+    validate_timing_profile("Candidate", result)
+}
+
+fn validate_timing_profile(label: &str, result: &ReconstructionResult) -> Result<()> {
+    match result.profile.timing_mode {
+        ReconstructionTimingMode::ChunkFallback => {
+            if result.metrics.valid_timing_chunks != 0 || result.profile.alignment_version.is_some()
+            {
+                bail!("{label} ChunkFallback profile contradicts timing metrics");
+            }
+        }
+        ReconstructionTimingMode::NativeLexicalTiming => {
+            if result.metrics.valid_timing_chunks == 0
+                || result.metrics.chunk_fallback_count != 0
+                || result.profile.alignment_version.as_deref() != Some(ALIGNMENT_VERSION_V1)
+            {
+                bail!("{label} NativeLexicalTiming profile contradicts timing metrics");
+            }
+        }
+        ReconstructionTimingMode::Hybrid => {
+            if result.metrics.valid_timing_chunks == 0
+                || result.metrics.chunk_fallback_count == 0
+                || result.profile.alignment_version.as_deref() != Some(ALIGNMENT_VERSION_V1)
+            {
+                bail!("{label} Hybrid profile contradicts timing metrics");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1789,6 +1850,37 @@ mod tests {
         legacy.schema_version = 1;
         let error = legacy.validate(None).unwrap_err().to_string();
         assert!(error.contains("ambiguous v1/v2 fields"));
+    }
+
+    #[test]
+    fn artifact_profile_and_timing_invariants_fail_closed() {
+        let mut bad_baseline = artifact();
+        bad_baseline.baseline.profile.algorithm_version = ALGORITHM_VERSION_V3.into();
+        let bad_baseline = bad_baseline.seal().unwrap();
+        assert!(bad_baseline
+            .validate(None)
+            .unwrap_err()
+            .to_string()
+            .contains("Frozen Baseline reconstruction profile invariant"));
+
+        let mut bad_semantic = artifact();
+        bad_semantic.candidate.profile.semantic_model_version = None;
+        let bad_semantic = bad_semantic.seal().unwrap();
+        assert!(bad_semantic
+            .validate(None)
+            .unwrap_err()
+            .to_string()
+            .contains("semantic model profile"));
+
+        let mut bad_hybrid = artifact();
+        bad_hybrid.candidate.profile.timing_mode = ReconstructionTimingMode::Hybrid;
+        bad_hybrid.candidate.profile.alignment_version = Some(ALIGNMENT_VERSION_V1.into());
+        let bad_hybrid = bad_hybrid.seal().unwrap();
+        assert!(bad_hybrid
+            .validate(None)
+            .unwrap_err()
+            .to_string()
+            .contains("Hybrid profile contradicts timing metrics"));
     }
 
     #[test]

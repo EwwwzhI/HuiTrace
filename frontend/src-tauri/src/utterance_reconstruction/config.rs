@@ -77,8 +77,37 @@ impl UtteranceReconstructionConfig {
     /// Immutable benchmark baseline reconstructed from commit 416b807.
     pub fn frozen_v1() -> Self {
         Self {
+            long_silence_ms: 1_500,
+            medium_gap_ms: 800,
+            short_gap_ms: 350,
+            max_utterance_duration_ms: 20_000,
+            max_text_length: 90,
+            split_score_threshold: 3,
+            speaker_changed_score: 4,
+            ambiguous_speaker_changed_score: 1,
+            reliable_speaker_change_threshold: 0.75,
+            medium_gap_score: 2,
+            terminal_punctuation_score: 2,
+            same_speaker_score: -3,
+            short_gap_score: -2,
+            continuation_prefix_score: -1,
             semantic_boundary_enabled: false,
-            ..Self::default()
+            completeness_split_threshold: 0.80,
+            continuity_merge_threshold: 0.70,
+            completeness_split_score: 2,
+            incomplete_merge_score: -1,
+            continuity_merge_score: -3,
+            weak_punctuation_score: -1,
+            backchannel_bridge_score: -2,
+            backchannel_min_confidence: 0.75,
+            backchannel_max_duration_ms: 1_200,
+            backchannel_max_side_gap_ms: 700,
+            assignment_min_overlap_ratio: 0.60,
+            assignment_min_margin: 0.20,
+            alignment_tolerance_ms: 50,
+            max_alignment_tolerance_ms: 200,
+            timing_bounds_tolerance_ms: 200,
+            true_overlap_min_ms: 100,
         }
     }
 

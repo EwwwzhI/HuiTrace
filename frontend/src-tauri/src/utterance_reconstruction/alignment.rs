@@ -4,7 +4,8 @@ use crate::database::repositories::speaker_turn::SpeakerTurn;
 
 use super::config::UtteranceReconstructionConfig;
 use super::types::{
-    AlignmentReason, SpeakerCandidate, TimedWord, WordSpeakerAssignment, WordSpeakerStatus,
+    AlignmentReason, SpeakerAttributionSource, SpeakerCandidate, TimedWord, WordSpeakerAssignment,
+    WordSpeakerStatus,
 };
 
 pub fn align_words(
@@ -162,11 +163,23 @@ fn assignment(
     candidates: Vec<SpeakerCandidate>,
     reason: AlignmentReason,
 ) -> WordSpeakerAssignment {
+    let (attribution_source, assignment_reliability) = match &reason {
+        AlignmentReason::ManualAssignment => (SpeakerAttributionSource::Manual, None),
+        AlignmentReason::DominantTemporalOverlap => (
+            SpeakerAttributionSource::LexicalTemporalOverlap,
+            Some(best_overlap_ratio),
+        ),
+        AlignmentReason::NoSpeakerEvidence => (SpeakerAttributionSource::Unknown, None),
+        AlignmentReason::InsufficientOverlap
+        | AlignmentReason::InsufficientMargin
+        | AlignmentReason::TrueOverlap => (SpeakerAttributionSource::LexicalTemporalOverlap, None),
+    };
     WordSpeakerAssignment {
         word,
         speaker_key,
         status,
-        confidence: matches!(status, WordSpeakerStatus::Assigned).then_some(best_overlap_ratio),
+        attribution_source,
+        assignment_reliability,
         best_overlap_ratio,
         candidates,
         reasons: vec![reason],

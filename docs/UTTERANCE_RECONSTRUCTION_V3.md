@@ -25,7 +25,7 @@ The derived read path is:
 
 ```text
 api_get_reconstructed_utterances
-  -> normalize_timeline (chunk fallback attribution + recomputed reliability)
+  -> normalize_timeline_v3 (chunk fallback attribution + recomputed reliability)
   -> timing::enhance_timeline (validated provider timing only)
   -> alignment::align_words (lexical timing x accepted speaker turns)
   -> AtomicSpan
@@ -53,18 +53,32 @@ post-hoc diarization is not yet available during capture.
   `WhisperProvider` therefore advertises no timing capability and returns
   `timing: None`.
 - Missing, malformed, non-monotonic, or out-of-bounds provider timing falls
-  back to the raw chunk span. This is still the V3 algorithm with
-  `timing_mode=chunk_fallback`; it never changes identity to V1. No lexical
-  timestamps are inferred or fabricated.
+  back to the raw chunk span. No lexical timestamps are inferred or fabricated.
+- The result profile describes the path actually taken across the whole
+  meeting: `chunk_fallback` means no chunk supplied valid lexical timing,
+  `native_lexical_timing` means every chunk used valid native timing, and
+  `hybrid` means valid native timing and chunk fallback were both used. Native
+  and Hybrid profiles carry the lexical-alignment version; Chunk Fallback does
+  not. All three remain V3 and never change identity to V1.
+- Manual speaker assignments retain `SpeakerAttributionSource::Manual` through
+  lexical alignment and carry no synthetic temporal reliability. Only dominant
+  temporal-overlap assignments use `LexicalTemporalOverlap` with their measured
+  overlap ratio. A manual A-to-B transition therefore remains a reliable handoff
+  even when lexical timing is active.
 
 ## Version model
 
 Every result carries a `ReconstructionProfile` with independent versions for
 the algorithm, timing mode, boundary policy, semantic model and alignment.
-`BoundaryPolicy::V1Frozen` replays the boundary behavior from commit `416b807`
-and never calls the semantic baseline. `BoundaryPolicy::V3SemanticBaseline`
-is the current Candidate. Configuration schema is v4; the unchanged semantic
-baseline remains `deterministic-semantic-baseline-v1`.
+The Frozen Baseline has its own `normalize_timeline_v1_frozen` implementation,
+whose attribution precedence is restored from commit `416b807`, and its own
+fully explicit `frozen_v1()` configuration snapshot. It then runs
+`BoundaryPolicy::V1Frozen` and never calls lexical alignment or the semantic
+baseline. It does not reuse the V3 normalizer, caller-supplied V3 configuration,
+or `Default`, so future V3 changes cannot silently alter the benchmark.
+`BoundaryPolicy::V3SemanticBaseline` is the current Candidate. Configuration
+schema is v4; the unchanged semantic baseline remains
+`deterministic-semantic-baseline-v1`.
 
 ## Root causes addressed
 
@@ -129,7 +143,10 @@ Audio -> VAD fragments -> ASR raw text (source of truth)
 Reconstruction Artifact schema v2 names the two outputs `baseline` and
 `candidate`; schema v1 artifacts with ambiguous `v1`/`v2` fields are rejected
 and must be regenerated. The Frozen Baseline is immutable and parameter sweeps
-tune only the Candidate. The Ground Truth schema supports explicit buckets for
+tune only the Candidate. Artifact loading fails closed unless the baseline and
+candidate algorithm, profile, boundary-policy, configuration, semantic-model,
+alignment, timing mode, and timing metrics are mutually consistent. The Ground
+Truth schema supports explicit buckets for
 `same_speaker_continuity`, `same_speaker_boundary`, `asr_fragmentation`, and
 `vad_fragmentation`, in addition to speaker handoff and existing diagnostic
 buckets. Reports expose Boundary Precision/Recall/F1, False Split Rate, False

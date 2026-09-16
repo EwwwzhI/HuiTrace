@@ -8,8 +8,8 @@ mod timing;
 mod types;
 
 pub use assembler::reconstruct;
-pub use config::UtteranceReconstructionConfig;
-pub use normalizer::normalize_timeline;
+pub use config::{UtteranceReconstructionConfig, CONFIG_VERSION, FROZEN_V1_CONFIG_VERSION};
+pub use normalizer::{normalize_timeline_v1_frozen, normalize_timeline_v3};
 pub use types::*;
 
 use tauri::State;
@@ -30,12 +30,7 @@ pub fn reconstruct_v1_with_config(
     _config: &UtteranceReconstructionConfig,
 ) -> ReconstructionResult {
     let frozen_config = UtteranceReconstructionConfig::frozen_v1();
-    let spans = normalize_timeline(
-        transcripts,
-        speaker_turns,
-        short_turn_events,
-        &frozen_config,
-    );
+    let spans = normalize_timeline_v1_frozen(transcripts, speaker_turns, short_turn_events);
     reconstruct(meeting_id, &spans, &frozen_config)
 }
 
@@ -46,12 +41,14 @@ pub fn reconstruct_v3_with_config(
     short_turn_events: &[ShortTurnEvent],
     config: &UtteranceReconstructionConfig,
 ) -> ReconstructionResult {
-    let chunk_spans = normalize_timeline(transcripts, speaker_turns, short_turn_events, config);
+    let chunk_spans = normalize_timeline_v3(transcripts, speaker_turns, short_turn_events, config);
     let enhanced = timing::enhance_timeline(transcripts, speaker_turns, &chunk_spans, config);
     let timing_mode = if enhanced.valid_timing_chunks == 0 {
         ReconstructionTimingMode::ChunkFallback
-    } else {
+    } else if enhanced.metrics.chunk_fallback_count == 0 {
         ReconstructionTimingMode::NativeLexicalTiming
+    } else {
+        ReconstructionTimingMode::Hybrid
     };
     let spans = if enhanced.valid_timing_chunks == 0 {
         &chunk_spans
@@ -70,8 +67,11 @@ pub fn reconstruct_v3_with_config(
             semantic_model_version: config
                 .semantic_boundary_enabled
                 .then(|| SEMANTIC_MODEL_VERSION_V1.to_string()),
-            alignment_version: (timing_mode == ReconstructionTimingMode::NativeLexicalTiming)
-                .then(|| ALIGNMENT_VERSION_V1.to_string()),
+            alignment_version: matches!(
+                timing_mode,
+                ReconstructionTimingMode::NativeLexicalTiming | ReconstructionTimingMode::Hybrid
+            )
+            .then(|| ALIGNMENT_VERSION_V1.to_string()),
         },
         enhanced.metrics,
         enhanced.alignment_diagnostics,

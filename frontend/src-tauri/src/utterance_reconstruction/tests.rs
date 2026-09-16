@@ -113,6 +113,59 @@ fn frozen_v1_replays_historical_golden_cases() {
 }
 
 #[test]
+fn frozen_v1_raw_pipeline_preserves_historical_mixed_before_manual_precedence() {
+    let mut transcript = raw_transcript("historical", 10.0, 18.0, "人工标签跨越两位说话人");
+    transcript.speaker_id = Some("manual-speaker".into());
+    transcript.speaker_assignment_method = "manual".into();
+    let turns = vec![turn(10_000, 14_000, "a"), turn(14_000, 18_000, "b")];
+
+    let result = reconstruct_v1_with_config(
+        "meeting-test",
+        &[transcript],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+
+    assert!(matches!(
+        result.utterances[0].speaker_attribution,
+        SpeakerAttribution::Mixed { .. }
+    ));
+    assert_eq!(result.profile.boundary_policy, BoundaryPolicy::V1Frozen);
+}
+
+#[test]
+fn frozen_v1_ignores_caller_config_and_uses_explicit_snapshot() {
+    let transcripts = [
+        raw_transcript("t1", 0.0, 1.0, "第一句"),
+        raw_transcript("t2", 1.2, 2.0, "第二句"),
+    ];
+    let turns = [turn(0, 2_000, "a")];
+    let default_result = reconstruct_v1_with_config(
+        "meeting-test",
+        &transcripts,
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+    let mut hostile = UtteranceReconstructionConfig::default();
+    hostile.long_silence_ms = 1;
+    hostile.medium_gap_ms = 1;
+    hostile.short_gap_ms = -1;
+    hostile.max_text_length = 1;
+    hostile.split_score_threshold = -100;
+    hostile.same_speaker_score = 100;
+    let hostile_result =
+        reconstruct_v1_with_config("meeting-test", &transcripts, &turns, &[], &hostile);
+
+    assert_eq!(default_result, hostile_result);
+    assert_eq!(
+        default_result.config,
+        UtteranceReconstructionConfig::frozen_v1()
+    );
+}
+
+#[test]
 fn same_speaker_and_250ms_pause_merges_with_continuation_hint() {
     let result = reconstruct_spans(&[
         span("t1", 0, 1_000, "我觉得这个方案", "a"),
@@ -387,7 +440,7 @@ fn transcript_crossing_two_speaker_turns_is_marked_mixed_without_text_split() {
             speaker_key: "b".into(),
         },
     ];
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript],
         &turns,
         &[],
@@ -412,7 +465,7 @@ fn persisted_overlap_never_becomes_a_single_speaker_claim() {
         confidence: Some(0.9),
         speaker_key: "a".into(),
     }];
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript],
         &turns,
         &[],
@@ -430,7 +483,7 @@ fn manual_assignment_wins_over_sequential_turn_handoff_but_not_true_overlap() {
     transcript.speaker_id = Some("manual-speaker".into());
     transcript.speaker_assignment_method = "manual".into();
     let turns = vec![turn(10_000, 14_000, "a"), turn(14_000, 18_000, "b")];
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript.clone()],
         &turns,
         &[],
@@ -449,7 +502,7 @@ fn manual_assignment_wins_over_sequential_turn_handoff_but_not_true_overlap() {
     assert_eq!(spans[0].speaker_assignment_reliability, None);
 
     transcript.speaker_overlap = 1;
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript],
         &turns,
         &[],
@@ -465,7 +518,7 @@ fn manual_assignment_wins_over_sequential_turn_handoff_but_not_true_overlap() {
 fn chunk_reliability_is_recomputed_and_stale_persisted_confidence_is_ignored() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "只有一半有说话人证据");
     transcript.speaker_confidence = Some(0.99);
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript],
         &[turn(10_000, 11_000, "a")],
         &[],
@@ -481,7 +534,7 @@ fn chunk_reliability_is_recomputed_and_stale_persisted_confidence_is_ignored() {
 #[test]
 fn persisted_speaker_without_accepted_turn_is_not_a_reliable_handoff() {
     let transcript = raw_transcript("t1", 10.0, 12.0, "回退说话人");
-    let spans = normalize_timeline(
+    let spans = normalize_timeline_v3(
         &[transcript],
         &[],
         &[],
@@ -568,6 +621,53 @@ fn timed_single_speaker_chunk_is_single_and_deterministic() {
 }
 
 #[test]
+fn manual_native_lexical_timing_preserves_manual_provenance_and_hard_handoff() {
+    let mut left = raw_transcript("manual-a", 10.0, 12.0, "甲方发言");
+    left.speaker_id = Some("manual-a".into());
+    left.speaker_assignment_method = "manual".into();
+    set_timing(&mut left, &[("甲", 300), ("方", 700), ("发言", 1_100)]);
+    let mut right = raw_transcript("manual-b", 12.1, 14.0, "乙方发言");
+    right.speaker_id = Some("manual-b".into());
+    right.speaker_assignment_method = "manual".into();
+    set_timing(&mut right, &[("乙", 300), ("方", 700), ("发言", 1_100)]);
+
+    let result = reconstruct_v3_with_config(
+        "meeting-test",
+        &[left, right],
+        &[],
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+
+    assert_eq!(
+        result.profile.timing_mode,
+        ReconstructionTimingMode::NativeLexicalTiming
+    );
+    assert_eq!(result.utterances.len(), 2);
+    assert_eq!(
+        result.boundaries[0]
+            .evidence
+            .left_speaker_attribution_source,
+        SpeakerAttributionSource::Manual
+    );
+    assert_eq!(
+        result.boundaries[0]
+            .evidence
+            .right_speaker_attribution_source,
+        SpeakerAttributionSource::Manual
+    );
+    assert_eq!(
+        result.boundaries[0].evidence.speaker_change_reliability,
+        None
+    );
+    assert!(result.boundaries[0].evidence.speaker_change_reliable);
+    assert_eq!(
+        result.boundaries[0].decision_source,
+        BoundaryDecisionSource::ReliableSpeakerHandoff
+    );
+}
+
+#[test]
 fn sequential_52_48_temporal_evidence_stays_ambiguous() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "嗯");
     set_timing(&mut transcript, &[("嗯", 1_000)]);
@@ -617,7 +717,7 @@ fn invalid_timing_uses_v3_chunk_fallback_profile() {
     let mut transcript = raw_transcript("t1", 10.0, 12.0, "先后");
     set_timing(&mut transcript, &[("先", 1_000), ("后", 500)]);
     let turns = vec![turn(10_000, 12_000, "a")];
-    let v1 = normalize_timeline(
+    let v1 = normalize_timeline_v3(
         &[transcript.clone()],
         &turns,
         &[],
@@ -649,6 +749,32 @@ fn invalid_timing_uses_v3_chunk_fallback_profile() {
         BoundaryPolicy::V3SemanticBaseline
     );
     assert_eq!(fallback.profile.alignment_version, None);
+}
+
+#[test]
+fn mixed_valid_missing_and_invalid_chunks_report_hybrid_timing() {
+    let mut valid = raw_transcript("valid", 0.0, 1.0, "有效");
+    set_timing(&mut valid, &[("有", 200), ("效", 600)]);
+    let missing = raw_transcript("missing", 1.1, 2.0, "缺失");
+    let mut invalid = raw_transcript("invalid", 2.1, 3.0, "无效");
+    set_timing(&mut invalid, &[("无", 700), ("效", 300)]);
+    let turns = [turn(0, 3_000, "a")];
+
+    let result = reconstruct_v3_with_config(
+        "meeting-test",
+        &[valid, missing, invalid],
+        &turns,
+        &[],
+        &UtteranceReconstructionConfig::default(),
+    );
+
+    assert_eq!(result.profile.timing_mode, ReconstructionTimingMode::Hybrid);
+    assert_eq!(result.metrics.valid_timing_chunks, 1);
+    assert_eq!(result.metrics.chunk_fallback_count, 2);
+    assert_eq!(
+        result.profile.alignment_version.as_deref(),
+        Some(ALIGNMENT_VERSION_V1)
+    );
 }
 
 #[test]
@@ -796,7 +922,7 @@ fn set_timing(transcript: &mut Transcript, pieces: &[(&str, i64)]) {
 
 fn reconstruct_v3(transcripts: &[Transcript], turns: &[SpeakerTurn]) -> ReconstructionResult {
     let config = UtteranceReconstructionConfig::default();
-    let chunk_spans = normalize_timeline(transcripts, turns, &[], &config);
+    let chunk_spans = normalize_timeline_v3(transcripts, turns, &[], &config);
     let enhanced = super::timing::enhance_timeline(transcripts, turns, &chunk_spans, &config);
     assert!(enhanced.valid_timing_chunks > 0);
     super::assembler::reconstruct_with_details(

@@ -278,7 +278,7 @@ export interface UtteranceReconstructionResult {
   algorithm_version: string;
   profile: {
     algorithm_version: string;
-    timing_mode: 'chunk_fallback' | 'native_lexical_timing';
+    timing_mode: 'chunk_fallback' | 'native_lexical_timing' | 'hybrid';
     boundary_policy: 'v1_frozen' | 'v3_semantic_baseline';
     boundary_policy_version: string;
     semantic_model_version?: string | null;

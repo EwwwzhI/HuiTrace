@@ -15,6 +15,7 @@ pub const ALIGNMENT_VERSION_V1: &str = "lexical-temporal-alignment-v1";
 pub enum ReconstructionTimingMode {
     ChunkFallback,
     NativeLexicalTiming,
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,7 +91,8 @@ pub struct WordSpeakerAssignment {
     pub word: TimedWord,
     pub speaker_key: Option<String>,
     pub status: WordSpeakerStatus,
-    pub confidence: Option<f64>,
+    pub attribution_source: SpeakerAttributionSource,
+    pub assignment_reliability: Option<f64>,
     pub best_overlap_ratio: f64,
     pub candidates: Vec<SpeakerCandidate>,
     pub reasons: Vec<AlignmentReason>,

@@ -33,10 +33,34 @@ Phase 4 Decision
 
 The reconstruction artifact embeds the exact persisted transcripts (including
 provider-native timing), accepted speaker turns, ShortTurn events, Frozen
-Baseline output, Candidate output, full reconstruction profiles, diagnostics, and diagnostic coverage
-metrics. It binds the source Production Artifact and source media by SHA-256.
+Baseline output, Candidate output, full reconstruction profiles, diagnostics,
+and diagnostic coverage metrics. It binds the source Production Artifact and
+source media by SHA-256.
 An internal integrity hash covers deterministic JSON with the hash field blank;
 modified artifacts fail closed.
+
+Profile validation also fails closed. The Frozen Baseline must identify the
+frozen V1 algorithm, V1 boundary policy and version, explicit frozen config
+version and config snapshot, Chunk Fallback timing, no semantic model, and no
+alignment. The Candidate must identify the V3 algorithm, V3 boundary policy and
+version, current config version, and the semantic model required by its config.
+Its timing mode must agree with both metrics and alignment metadata:
+
+```text
+valid_timing_chunks == 0
+  -> ChunkFallback, no alignment version
+
+valid_timing_chunks > 0 AND chunk_fallback_count == 0
+  -> NativeLexicalTiming, lexical alignment v1
+
+valid_timing_chunks > 0 AND chunk_fallback_count > 0
+  -> Hybrid, lexical alignment v1
+```
+
+The Frozen Baseline is produced by a dedicated historical normalizer plus an
+explicit field-by-field V1 config snapshot before the frozen V1 boundary
+policy. It does not reuse the evolving V3 normalizer, the current default
+config, native lexical alignment, or semantic scoring.
 
 Export never reruns ASR, VAD, diarization, or ShortTurn inference. Parameter
 sweeps replay only deterministic utterance reconstruction over frozen evidence.

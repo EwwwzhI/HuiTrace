@@ -8,7 +8,109 @@ use crate::diarization::types::SegmentKind;
 use super::config::UtteranceReconstructionConfig;
 use super::types::{AtomicSpan, SpeakerAttribution, SpeakerAttributionSource};
 
-pub fn normalize_timeline(
+/// Frozen raw-row normalizer replayed from commit 416b807. Keep this function
+/// independent from the V3 normalizer so future attribution changes cannot
+/// mutate benchmark baseline inputs.
+pub fn normalize_timeline_v1_frozen(
+    transcripts: &[Transcript],
+    speaker_turns: &[SpeakerTurn],
+    short_turn_events: &[ShortTurnEvent],
+) -> Vec<AtomicSpan> {
+    let mut event_confidence = BTreeMap::new();
+    for event in short_turn_events {
+        let Some(transcript_id) = event.transcript_id.as_ref() else {
+            continue;
+        };
+        let replace = match event_confidence.get(transcript_id) {
+            Some((_, confidence)) => event.kind_confidence > *confidence,
+            None => true,
+        };
+        if replace {
+            event_confidence.insert(
+                transcript_id.clone(),
+                (event.kind.clone(), event.kind_confidence),
+            );
+        }
+    }
+
+    transcripts
+        .iter()
+        .map(|transcript| {
+            let start = transcript.audio_start_time.map(seconds_to_ms_v1_frozen);
+            let end = transcript.audio_end_time.map(seconds_to_ms_v1_frozen);
+            let timing_reliable = matches!((start, end), (Some(start), Some(end)) if end >= start);
+            let start_ms = start.unwrap_or_default();
+            let end_ms = end.filter(|end| *end >= start_ms).unwrap_or(start_ms);
+            let keys = if timing_reliable {
+                speaker_turns
+                    .iter()
+                    .filter(|turn| turn.end_ms.min(end_ms) > turn.start_ms.max(start_ms))
+                    .map(|turn| turn.speaker_key.clone())
+                    .filter(|key| !key.is_empty())
+                    .collect::<BTreeSet<_>>()
+            } else {
+                BTreeSet::new()
+            };
+
+            // Historical precedence: cross-speaker evidence wins over manual.
+            let attribution = if transcript.speaker_overlap != 0 || keys.len() > 1 {
+                SpeakerAttribution::Mixed {
+                    speaker_keys: keys.iter().cloned().collect(),
+                }
+            } else if transcript.speaker_assignment_method == "manual" {
+                transcript
+                    .speaker_id
+                    .clone()
+                    .map(|speaker_key| SpeakerAttribution::Single { speaker_key })
+                    .unwrap_or(SpeakerAttribution::Unknown)
+            } else if let Some(speaker_key) = keys.iter().next().cloned() {
+                SpeakerAttribution::Single { speaker_key }
+            } else {
+                transcript
+                    .speaker_id
+                    .clone()
+                    .map(|speaker_key| SpeakerAttribution::Single { speaker_key })
+                    .unwrap_or(SpeakerAttribution::Unknown)
+            };
+            let speaker_attribution_source = if transcript.speaker_assignment_method == "manual"
+                && matches!(attribution, SpeakerAttribution::Single { .. })
+            {
+                SpeakerAttributionSource::Manual
+            } else if !keys.is_empty() {
+                SpeakerAttributionSource::ChunkTemporalOverlap
+            } else if transcript.speaker_id.is_some() {
+                SpeakerAttributionSource::PersistedFallback
+            } else {
+                SpeakerAttributionSource::Unknown
+            };
+            let linked_event = event_confidence.get(&transcript.id);
+
+            AtomicSpan {
+                start_ms,
+                end_ms,
+                timing_reliable,
+                text: normalize_whitespace_v1_frozen(&transcript.transcript),
+                speaker_attribution: attribution,
+                source_transcript_ids: vec![transcript.id.clone()],
+                asr_confidence: transcript.asr_confidence,
+                // Historical V1 did not use attribution confidence to decide
+                // boundaries. Do not manufacture modern reliability here.
+                speaker_assignment_reliability: None,
+                speaker_attribution_source,
+                overlap: transcript.speaker_overlap != 0,
+                segment_kind: linked_event
+                    .map(|(kind, _)| kind.clone())
+                    .unwrap_or_else(|| {
+                        parse_segment_kind_v1_frozen(transcript.segment_kind.as_deref())
+                    }),
+                short_turn_confidence: linked_event.map(|(_, confidence)| *confidence),
+                lexical_range: None,
+            }
+        })
+        .collect()
+}
+
+pub fn normalize_timeline_v3(
     transcripts: &[Transcript],
     speaker_turns: &[SpeakerTurn],
     short_turn_events: &[ShortTurnEvent],
@@ -155,6 +257,24 @@ fn union_duration(intervals: &[(i64, i64)]) -> i64 {
         }
     }
     total.saturating_add(end.saturating_sub(start))
+}
+
+fn normalize_whitespace_v1_frozen(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn seconds_to_ms_v1_frozen(seconds: f64) -> i64 {
+    (seconds * 1_000.0).round() as i64
+}
+
+fn parse_segment_kind_v1_frozen(value: Option<&str>) -> SegmentKind {
+    match value {
+        Some("speech") => SegmentKind::Speech,
+        Some("backchannel") => SegmentKind::Backchannel,
+        Some("noise") => SegmentKind::Noise,
+        Some("non_speech_vocalization") => SegmentKind::NonSpeechVocalization,
+        _ => SegmentKind::Unknown,
+    }
 }
 
 pub fn normalize_whitespace(text: &str) -> String {

@@ -7,8 +7,7 @@ use super::config::UtteranceReconstructionConfig;
 use super::normalizer::normalize_whitespace;
 use super::types::{
     AlignmentDiagnostic, AtomicSpan, ReconstructionMetrics, SourceLexicalRange, SpeakerAttribution,
-    SpeakerAttributionSource, TimedWord, TimingDiagnostic, WordSpeakerAssignment,
-    WordSpeakerStatus,
+    TimedWord, TimingDiagnostic, WordSpeakerAssignment, WordSpeakerStatus,
 };
 
 pub struct V3Timeline {
@@ -327,8 +326,8 @@ fn assignments_to_spans(
             speaker_attribution: attribution,
             source_transcript_ids: fallback.source_transcript_ids.clone(),
             asr_confidence: fallback.asr_confidence,
-            speaker_assignment_reliability: assignment.confidence,
-            speaker_attribution_source: SpeakerAttributionSource::LexicalTemporalOverlap,
+            speaker_assignment_reliability: assignment.assignment_reliability,
+            speaker_attribution_source: assignment.attribution_source,
             overlap: matches!(assignment.status, WordSpeakerStatus::Mixed),
             segment_kind: fallback.segment_kind.clone(),
             short_turn_confidence: fallback.short_turn_confidence,
