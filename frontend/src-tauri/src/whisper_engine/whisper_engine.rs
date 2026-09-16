@@ -678,6 +678,17 @@ impl WhisperEngine {
         audio_data: Vec<f32>,
         language: Option<String>,
     ) -> Result<(String, f32, bool)> {
+        let result = self
+            .transcribe_audio_with_timing(audio_data, language)
+            .await?;
+        Ok((result.text, result.confidence, result.is_partial))
+    }
+
+    pub async fn transcribe_audio_with_timing(
+        &self,
+        audio_data: Vec<f32>,
+        language: Option<String>,
+    ) -> Result<super::WhisperTranscriptionResult> {
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock
             .as_ref()
@@ -792,7 +803,18 @@ impl WhisperEngine {
             0.0
         };
 
-        Ok((cleaned_result, avg_confidence, is_partial))
+        // Timing is auxiliary. In particular, repetition cleanup above can make
+        // tokens disagree with text; the provider gate then drops only timing.
+        let tokens = super::timing::extract_tokens(ctx, &state).unwrap_or_else(|_| {
+            log::debug!("Whisper token metadata unavailable; retaining ASR text");
+            Vec::new()
+        });
+        Ok(super::WhisperTranscriptionResult {
+            text: cleaned_result,
+            confidence: avg_confidence,
+            is_partial,
+            tokens,
+        })
     }
 
     pub async fn transcribe_audio(
@@ -1423,3 +1445,7 @@ impl WhisperEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "safe_timing_tests.rs"]
+mod safe_timing_tests;

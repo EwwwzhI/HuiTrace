@@ -864,6 +864,55 @@ fn lexical(text: &str) -> String {
         .collect()
 }
 
+#[test]
+fn whisper_native_intervals_use_v3_and_leave_frozen_v1_identical() {
+    let mut row = raw_transcript("whisper", 0.0, 2.0, "Hello world.");
+    let config = UtteranceReconstructionConfig::default();
+    let before = reconstruct_v1_with_config("meeting-test", &[row.clone()], &[], &[], &config);
+    let timing = TranscriptTiming {
+        provider: "Whisper".into(),
+        capabilities: crate::audio::transcription::whisper_provider::whisper_capabilities(),
+        tokens: [("Hello", 100, 400), (" world.", 500, 1000)]
+            .into_iter()
+            .map(|(text, start, end)| TimedToken {
+                text: text.into(),
+                start_ms: start,
+                end_ms: Some(end),
+                confidence: Some(0.9),
+                timing_source: TimingSource::NativeToken,
+            })
+            .collect(),
+    };
+    row.asr_timing_json = Some(serde_json::to_string(&timing).unwrap());
+    let after = reconstruct_v1_with_config("meeting-test", &[row.clone()], &[], &[], &config);
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+    let candidate = reconstruct_v3_with_config("meeting-test", &[row.clone()], &[], &[], &config);
+    assert_eq!(
+        candidate.profile.timing_mode,
+        ReconstructionTimingMode::NativeLexicalTiming
+    );
+    assert_eq!(
+        candidate
+            .utterances
+            .iter()
+            .map(|u| u.text.as_str())
+            .collect::<String>(),
+        row.transcript
+    );
+    let mut invalid = timing;
+    invalid.tokens[1].end_ms = None;
+    row.asr_timing_json = Some(serde_json::to_string(&invalid).unwrap());
+    let fallback = reconstruct_v3_with_config("meeting-test", &[row.clone()], &[], &[], &config);
+    assert_eq!(
+        fallback.profile.timing_mode,
+        ReconstructionTimingMode::ChunkFallback
+    );
+    assert_eq!(fallback.utterances[0].text, row.transcript);
+}
+
 fn raw_transcript(id: &str, start: f64, end: f64, text: &str) -> Transcript {
     Transcript {
         id: id.into(),

@@ -674,16 +674,17 @@ async fn run_import<R: Runtime>(
             crate::audio::transcription::parakeet_provider::transcript_result_from_native(native)
         } else {
             let engine = whisper_engine.as_ref().unwrap();
-            let (text, conf, _) = engine
-                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
+            let native = engine
+                .transcribe_audio_with_timing(segment.samples.clone(), language.clone())
                 .await
                 .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            crate::audio::transcription::TranscriptResult {
-                text,
-                confidence: Some(conf),
-                is_partial: false,
-                timing: None,
-            }
+            let mut result =
+                crate::audio::transcription::whisper_provider::transcript_result_from_native(
+                    native,
+                    (segment.samples.len() / 16) as i64,
+                );
+            result.is_partial = false;
+            result
         };
         let text = result.text;
         let conf = result.confidence;

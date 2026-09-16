@@ -538,35 +538,21 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             // Get language preference from global state
             let language = crate::get_language_preference_internal();
 
+            let duration_ms = (speech_samples.len() / 16) as i64;
             match whisper_engine
-                .transcribe_audio_with_confidence(speech_samples, language)
+                .transcribe_audio_with_timing(speech_samples, language)
                 .await
             {
-                Ok((text, confidence, is_partial)) => {
-                    let cleaned_text = text.trim().to_string();
-                    if cleaned_text.is_empty() {
-                        return Ok(TranscriptResult {
-                            text: String::new(),
-                            confidence: Some(confidence),
-                            is_partial,
-                            timing: None,
-                        });
-                    }
-
+                Ok(native) => {
+                    let result =
+                        super::whisper_provider::transcript_result_from_native(native, duration_ms);
                     info!(
-                        "Whisper transcription complete for chunk {} (chars={}, confidence={:.2}, partial={})",
+                        "Whisper transcription complete for chunk {} (chars={}, partial={})",
                         chunk.chunk_id,
-                        cleaned_text.chars().count(),
-                        confidence,
-                        is_partial
+                        result.text.chars().count(),
+                        result.is_partial
                     );
-
-                    Ok(TranscriptResult {
-                        text: cleaned_text,
-                        confidence: Some(confidence),
-                        is_partial,
-                        timing: None,
-                    })
+                    Ok(result)
                 }
                 Err(e) => {
                     error!(

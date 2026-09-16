@@ -182,6 +182,28 @@ pub fn validate_and_group(
     Ok(words)
 }
 
+/// Shared provider/reconstruction gate. Normalization preserves punctuation,
+/// Unicode and word boundaries; only whitespace layout is insignificant.
+pub(crate) fn validate_lexical_timing(
+    text: &str,
+    tokens: &[TimedToken],
+    chunk_duration: i64,
+    tolerance: i64,
+) -> Result<(), String> {
+    if tokens.is_empty() || chunk_duration <= 0 {
+        return Err("timing_has_no_tokens_or_audio".into());
+    }
+    validate_tokens(tokens, chunk_duration, tolerance)?;
+    let reconstructed = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<String>();
+    if normalize_preservation(&reconstructed) != normalize_preservation(text) {
+        return Err("lexical_preservation_failed".into());
+    }
+    Ok(())
+}
+
 fn validate_tokens(
     tokens: &[TimedToken],
     chunk_duration: i64,
@@ -191,6 +213,14 @@ fn validate_tokens(
     let mut previous_start = None;
     let mut previous_end = None;
     for token in tokens {
+        if token.timing_source == crate::audio::transcription::TimingSource::NativeToken {
+            let end = token.end_ms.ok_or("native_token_missing_end")?;
+            // Conservative trust limit, not a decoder constraint. No interpolation
+            // or clipping: unusual sustained words fall back to the original chunk.
+            if end.saturating_sub(token.start_ms) > 10_000 {
+                return Err("native_token_duration_excessive".into());
+            }
+        }
         if token.start_ms < 0 {
             return Err("negative_token_timestamp".to_string());
         }

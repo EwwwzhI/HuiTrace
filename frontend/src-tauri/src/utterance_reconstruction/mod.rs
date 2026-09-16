@@ -5,6 +5,7 @@ mod config;
 mod normalizer;
 mod semantic;
 mod timing;
+pub(crate) use timing::validate_lexical_timing;
 mod types;
 
 pub use assembler::reconstruct;
